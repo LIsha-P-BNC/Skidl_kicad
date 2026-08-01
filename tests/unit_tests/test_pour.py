@@ -115,13 +115,14 @@ def test_two_layer_ground_both_sides_power_rerouted():
     assert warns == []
 
 
-def test_four_layer_ground_skips_power_plane():
+def test_four_layer_ground_pad_layers_power_plane_only():
     # GND pours its pad layers + In1 plane, but NOT In2 (the power plane);
-    # power pours its pad layer + In2, not In1.
+    # power pours ONLY its dedicated In2 plane (not outer layers) -- its
+    # outer pads reach the plane by routing, so no overlap conflict.
     a, reroute, warns = pour.assign_pour_layers(
         _layer_board(4), {"GND": "ground", "VBUS": "power"})
     assert a["GND"] == ["F.Cu", "In1.Cu", "B.Cu"]      # In2 excluded
-    assert a["VBUS"] == ["F.Cu", "In2.Cu"]             # In1 excluded
+    assert a["VBUS"] == ["In2.Cu"]                     # plane only, no outer
     assert reroute == [] and warns == []
 
 
@@ -130,7 +131,7 @@ def test_six_layer_planes_and_pad_layers():
         _layer_board(6), {"GND": "ground", "VBUS": "power"})
     assert "In2.Cu" not in a["GND"]                    # power plane excluded
     assert {"F.Cu", "In1.Cu", "B.Cu"}.issubset(set(a["GND"]))
-    assert a["VBUS"] == ["F.Cu", "In2.Cu"]
+    assert a["VBUS"] == ["In2.Cu"]                     # plane only
     assert reroute == []
 
 
@@ -146,3 +147,69 @@ def test_odd_stackup_pours_ground_reroutes_power():
 def test_copper_layers_from_count():
     assert pour.copper_layers(_board(2)) == ["F.Cu", "B.Cu"]
     assert pour.copper_layers(_board(4)) == ["F.Cu", "In1.Cu", "In2.Cu", "B.Cu"]
+
+
+# ----- emit_zones -----
+
+def _outlined_board(layer_count):
+    b = _layer_board(layer_count)
+    b.outline = [(0, 0), (40, 0), (40, 30), (0, 30)]
+    return b
+
+
+def test_emit_zones_one_per_net_layer_with_priority():
+    b = _outlined_board(4)
+    a, _, _ = pour.assign_pour_layers(b, {"GND": "ground", "VBUS": "power"})
+    zones = pour.emit_zones(b, a, {"GND": "ground", "VBUS": "power"})
+    gnd = [z for z in zones if z.net == "GND"]
+    pwr = [z for z in zones if z.net == "VBUS"]
+    assert {z.layer for z in gnd} == {"F.Cu", "In1.Cu", "B.Cu"}
+    assert {z.layer for z in pwr} == {"In2.Cu"}
+    assert all(z.priority == pour.GROUND_PRIORITY for z in gnd)
+    assert all(z.priority == pour.POWER_PRIORITY for z in pwr)
+    assert pour.GROUND_PRIORITY > pour.POWER_PRIORITY   # ground wins overlaps
+    assert all(z.connect_pads == "yes" for z in zones)  # solid (starvation lesson)
+    assert all(z.outline == b.outline for z in zones)
+
+
+def test_emit_zones_no_outline_warns():
+    b = _layer_board(4)                                 # no outline set
+    b.outline = None
+    zones = pour.emit_zones(b, {"GND": ["B.Cu"]}, {"GND": "ground"})
+    assert zones == []
+    assert any("outline" in w for w in b.warnings)
+
+
+# ----- plan_stitching_vias -----
+
+def test_stitching_only_multilayer_nets():
+    b = _outlined_board(4)
+    # GND poured on 3 layers -> stitched; a single-layer pour -> none
+    vias, warns = pour.plan_stitching_vias(
+        b, {"GND": ["F.Cu", "In1.Cu", "B.Cu"], "VBUS": ["In2.Cu"]})
+    assert all(v.net == "GND" for v in vias)            # VBUS single-layer: no vias
+    assert len(vias) > 0
+
+
+def test_single_layer_pour_emits_zero_vias():
+    b = _outlined_board(2)
+    vias, warns = pour.plan_stitching_vias(b, {"GND": ["B.Cu"]})
+    assert vias == []
+
+
+def test_stitch_vias_inside_outline_and_span_layers():
+    from skidl.board.geom import point_in_polygon
+    b = _outlined_board(4)
+    vias, _ = pour.plan_stitching_vias(
+        b, {"GND": ["F.Cu", "In1.Cu", "B.Cu"]}, spacing_mm=5.0)
+    for v in vias:
+        assert point_in_polygon(v.at, b.outline)
+        assert v.layers == ("F.Cu", "B.Cu")            # spans inner planes
+        assert v.size >= v.drill
+
+
+def test_tighter_spacing_more_vias():
+    b = _outlined_board(4)
+    coarse, _ = pour.plan_stitching_vias(b, {"GND": ["F.Cu", "B.Cu"]}, spacing_mm=8.0)
+    fine, _ = pour.plan_stitching_vias(b, {"GND": ["F.Cu", "B.Cu"]}, spacing_mm=3.0)
+    assert len(fine) > len(coarse)

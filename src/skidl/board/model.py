@@ -124,15 +124,30 @@ class Via:
 
 @dataclass
 class Zone:
-    """A copper pour (e.g. the B.Cu GND plane). Outline only -- the fill
-    polygons are computed by kicad-cli (drc --refill-zones --save-board)."""
-    net: str                    # net name, e.g. "GND"
+    """A copper pour (e.g. a GND plane). Outline only -- the fill polygons
+    are computed by kicad-cli (drc --refill-zones --save-board). Field names
+    map to KiCad's zone s-expression; `net` is the NAME (pcb_writer resolves
+    the net index at write time)."""
+    net: str                    # net NAME, e.g. "GND"
     layer: str = "B.Cu"
     outline: list = field(default_factory=list)   # [(x, y), ...] mm
+    priority: int = 0           # KiCad: HIGHER priority wins fill overlaps
+    connect_pads: str = "yes"   # "yes" = solid (default; thermal reliefs starve
+                                # on auto-routed boards), "thermal_reliefs", "no"
     clearance: float = 0.3
     min_thickness: float = 0.25
     thermal_gap: float = 0.5
-    thermal_bridge: float = 0.5
+    thermal_bridge_width: float = 0.5
+
+
+@dataclass
+class PadConnectOverride:
+    """Per-pad zone-connection override, applied on the PAD inside its
+    footprint block (a separate serialization path from the zone). e.g.
+    through-hole pads -> thermal relief for hand-solderability."""
+    footprint_ref: str          # "U1"
+    pad_number: str             # matches Pad.number
+    zone_connect: int           # 0 = none, 1 = thermal relief, 2 = solid
 
 
 @dataclass
