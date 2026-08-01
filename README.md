@@ -180,3 +180,24 @@ files, make sure you're running the latest version of SKiDL:
 pip install --upgrade skidl
 ```
 
+## PCB routing toolchain (AI PCB engine)
+
+The board pipeline in `src/skidl/board/` (place → route → DRC → review → export)
+shells out to two external tools that are **not included in this repository**
+because they are large binaries:
+
+- **kicad-cli** — ships with a KiCad install; used for DRC and Gerber/drill export.
+- **Java + FreeRouting** — the headless autorouter.
+
+Place them so the auto-detectors (`src/skidl/board/route/freerouting.py`) can find them:
+
+```
+tools/
+  freerouting.jar                 # download from github.com/freerouting/freerouting/releases
+  jre/<jdk-…>/bin/java.exe         # any JRE/JDK 17+; or put `java` on PATH / set JAVA_HOME
+```
+
+`find_java()` searches `tools/jre/`, `JAVA_HOME`, and `PATH`; `find_freerouting_jar()`
+searches `tools/`. If neither is found, `create_pcb` still places the board and
+saves it **unrouted** — open it in KiCad to route manually, then re-run.
+
