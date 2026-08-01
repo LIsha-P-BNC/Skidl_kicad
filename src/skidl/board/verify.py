@@ -27,61 +27,28 @@ this machine (KiCad 10.99), not the spec alone:
 """
 
 from __future__ import annotations
-import shutil
 import subprocess
-import tempfile
 from pathlib import Path
 
 
-def _ensure_filled(pcb_path: Path, kicad_cli: str, refill: bool) -> Path:
-    """The ipcd356 export credits a pad's net only where real copper reaches
-    it -- an UNfilled zone contributes nothing, so a power net carried solely
-    by a pour (no tracks) would read as fully split (every pin N/C) and the
-    connectivity proof would falsely reject the board. pcb_writer emits zones
-    outline-only (`(fill yes ...)` but no `(filled_polygon ...)`) and relies on
-    a later `drc --refill-zones --save-board`. So before trusting the export:
-    if the board has zones but no fill polygons, refill a COPY (never mutate
-    the caller's board) and export from that; if refill is disabled, refuse
-    rather than emit a false MISMATCH."""
-    text = pcb_path.read_text(encoding="utf-8", errors="replace")
-    if "(zone" not in text or "(filled_polygon" in text:
-        return pcb_path                      # no zones, or already filled
-    if not refill:
-        raise RuntimeError(
-            f"{pcb_path.name} has zones that are not filled -- connectivity "
-            "carried by a copper pour cannot be verified until zones are "
-            "refilled (kicad-cli pcb drc --refill-zones --save-board). Refusing "
-            "to verify an unfilled board rather than report a false split.")
-    tmpdir = Path(tempfile.mkdtemp(prefix="verify_fill_"))
-    filled = tmpdir / pcb_path.name
-    shutil.copy2(pcb_path, filled)
-    proc = subprocess.run(
-        [kicad_cli, "pcb", "drc", "--refill-zones", "--save-board",
-         "--format", "json", "--output", str(tmpdir / "refill.drc.json"),
-         str(filled)],
-        stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=120,
-        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-    )
-    if proc.returncode != 0:
-        raise RuntimeError(
-            f"zone refill for verification failed (exit {proc.returncode}): "
-            f"{(proc.stderr or proc.stdout or '')[-400:]}")
-    return filled
+def board_partition(pcb_path: Path, kicad_cli: str) -> dict:
+    """{net_name: frozenset("REF.PIN", ...)} from a fresh ipcd356 export;
+    VIA records and N/C pads are skipped.
 
-
-def board_partition(pcb_path: Path, kicad_cli: str, refill: bool = True) -> dict:
-    """{net_name: frozenset("REF.PIN", ...)} for the as-routed board,
-    via a fresh ipcd356 export. VIA records and N/C pads are skipped.
-
-    Zones must be FILLED for pour-carried nets to be credited -- see
-    _ensure_filled. `refill=True` (default) refills a copy when needed;
-    `refill=False` refuses to verify an unfilled board."""
+    IMPORTANT -- this reflects each pad's net ASSIGNMENT, not copper
+    connectivity. kicad-cli's ipcd356 writes the net stored on each pad,
+    so a net carried by an UNfilled (or entirely absent) pour still reads
+    as fully grouped here -- measured: a board with all GND tracks AND the
+    zone removed exports the identical ipcd356 as the routed board. So
+    verify_board proves net-to-pad ASSIGNMENT (footprint pad-mapping,
+    wrong-net pads), NOT that copper physically connects the pads. The
+    copper-connectivity gate is DRC's `unconnected_items` (run_drc) --
+    use that to prove a pour actually ties its pads."""
     pcb_path = Path(pcb_path)
-    export_src = _ensure_filled(pcb_path, kicad_cli, refill)
     d356 = pcb_path.with_suffix(".d356")
     proc = subprocess.run(
         [kicad_cli, "pcb", "export", "ipcd356",
-         "--output", str(d356), str(export_src)],
+         "--output", str(d356), str(pcb_path)],
         stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=120,
         creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
     )
@@ -129,18 +96,17 @@ def netlist_partition(net_path: Path) -> dict:
     return nets
 
 
-def verify_board(pcb_path: Path, net_path: Path, kicad_cli: str,
-                 refill: bool = True) -> dict:
-    """Compare the as-routed board partition to the intended netlist
-    partition. Nets with >= 2 pins must group pins IDENTICALLY; a
-    mismatch means a short (merged) or a broken connection (split) and
-    the board MUST NOT ship. Single-pin nets can't short anything and are
-    reported informationally only.
+def verify_board(pcb_path: Path, net_path: Path, kicad_cli: str) -> dict:
+    """Compare the board's pad-net ASSIGNMENTS to the intended netlist
+    partition. Nets with >= 2 pins must group pins IDENTICALLY; a mismatch
+    means the board was built with a wrong-net pad or a footprint pad-
+    mapping error. Single-pin nets are reported informationally only.
 
-    `refill` is forwarded to board_partition: with a copper pour carrying
-    a power net, zones must be filled before the copper netlist reflects
-    the pour (see _ensure_filled)."""
-    board = board_partition(pcb_path, kicad_cli, refill=refill)
+    This is an ASSIGNMENT check, not a copper-connectivity proof (see
+    board_partition): it does not detect physical opens/shorts, and a net
+    carried by a pour reads as connected here whether or not the pour
+    actually ties the pads. The copper gate is DRC `unconnected_items`."""
+    board = board_partition(pcb_path, kicad_cli)
     intended = netlist_partition(net_path)
 
     board_sets = {pins for pins in board.values() if len(pins) >= 2}
