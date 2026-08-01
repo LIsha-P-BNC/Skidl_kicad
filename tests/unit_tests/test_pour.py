@@ -4,7 +4,7 @@ derived from the board with no hardcoded names or layer numbers.
 Pure-python, always runs. The realised geometry (stitching vias, zones)
 and its DRC acceptance gate are exercised separately once built.
 """
-from skidl.board.model import BoardModel, Net
+from skidl.board.model import BoardModel, Net, Footprint, Pad
 from skidl.board import pour
 
 
@@ -17,6 +17,29 @@ def _board(layer_count=2, nets=None):
     b = BoardModel(name="t", layer_count=layer_count)
     b.net_classes = {"Default": {"width": 0.25}, "power": {"width": 0.4}}
     b.nets = {n.name: n for n in (nets or [])}
+    return b
+
+
+def _pad(num, pad_type="smd", drill=0.0):
+    return Pad(number=num, net=None, x=0, y=0, size_x=1, size_y=1,
+               pad_type=pad_type, drill=drill)
+
+
+def _layer_board(layer_count):
+    """A board with real footprints: GND on an SMD F.Cu pad (U1.1) AND a
+    THT pad (J1.1, spans all layers); VBUS on an SMD F.Cu pad (U1.2)."""
+    b = BoardModel(name="t", layer_count=layer_count)
+    b.net_classes = {"Default": {"width": 0.25}, "power": {"width": 0.4}}
+    b.footprints = [
+        Footprint(ref="U1", lib_id="x", side="top",
+                  pads=[_pad("1"), _pad("2")]),
+        Footprint(ref="J1", lib_id="x", side="top",
+                  pads=[_pad("1", pad_type="thru_hole", drill=0.8)]),
+    ]
+    b.nets = {
+        "GND":  Net("GND", 1, pad_refs=[("U1", "1"), ("J1", "1")]),
+        "VBUS": Net("VBUS", 2, net_class="power", pad_refs=[("U1", "2")]),
+    }
     return b
 
 
@@ -80,35 +103,44 @@ def test_plain_signal_not_poured():
     assert do is False
 
 
-# ----- assign_pour_layers: derived from the actual stackup -----
+# ----- assign_pour_layers: pad-derived layers + dedicated planes -----
 
-def test_two_layer_ground_back_power_rerouted():
-    b = _board(2)
-    a, reroute = pour.assign_pour_layers(b, {"GND": "ground", "VBUS": "power"})
-    assert a == {"GND": ["B.Cu"]}
+def test_two_layer_ground_both_sides_power_rerouted():
+    # GND has an F.Cu SMD pad AND a THT pad -> pours both outer layers;
+    # power has no plane on 2-layer -> rerouted (avoids the zone fight).
+    a, reroute, warns = pour.assign_pour_layers(
+        _layer_board(2), {"GND": "ground", "VBUS": "power"})
+    assert a == {"GND": ["F.Cu", "B.Cu"]}
     assert reroute == ["VBUS"]
+    assert warns == []
 
 
-def test_four_layer_ground_in1_power_in2():
-    b = _board(4)
-    a, reroute = pour.assign_pour_layers(b, {"GND": "ground", "VBUS": "power"})
-    assert a == {"GND": ["In1.Cu"], "VBUS": ["In2.Cu"]}
+def test_four_layer_ground_skips_power_plane():
+    # GND pours its pad layers + In1 plane, but NOT In2 (the power plane);
+    # power pours its pad layer + In2, not In1.
+    a, reroute, warns = pour.assign_pour_layers(
+        _layer_board(4), {"GND": "ground", "VBUS": "power"})
+    assert a["GND"] == ["F.Cu", "In1.Cu", "B.Cu"]      # In2 excluded
+    assert a["VBUS"] == ["F.Cu", "In2.Cu"]             # In1 excluded
+    assert reroute == [] and warns == []
+
+
+def test_six_layer_planes_and_pad_layers():
+    a, reroute, warns = pour.assign_pour_layers(
+        _layer_board(6), {"GND": "ground", "VBUS": "power"})
+    assert "In2.Cu" not in a["GND"]                    # power plane excluded
+    assert {"F.Cu", "In1.Cu", "B.Cu"}.issubset(set(a["GND"]))
+    assert a["VBUS"] == ["F.Cu", "In2.Cu"]
     assert reroute == []
 
 
-def test_six_layer_dual_ground_planes():
-    b = _board(6)
-    a, reroute = pour.assign_pour_layers(b, {"GND": "ground", "VBUS": "power"})
-    assert a["GND"] == ["In1.Cu", "In4.Cu"]     # layers[1] and layers[-2]
-    assert a["VBUS"] == ["In2.Cu"]
-    assert reroute == []
-
-
-def test_odd_stackup_routes_everything():
-    b = _board(3)
-    a, reroute = pour.assign_pour_layers(b, {"GND": "ground", "VBUS": "power"})
-    assert a == {}                              # nothing poured
-    assert set(reroute) == {"GND", "VBUS"}      # all routed -> no crack
+def test_odd_stackup_pours_ground_reroutes_power():
+    # 3 layers: no dedicated planes -> GND still pours its pad layers,
+    # power rerouted. Nothing falls through the crack.
+    a, reroute, warns = pour.assign_pour_layers(
+        _layer_board(3), {"GND": "ground", "VBUS": "power"})
+    assert a["GND"] == ["F.Cu", "In1.Cu", "B.Cu"]      # THT pad spans all 3
+    assert reroute == ["VBUS"]
 
 
 def test_copper_layers_from_count():

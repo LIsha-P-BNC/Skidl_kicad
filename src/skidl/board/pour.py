@@ -12,7 +12,7 @@ Hand it a two-IC USB board or a forty-IC controller and it adapts.
 This module owns only the DECISIONS (which nets, which layers). The
 geometry that realises them -- stitching vias and zone outlines -- and
 the pipeline wiring live in their own steps, all fed by the (assignments,
-reroute) this returns. The acceptance test for the realised pour is DRC:
+reroute, warnings) this returns. The acceptance test for the realised pour is DRC:
 `unconnected == 0 and errors == 0` on whatever board was built -- ipcd356
 (verify_board) is assignment-level and cannot see whether a pour actually
 ties the pads, so it is NOT the pour gate.
@@ -84,56 +84,120 @@ def plan_pours(board: BoardModel, currents: dict = None) -> dict:
     return out
 
 
+def _pad_cu_layers(fp, pad, all_cu) -> set:
+    """Copper layers one pad occupies: a through-hole pad spans ALL of
+    them; an SMD pad sits on its footprint's side."""
+    if pad.pad_type == "thru_hole" or pad.drill > 0:
+        return set(all_cu)
+    return {fp.layer}                # "F.Cu" (top) / "B.Cu" (bottom)
+
+
+def pad_layers_of(net: Net, board: BoardModel) -> set:
+    """Union of the copper layers this net's pads occupy. Pouring a net on
+    every layer its pads sit on lets each pad tie to same-layer fill (no
+    fragile via-to-a-distant-pad needed)."""
+    all_cu = copper_layers(board)
+    occupied = set()
+    for ref, number in net.pad_refs:
+        try:
+            fp = board.footprint(ref)
+        except KeyError:
+            continue
+        pad = _find_pad(fp, number)
+        if pad is not None:
+            occupied |= _pad_cu_layers(fp, pad, all_cu)
+    return occupied
+
+
 def assign_pour_layers(board: BoardModel, pour_decisions: dict) -> tuple:
-    """Map poured nets to copper layers from the ACTUAL stackup.
+    """Map poured nets to copper layers, derived from the board itself.
 
-    Returns (assignments, reroute):
-      assignments {net_name: [layer, ...]} -- where each net is poured.
+    Returns (assignments, reroute, warnings):
+      assignments {net_name: [layer, ...]} -- ordered F->B.
       reroute     [net_name, ...]          -- poured-role nets this stackup
-                    can't host as a plane; they go BACK into the DSN so no
-                    net falls through the crack between "excluded" and
-                    "not poured".
+                    can't host (2-layer/odd power); go BACK into the DSN so
+                    no net falls between "excluded" and "not poured".
+      warnings    [str, ...]               -- a poured net with a pad on a
+                    layer NOT in its pour set (rare: no pour reaches it).
 
-    Layer policy, derived from layer_count (never assumed):
-      1 layer : ground pours front; power rerouted.
-      2 layer : ground pours B.Cu; power rerouted (two planes on one
-                reference would fight for copper).
-      4 layer : ground -> In1.Cu, power -> In2.Cu (classic sig-gnd-pwr-sig).
-      6+ layer: ground -> In1.Cu and the second-from-back copper; power ->
-                In2.Cu; remaining inner layers stay signal.
-      odd/other: pour nothing new -- everything routes (safe fallback).
+    Layer choice = (every layer the net's pads occupy) + a dedicated plane
+    per the stackup, so each pad ties to same-layer fill. GND wins copper
+    where it overlaps power (priority set in the zone emitter). Dedicated
+    planes, never assumed:
+      1-2 layer: no plane -- ground pours its pad layers (F.Cu/B.Cu),
+                 power is rerouted (a power plane on 2 layers would fight
+                 the ground it shares copper with).
+      4 layer  : ground plane In1.Cu, power plane In2.Cu.
+      6+ layer : ground planes In1.Cu + second-from-back, power plane In2.Cu.
+      odd (3,5): no plane -- ground pours pad layers, power rerouted.
     """
-    layers = copper_layers(board)
-    n = len(layers)
-    gnd = [name for name, role in pour_decisions.items() if role == "ground"]
-    pwr = [name for name, role in pour_decisions.items() if role == "power"]
+    all_cu = copper_layers(board)
+    planes = _dedicated_planes(all_cu)
+    order = {name: i for i, name in enumerate(all_cu)}
+    gnd_planes = set(planes["ground"])
+    pwr_planes = set(planes["power"] or [])
 
-    assignments = {}
-    if n == 1:
-        for name in gnd:
-            assignments[name] = [layers[0]]
-        return assignments, list(pwr)
-    if n == 2:
-        for name in gnd:
-            assignments[name] = [layers[-1]]          # B.Cu
-        return assignments, list(pwr)
+    assignments, reroute, warnings = {}, [], []
+    for name, role in pour_decisions.items():
+        net = board.nets.get(name)
+        if net is None:
+            continue
+
+        if role == "power" and planes["power"] is None:
+            reroute.append(name)          # 2-layer/odd: route power
+            continue
+
+        # Pour on every layer the pads occupy PLUS this role's dedicated
+        # plane, but never on the OTHER role's plane (a THT ground pad
+        # spans all layers, yet ground must not claim the power plane).
+        occupied = pad_layers_of(net, board)
+        my_plane = gnd_planes if role == "ground" else pwr_planes
+        other_plane = pwr_planes if role == "ground" else gnd_planes
+        pour_set = (occupied | my_plane) - other_plane
+        pour_on = sorted(pour_set, key=lambda l: order.get(l, 99))
+        if not pour_on:
+            reroute.append(name)          # no resolvable pads -> route
+            continue
+        assignments[name] = pour_on
+
+        # A pad is stranded only if NONE of the layers it occupies is
+        # poured (a THT pad is fine as long as one of its layers is).
+        stranded = []
+        for ref, number in net.pad_refs:
+            try:
+                fp = board.footprint(ref)
+            except KeyError:
+                continue
+            pad = _find_pad(fp, number)
+            if pad is None:
+                continue
+            if _pad_cu_layers(fp, pad, all_cu).isdisjoint(pour_set):
+                stranded.append(f"{ref}.{number}")
+        if stranded:
+            warnings.append(
+                f"pour {name}: pad(s) {stranded} on no poured layer -- "
+                "add a pour there or route this net manually")
+    return assignments, reroute, warnings
+
+
+def _dedicated_planes(all_cu: list) -> dict:
+    """{"ground": [layer...], "power": [layer...] | None} for the stackup.
+    None power => power is rerouted, not poured."""
+    n = len(all_cu)
+    if n <= 2:
+        return {"ground": [], "power": None}
     if n == 4:
-        for name in gnd:
-            assignments[name] = [layers[1]]           # In1.Cu
-        for name in pwr:
-            assignments[name] = [layers[2]]           # In2.Cu
-        return assignments, []
+        return {"ground": [all_cu[1]], "power": [all_cu[2]]}
     if n >= 6:
-        gnd_layers = [layers[1], layers[-2]]
-        for name in gnd:
-            assignments[name] = list(gnd_layers)
-        for name in pwr:
-            assignments[name] = [layers[2]]
-        return assignments, []
+        return {"ground": [all_cu[1], all_cu[-2]], "power": [all_cu[2]]}
+    return {"ground": [], "power": None}         # n == 3, 5
 
-    # n == 3, 5, or any non-standard count: don't invent a plane split --
-    # route everything so nothing is silently left open.
-    return assignments, list(gnd) + list(pwr)
+
+def _find_pad(fp, number):
+    for p in fp.pads:
+        if p.number == number:
+            return p
+    return None
 
 
 def _class_width(board: BoardModel, class_name: str) -> float:
