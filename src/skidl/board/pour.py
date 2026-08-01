@@ -20,7 +20,7 @@ ties the pads, so it is NOT the pour gate.
 
 from __future__ import annotations
 
-from skidl.board.model import BoardModel, Net, Zone, Via
+from skidl.board.model import BoardModel, Net, Zone, Via, PadConnectOverride
 from skidl.board.geom import point_in_polygon, bbox_of, bbox_contains
 from skidl.schematics.net_classify import classify_net_role
 from skidl.board.width_engine import estimate_net_current, required_width
@@ -216,14 +216,39 @@ def prepare_power_pours(board: BoardModel, currents: dict = None,
     assign_pour_layers makes the exclusion set fall out for free: exactly
     the ground nets, whose every pad already sits on a poured layer.
 
-    Returns (exclude, zones, vias, warnings)."""
+    Returns (exclude, zones, vias, overrides, warnings)."""
     decisions = plan_pours(board, currents)
     assignments, _reroute, warns = assign_pour_layers(board, decisions)
     zones = emit_zones(board, assignments, decisions)
     vias, vwarns = plan_stitching_vias(board, assignments, spacing_mm)
+    overrides = compute_pad_overrides(board, assignments)
     exclude = {name for name, role in decisions.items()
                if role == "ground" and name in assignments}
-    return exclude, zones, vias, warns + vwarns
+    return exclude, zones, vias, overrides, warns + vwarns
+
+
+def compute_pad_overrides(board: BoardModel, assignments: dict) -> list:
+    """Per-pad zone-connect overrides for poured nets. Zones connect pads
+    SOLID by default (the starvation lesson); this overrides THROUGH-HOLE
+    pads to thermal relief (zone_connect 1) so they stay hand-solderable --
+    a solid pour wicks heat off a THT joint. SMD pads keep the solid
+    default (no override). Returns list[PadConnectOverride]."""
+    overrides = []
+    for name in assignments:                     # poured nets only
+        net = board.nets.get(name)
+        if net is None:
+            continue
+        for ref, number in net.pad_refs:
+            try:
+                fp = board.footprint(ref)
+            except KeyError:
+                continue
+            pad = _find_pad(fp, number)
+            if pad is None:
+                continue
+            if pad.pad_type == "thru_hole" or pad.drill > 0:
+                overrides.append(PadConnectOverride(ref, number, 1))   # thermal
+    return overrides
 
 
 def emit_zones(board: BoardModel, assignments: dict,

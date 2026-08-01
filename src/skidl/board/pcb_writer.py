@@ -232,8 +232,11 @@ def write_pcb(board: BoardModel, out_path: Path, carry_forward: dict = None,
     parts.append('  (net 0 "")')
     for net in board.nets.values():
         parts.append(f'  (net {net.code} "{_esc(net.name)}")')
+    zc_by_ref = {}
+    for ov in getattr(board, "pad_overrides", []):
+        zc_by_ref.setdefault(ov.footprint_ref, {})[ov.pad_number] = ov.zone_connect
     for fp in board.footprints:
-        parts.append(_write_footprint(fp, net_code_by_name))
+        parts.append(_write_footprint(fp, net_code_by_name, zc_by_ref.get(fp.ref) or {}))
     if board.outline:
         parts.append(_write_edge_cuts(board.outline))
     for track in board.tracks:
@@ -484,18 +487,21 @@ def _write_layers(layer_count: int) -> str:
     return f'  (layers\n    {body}\n  )'
 
 
-def _write_footprint(fp: Footprint, net_code_by_name: dict) -> str:
+def _write_footprint(fp: Footprint, net_code_by_name: dict, pad_zc: dict = None) -> str:
     """Prefer embedding the library's original .kicad_mod verbatim (real
     silkscreen/fab/courtyard art + correctly-styled text) with position,
     reference, value and pad nets surgically injected. Falls back to the
     minimal pads-only template when no source is available or the part is
-    rotated (rotated embedding needs per-pad angle rewriting -- M2)."""
+    rotated (rotated embedding needs per-pad angle rewriting -- M2).
+
+    `pad_zc`: {pad_number: zone_connect} overrides for this footprint."""
+    pad_zc = pad_zc or {}
     if fp.source_text and fp.side == "top":
         try:
-            return _embed_footprint(fp, net_code_by_name)
+            return _embed_footprint(fp, net_code_by_name, pad_zc)
         except Exception:
             pass  # any surgery surprise -> proven minimal template
-    return _template_footprint(fp, net_code_by_name)
+    return _template_footprint(fp, net_code_by_name, pad_zc)
 
 
 import re as _re
@@ -508,7 +514,8 @@ _FPTEXT_VAL_RE = _re.compile(r'(\(\s*fp_text\s+value\s+)("(?:[^"\\]|\\.)*"|[^\s(
 _PAD_NUM_RE = _re.compile(r'\(\s*pad\s+("(?:[^"\\]|\\.)*"|[^\s()]+)')
 
 
-def _embed_footprint(fp: Footprint, net_code_by_name: dict) -> str:
+def _embed_footprint(fp: Footprint, net_code_by_name: dict, pad_zc: dict = None) -> str:
+    pad_zc = pad_zc or {}
     s = fp.source_text.strip()
 
     # Header: library name -> full "Lib:Name" id, then inject placement.
@@ -546,10 +553,24 @@ def _embed_footprint(fp: Footprint, net_code_by_name: dict) -> str:
         body = s[m.start():end - 1]
         if rot:
             body = _bump_at_angle(body, rot)
+        # zone_connect override: replace an existing (zone_connect ..) in the
+        # pad block (a library may already set one), else append it as the
+        # last property before the pad's closing paren. Paren-matched, so
+        # nested pad sub-exprs (custom primitives, options) are safe.
+        zc = pad_zc.get(num)
+        append_zc = zc is not None
+        if zc is not None:
+            zi = body.find("(zone_connect")
+            if zi != -1:
+                zclose = _match_paren(body, zi)
+                body = body[:zi] + f"(zone_connect {zc})" + body[zclose:]
+                append_zc = False
         out.append(s[i:m.start()])
         out.append(body)
         if net_name and net_name in net_code_by_name:
             out.append(f' (net {net_code_by_name[net_name]} "{_esc(net_name)}")')
+        if append_zc:
+            out.append(f' (zone_connect {zc})')
         out.append(")")
         i = end
     return "  " + "".join(out)
@@ -608,7 +629,8 @@ def _match_paren(s: str, start: int) -> int:
     raise ValueError("unbalanced parens in footprint source")
 
 
-def _template_footprint(fp: Footprint, net_code_by_name: dict) -> str:
+def _template_footprint(fp: Footprint, net_code_by_name: dict, pad_zc: dict = None) -> str:
+    pad_zc = pad_zc or {}
     locked = " locked" if fp.locked else ""
     lines = [
         f'  (footprint "{_esc(fp.lib_id)}" (layer "{fp.layer}"){locked}',
@@ -628,6 +650,8 @@ def _template_footprint(fp: Footprint, net_code_by_name: dict) -> str:
         net_str = ""
         if pad.net and pad.net in net_code_by_name:
             net_str = f' (net {net_code_by_name[pad.net]} "{_esc(pad.net)}")'
+        zc = pad_zc.get(pad.number)
+        zc_str = f' (zone_connect {zc})' if zc is not None else ""
         # In a board file a pad's (at ... ANGLE) is absolute: the
         # footprint's own rotation plus the pad's local rotation from the
         # .kicad_mod (KiCad convention).
@@ -635,7 +659,7 @@ def _template_footprint(fp: Footprint, net_code_by_name: dict) -> str:
         lines.append(
             f'    (pad "{pad.number}" {pad.pad_type} {pad.shape} '
             f'(at {pad.x:.4f} {pad.y:.4f} {pad_angle:.4f}) (size {pad.size_x:.4f} {pad.size_y:.4f})'
-            f'{drill_str} (layers {layers_str}){rratio_str}{net_str})'
+            f'{drill_str} (layers {layers_str}){rratio_str}{net_str}{zc_str})'
         )
     lines.append("  )")
     return "\n".join(lines)

@@ -188,6 +188,8 @@ class BoardModel:
                                                           # couldn't act on silently (e.g. a
                                                           # pad with no legal stitching-via
                                                           # spot); logged before the DRC gate
+    pad_overrides: list = field(default_factory=list)     # list[PadConnectOverride];
+                                                          # applied in each pad's block at write
 
     def footprint(self, ref: str) -> Footprint:
         for fp in self.footprints:

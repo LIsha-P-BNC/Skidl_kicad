@@ -257,9 +257,10 @@ def build_pcb(netlist_path, out_dir=None, name=None, layers=2,
     pour_exclude, pour_zones, pour_vias = set(), [], []
     if sidecar.get("ground_pour", True) and board.outline:
         from skidl.board.pour import prepare_power_pours
-        pour_exclude, pour_zones, pour_vias, pour_warns = prepare_power_pours(
-            board, currents=sidecar.get("currents"))
+        pour_exclude, pour_zones, pour_vias, pour_overrides, pour_warns = \
+            prepare_power_pours(board, currents=sidecar.get("currents"))
         board.warnings.extend(pour_warns)
+        board.pad_overrides.extend(pour_overrides)
         report["power_pours"] = {
             "zones": len(pour_zones), "stitch_vias": len(pour_vias),
             "excluded_from_routing": sorted(pour_exclude),

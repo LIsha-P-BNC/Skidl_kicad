@@ -223,7 +223,8 @@ def test_tighter_spacing_more_vias():
 def test_prepare_excludes_ground_only_power_stays_routed():
     b = _outlined_board(4)
     # user-declared 3 A makes VBUS pour on its In2 plane
-    exclude, zones, vias, warns = pour.prepare_power_pours(b, currents={"VBUS": 3.0})
+    exclude, zones, vias, overrides, warns = pour.prepare_power_pours(
+        b, currents={"VBUS": 3.0})
     assert exclude == {"GND"}                       # only ground leaves the DSN
     assert "VBUS" not in exclude                     # power stays routed (option b)
     assert {z.layer for z in zones if z.net == "GND"} == {"F.Cu", "In1.Cu", "B.Cu"}
@@ -233,7 +234,17 @@ def test_prepare_excludes_ground_only_power_stays_routed():
 
 def test_prepare_two_layer_only_ground_poured():
     b = _outlined_board(2)
-    exclude, zones, vias, warns = pour.prepare_power_pours(b, currents={"VBUS": 3.0})
+    exclude, zones, vias, overrides, warns = pour.prepare_power_pours(
+        b, currents={"VBUS": 3.0})
     assert exclude == {"GND"}
     assert {z.net for z in zones} == {"GND"}         # 2-layer: power rerouted, not poured
     assert {z.layer for z in zones} == {"F.Cu", "B.Cu"}
+
+
+def test_compute_pad_overrides_tht_thermal_smd_none():
+    b = _outlined_board(4)
+    a, _, _ = pour.assign_pour_layers(b, {"GND": "ground", "VBUS": "power"})
+    ov = pour.compute_pad_overrides(b, a)
+    # J1.1 is the only through-hole GND pad -> thermal (1); SMD pads: none
+    assert [(o.footprint_ref, o.pad_number, o.zone_connect) for o in ov] \
+        == [("J1", "1", 1)]
