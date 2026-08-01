@@ -449,16 +449,16 @@ class HierarchicalConverter:
         """
         ref = comp.ref
         props = []
-        props.append(f"'{comp.lib}'")
-        props.append(f"'{comp.name}'")
+        props.append(repr(comp.lib))
+        props.append(repr(comp.name))
         if comp.value:
-            props.append(f"value='{comp.value}'")
+            props.append(f"value={comp.value!r}")
         if comp.footprint:
-            props.append(f"footprint='{comp.footprint}'")
+            props.append(f"footprint={comp.footprint!r}")
         desc = next((p.value for p in comp.properties if p.name == "Description"), None)
         if desc:
-            props.append(f"description='{desc}'")
-        props.append(f"ref='{ref}'")
+            props.append(f"description={desc!r}")
+        props.append(f"ref={ref!r}")
         extra_fields = {}
         if hasattr(comp, "properties"):
             for prop in comp.properties:

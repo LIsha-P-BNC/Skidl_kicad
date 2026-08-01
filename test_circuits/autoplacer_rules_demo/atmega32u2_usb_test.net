@@ -1,0 +1,797 @@
+(export 
+  (version "D")
+  (design
+    (source "atmega32u2_usb_test.py")
+    (date "07/21/2026 12:21 PM")
+    (tool "SKiDL (2.2.3)")
+    (sheet
+      (number 1)
+      (name "/")
+      (tstamps "/")
+      (title_block
+        (title)
+        (company)
+        (rev)
+        (date)
+        (source "atmega32u2_usb_test.py")
+        (comment
+          (number "1")
+          (value ""))
+        (comment
+          (number "2")
+          (value ""))
+        (comment
+          (number "3")
+          (value ""))
+        (comment
+          (number "4")
+          (value ""))
+        (comment
+          (number "5")
+          (value ""))
+        (comment
+          (number "6")
+          (value ""))
+        (comment
+          (number "7")
+          (value ""))
+        (comment
+          (number "8")
+          (value ""))
+        (comment
+          (number "9")
+          (value "")))))
+  (components
+    (comp
+      (ref "C1")
+      (value "10uF")
+      (description "Unpolarized capacitor")
+      (footprint "Capacitor_SMD:C_0805_2012Metric")
+      (fields
+        (field
+          (name "Description") "Unpolarized capacitor")
+        (field
+          (name "Footprint") "Capacitor_SMD:C_0805_2012Metric")
+        (field
+          (name "Datasheet"))
+        (field
+          (name "SKiDL Tag") "usb_bulk")
+        (field
+          (name "SKiDL Line") "atmega32u2_usb_test.py:33"))
+      (libsource
+        (lib "Device")
+        (part "C"))
+      (sheetpath
+        (names "/")
+        (tstamps "/"))
+      (component_classes)
+      (tstamps "2bba1e87-f7f2-54e7-bfe7-0f8f0679652b"))
+    (comp
+      (ref "C2")
+      (value "1uF")
+      (description "Unpolarized capacitor")
+      (footprint "Capacitor_SMD:C_0603_1608Metric")
+      (fields
+        (field
+          (name "Description") "Unpolarized capacitor")
+        (field
+          (name "Footprint") "Capacitor_SMD:C_0603_1608Metric")
+        (field
+          (name "Datasheet"))
+        (field
+          (name "SKiDL Tag") "ucap")
+        (field
+          (name "SKiDL Line") "atmega32u2_usb_test.py:44"))
+      (libsource
+        (lib "Device")
+        (part "C"))
+      (sheetpath
+        (names "/")
+        (tstamps "/"))
+      (component_classes)
+      (tstamps "b48bb68a-bf01-537a-a20d-51ca51417025"))
+    (comp
+      (ref "C3")
+      (value "22pF")
+      (description "Unpolarized capacitor")
+      (footprint "Capacitor_SMD:C_0603_1608Metric")
+      (fields
+        (field
+          (name "Description") "Unpolarized capacitor")
+        (field
+          (name "Footprint") "Capacitor_SMD:C_0603_1608Metric")
+        (field
+          (name "Datasheet"))
+        (field
+          (name "SKiDL Tag") "xtal2_load")
+        (field
+          (name "SKiDL Line") "atmega32u2_usb_test.py:45"))
+      (libsource
+        (lib "Device")
+        (part "C"))
+      (sheetpath
+        (names "/")
+        (tstamps "/"))
+      (component_classes)
+      (tstamps "fc2b15f7-c4f7-53e5-aa1d-f136d02bfb0c"))
+    (comp
+      (ref "C4")
+      (value "22pF")
+      (description "Unpolarized capacitor")
+      (footprint "Capacitor_SMD:C_0603_1608Metric")
+      (fields
+        (field
+          (name "Description") "Unpolarized capacitor")
+        (field
+          (name "Footprint") "Capacitor_SMD:C_0603_1608Metric")
+        (field
+          (name "Datasheet"))
+        (field
+          (name "SKiDL Tag") "xtal1_load")
+        (field
+          (name "SKiDL Line") "atmega32u2_usb_test.py:46"))
+      (libsource
+        (lib "Device")
+        (part "C"))
+      (sheetpath
+        (names "/")
+        (tstamps "/"))
+      (component_classes)
+      (tstamps "c8879c19-4bd5-5a7a-88df-2f733770e060"))
+    (comp
+      (ref "J1")
+      (value "USB_B")
+      (description "USB Type B connector")
+      (footprint "Connector_USB:USB_B_Molex_67068")
+      (fields
+        (field
+          (name "Description") "USB Type B connector")
+        (field
+          (name "Footprint") "Connector_USB:USB_B_Molex_67068")
+        (field
+          (name "Datasheet"))
+        (field
+          (name "SKiDL Tag") "usb")
+        (field
+          (name "SKiDL Line") "atmega32u2_usb_test.py:30"))
+      (libsource
+        (lib "Connector")
+        (part "USB_B"))
+      (sheetpath
+        (names "/")
+        (tstamps "/"))
+      (component_classes)
+      (tstamps "3ce63a56-e933-5322-90e1-3f517edcb353"))
+    (comp
+      (ref "JP2")
+      (value "Conn_01x08")
+      (description "Generic connector, single row, 01x08, script generated (kicad-library-utils/schlib/autogen/connector/)")
+      (footprint "Connector_PinHeader_2.54mm:PinHeader_1x08_P2.54mm_Vertical")
+      (fields
+        (field
+          (name "Description") "Generic connector, single row, 01x08, script generated (kicad-library-utils/schlib/autogen/connector/)")
+        (field
+          (name "Footprint") "Connector_PinHeader_2.54mm:PinHeader_1x08_P2.54mm_Vertical")
+        (field
+          (name "Datasheet"))
+        (field
+          (name "SKiDL Tag") "port_b_header")
+        (field
+          (name "SKiDL Line") "atmega32u2_usb_test.py:69"))
+      (libsource
+        (lib "Connector_Generic")
+        (part "Conn_01x08"))
+      (sheetpath
+        (names "/")
+        (tstamps "/"))
+      (component_classes)
+      (tstamps "35e72b2a-da9a-5484-9985-5147bf72a9ad"))
+    (comp
+      (ref "JP3")
+      (value "Conn_01x08")
+      (description "Generic connector, single row, 01x08, script generated (kicad-library-utils/schlib/autogen/connector/)")
+      (footprint "Connector_PinHeader_2.54mm:PinHeader_1x08_P2.54mm_Vertical")
+      (fields
+        (field
+          (name "Description") "Generic connector, single row, 01x08, script generated (kicad-library-utils/schlib/autogen/connector/)")
+        (field
+          (name "Footprint") "Connector_PinHeader_2.54mm:PinHeader_1x08_P2.54mm_Vertical")
+        (field
+          (name "Datasheet"))
+        (field
+          (name "SKiDL Tag") "port_d_header")
+        (field
+          (name "SKiDL Line") "atmega32u2_usb_test.py:70"))
+      (libsource
+        (lib "Connector_Generic")
+        (part "Conn_01x08"))
+      (sheetpath
+        (names "/")
+        (tstamps "/"))
+      (component_classes)
+      (tstamps "85bbee48-ea10-5097-a9b6-298080c5e0fe"))
+    (comp
+      (ref "LED1")
+      (value "LED")
+      (description "Light emitting diode")
+      (footprint "LED_SMD:LED_0603_1608Metric")
+      (fields
+        (field
+          (name "Description") "Light emitting diode")
+        (field
+          (name "Footprint") "LED_SMD:LED_0603_1608Metric")
+        (field
+          (name "Datasheet"))
+        (field
+          (name "SKiDL Tag") "status_led")
+        (field
+          (name "SKiDL Line") "atmega32u2_usb_test.py:63"))
+      (libsource
+        (lib "Device")
+        (part "LED"))
+      (sheetpath
+        (names "/")
+        (tstamps "/"))
+      (component_classes)
+      (tstamps "e278116f-3b4e-594f-a1fa-3134a9ec2607"))
+    (comp
+      (ref "Q1")
+      (value "8MHz")
+      (description "Two pin crystal")
+      (footprint "Crystal_SMD:Crystal_SMD_3225-4Pin_3.2x2.5mm")
+      (fields
+        (field
+          (name "Description") "Two pin crystal")
+        (field
+          (name "Footprint") "Crystal_SMD:Crystal_SMD_3225-4Pin_3.2x2.5mm")
+        (field
+          (name "Datasheet"))
+        (field
+          (name "SKiDL Tag") "crystal")
+        (field
+          (name "SKiDL Line") "atmega32u2_usb_test.py:43"))
+      (libsource
+        (lib "Device")
+        (part "Crystal"))
+      (sheetpath
+        (names "/")
+        (tstamps "/"))
+      (component_classes)
+      (tstamps "60b07995-c27f-5f0d-ac47-ae8c043763dd"))
+    (comp
+      (ref "R1")
+      (value "22")
+      (description "Resistor")
+      (footprint "Resistor_SMD:R_0603_1608Metric")
+      (fields
+        (field
+          (name "Description") "Resistor")
+        (field
+          (name "Footprint") "Resistor_SMD:R_0603_1608Metric")
+        (field
+          (name "Datasheet"))
+        (field
+          (name "SKiDL Tag") "usb_dp_r")
+        (field
+          (name "SKiDL Line") "atmega32u2_usb_test.py:31"))
+      (libsource
+        (lib "Device")
+        (part "R"))
+      (sheetpath
+        (names "/")
+        (tstamps "/"))
+      (component_classes)
+      (tstamps "50dfc503-8480-5687-817e-c8386143863a"))
+    (comp
+      (ref "R2")
+      (value "22")
+      (description "Resistor")
+      (footprint "Resistor_SMD:R_0603_1608Metric")
+      (fields
+        (field
+          (name "Description") "Resistor")
+        (field
+          (name "Footprint") "Resistor_SMD:R_0603_1608Metric")
+        (field
+          (name "Datasheet"))
+        (field
+          (name "SKiDL Tag") "usb_dm_r")
+        (field
+          (name "SKiDL Line") "atmega32u2_usb_test.py:32"))
+      (libsource
+        (lib "Device")
+        (part "R"))
+      (sheetpath
+        (names "/")
+        (tstamps "/"))
+      (component_classes)
+      (tstamps "9d84d77c-af4d-57b1-897b-4757171a1b95"))
+    (comp
+      (ref "R3")
+      (value "10k")
+      (description "Resistor")
+      (footprint "Resistor_SMD:R_0603_1608Metric")
+      (fields
+        (field
+          (name "Description") "Resistor")
+        (field
+          (name "Footprint") "Resistor_SMD:R_0603_1608Metric")
+        (field
+          (name "Datasheet"))
+        (field
+          (name "SKiDL Tag") "reset_pullup")
+        (field
+          (name "SKiDL Line") "atmega32u2_usb_test.py:57"))
+      (libsource
+        (lib "Device")
+        (part "R"))
+      (sheetpath
+        (names "/")
+        (tstamps "/"))
+      (component_classes)
+      (tstamps "cc83127c-a679-5739-8d0a-764280f26fcd"))
+    (comp
+      (ref "R4")
+      (value "200")
+      (description "Resistor")
+      (footprint "Resistor_SMD:R_0603_1608Metric")
+      (fields
+        (field
+          (name "Description") "Resistor")
+        (field
+          (name "Footprint") "Resistor_SMD:R_0603_1608Metric")
+        (field
+          (name "Datasheet"))
+        (field
+          (name "SKiDL Tag") "status_led_r")
+        (field
+          (name "SKiDL Line") "atmega32u2_usb_test.py:64"))
+      (libsource
+        (lib "Device")
+        (part "R"))
+      (sheetpath
+        (names "/")
+        (tstamps "/"))
+      (component_classes)
+      (tstamps "88fc0b1d-265f-50ad-abdb-b2d37c27a0e0"))
+    (comp
+      (ref "S1")
+      (value "SW_SPST")
+      (description "Single Pole Single Throw (SPST) switch")
+      (footprint "Button_Switch_THT:SW_PUSH_6mm_H5mm")
+      (fields
+        (field
+          (name "Description") "Single Pole Single Throw (SPST) switch")
+        (field
+          (name "Footprint") "Button_Switch_THT:SW_PUSH_6mm_H5mm")
+        (field
+          (name "Datasheet"))
+        (field
+          (name "SKiDL Tag") "reset_switch")
+        (field
+          (name "SKiDL Line") "atmega32u2_usb_test.py:58"))
+      (libsource
+        (lib "Switch")
+        (part "SW_SPST"))
+      (sheetpath
+        (names "/")
+        (tstamps "/"))
+      (component_classes)
+      (tstamps "a1817cda-9ab1-557a-b1b3-8fe264fab4c6"))
+    (comp
+      (ref "U1")
+      (value "ATmega32U2-A")
+      (description "16MHz, 32kB Flash, 1kB SRAM, 1kB EEPROM, TQFP-32")
+      (footprint "Package_QFP:TQFP-32_7x7mm_P0.8mm")
+      (fields
+        (field
+          (name "Description") "16MHz, 32kB Flash, 1kB SRAM, 1kB EEPROM, TQFP-32")
+        (field
+          (name "Footprint") "Package_QFP:TQFP-32_7x7mm_P0.8mm")
+        (field
+          (name "Datasheet") "http://ww1.microchip.com/downloads/en/DeviceDoc/doc7799.pdf")
+        (field
+          (name "SKiDL Tag") "u1")
+        (field
+          (name "SKiDL Line") "atmega32u2_usb_test.py:27"))
+      (libsource
+        (lib "MCU_Microchip_ATmega")
+        (part "ATmega32U2-A"))
+      (sheetpath
+        (names "/")
+        (tstamps "/"))
+      (component_classes)
+      (tstamps "bb97315b-2d93-5125-ae71-7d477fcae41f")))
+  (nets
+    (net
+      (code 1)
+      (name "+5V")
+      (class "Default")
+      (node
+        (ref "C1")
+        (pin "1")
+        (pintype "PASSIVE"))
+      (node
+        (ref "J1")
+        (pin "1")
+        (pintype "POWER-OUT"))
+      (node
+        (ref "R3")
+        (pin "1")
+        (pintype "PASSIVE"))
+      (node
+        (ref "U1")
+        (pin "31")
+        (pintype "POWER-IN"))
+      (node
+        (ref "U1")
+        (pin "32")
+        (pintype "POWER-IN"))
+      (node
+        (ref "U1")
+        (pin "4")
+        (pintype "POWER-IN")))
+    (net
+      (code 2)
+      (name "GND")
+      (class "Default")
+      (node
+        (ref "C1")
+        (pin "2")
+        (pintype "PASSIVE"))
+      (node
+        (ref "C2")
+        (pin "2")
+        (pintype "PASSIVE"))
+      (node
+        (ref "C3")
+        (pin "2")
+        (pintype "PASSIVE"))
+      (node
+        (ref "C4")
+        (pin "2")
+        (pintype "PASSIVE"))
+      (node
+        (ref "J1")
+        (pin "4")
+        (pintype "POWER-OUT"))
+      (node
+        (ref "R4")
+        (pin "2")
+        (pintype "PASSIVE"))
+      (node
+        (ref "S1")
+        (pin "2")
+        (pintype "PASSIVE"))
+      (node
+        (ref "U1")
+        (pin "28")
+        (pintype "POWER-IN"))
+      (node
+        (ref "U1")
+        (pin "3")
+        (pintype "POWER-IN")))
+    (net
+      (code 3)
+      (name "LED_PC7")
+      (class "Default")
+      (node
+        (ref "LED1")
+        (pin "2")
+        (pintype "PASSIVE"))
+      (node
+        (ref "U1")
+        (pin "22")
+        (pintype "BIDIRECTIONAL")))
+    (net
+      (code 4)
+      (name "N$1")
+      (class "Default")
+      (node
+        (ref "J1")
+        (pin "3")
+        (pintype "BIDIRECTIONAL"))
+      (node
+        (ref "R1")
+        (pin "1")
+        (pintype "PASSIVE")))
+    (net
+      (code 5)
+      (name "N$10")
+      (class "Default")
+      (node
+        (ref "JP2")
+        (pin "6")
+        (pintype "PASSIVE"))
+      (node
+        (ref "U1")
+        (pin "19")
+        (pintype "BIDIRECTIONAL")))
+    (net
+      (code 6)
+      (name "N$11")
+      (class "Default")
+      (node
+        (ref "JP2")
+        (pin "7")
+        (pintype "PASSIVE"))
+      (node
+        (ref "U1")
+        (pin "20")
+        (pintype "BIDIRECTIONAL")))
+    (net
+      (code 7)
+      (name "N$12")
+      (class "Default")
+      (node
+        (ref "JP2")
+        (pin "8")
+        (pintype "PASSIVE"))
+      (node
+        (ref "U1")
+        (pin "21")
+        (pintype "BIDIRECTIONAL")))
+    (net
+      (code 8)
+      (name "N$13")
+      (class "Default")
+      (node
+        (ref "JP3")
+        (pin "1")
+        (pintype "PASSIVE"))
+      (node
+        (ref "U1")
+        (pin "6")
+        (pintype "BIDIRECTIONAL")))
+    (net
+      (code 9)
+      (name "N$14")
+      (class "Default")
+      (node
+        (ref "JP3")
+        (pin "2")
+        (pintype "PASSIVE"))
+      (node
+        (ref "U1")
+        (pin "7")
+        (pintype "BIDIRECTIONAL")))
+    (net
+      (code 10)
+      (name "N$15")
+      (class "Default")
+      (node
+        (ref "JP3")
+        (pin "3")
+        (pintype "PASSIVE"))
+      (node
+        (ref "U1")
+        (pin "8")
+        (pintype "BIDIRECTIONAL")))
+    (net
+      (code 11)
+      (name "N$16")
+      (class "Default")
+      (node
+        (ref "JP3")
+        (pin "4")
+        (pintype "PASSIVE"))
+      (node
+        (ref "U1")
+        (pin "9")
+        (pintype "BIDIRECTIONAL")))
+    (net
+      (code 12)
+      (name "N$17")
+      (class "Default")
+      (node
+        (ref "JP3")
+        (pin "5")
+        (pintype "PASSIVE"))
+      (node
+        (ref "U1")
+        (pin "10")
+        (pintype "BIDIRECTIONAL")))
+    (net
+      (code 13)
+      (name "N$18")
+      (class "Default")
+      (node
+        (ref "JP3")
+        (pin "6")
+        (pintype "PASSIVE"))
+      (node
+        (ref "U1")
+        (pin "11")
+        (pintype "BIDIRECTIONAL")))
+    (net
+      (code 14)
+      (name "N$19")
+      (class "Default")
+      (node
+        (ref "JP3")
+        (pin "7")
+        (pintype "PASSIVE"))
+      (node
+        (ref "U1")
+        (pin "12")
+        (pintype "BIDIRECTIONAL")))
+    (net
+      (code 15)
+      (name "N$2")
+      (class "Default")
+      (node
+        (ref "J1")
+        (pin "2")
+        (pintype "BIDIRECTIONAL"))
+      (node
+        (ref "R2")
+        (pin "1")
+        (pintype "PASSIVE")))
+    (net
+      (code 16)
+      (name "N$20")
+      (class "Default")
+      (node
+        (ref "JP3")
+        (pin "8")
+        (pintype "PASSIVE"))
+      (node
+        (ref "U1")
+        (pin "13")
+        (pintype "BIDIRECTIONAL")))
+    (net
+      (code 17)
+      (name "N$3")
+      (class "Default")
+      (node
+        (ref "C2")
+        (pin "1")
+        (pintype "PASSIVE"))
+      (node
+        (ref "U1")
+        (pin "27")
+        (pintype "PASSIVE")))
+    (net
+      (code 18)
+      (name "N$4")
+      (class "Default")
+      (node
+        (ref "LED1")
+        (pin "1")
+        (pintype "PASSIVE"))
+      (node
+        (ref "R4")
+        (pin "1")
+        (pintype "PASSIVE")))
+    (net
+      (code 19)
+      (name "N$5")
+      (class "Default")
+      (node
+        (ref "JP2")
+        (pin "1")
+        (pintype "PASSIVE"))
+      (node
+        (ref "U1")
+        (pin "14")
+        (pintype "BIDIRECTIONAL")))
+    (net
+      (code 20)
+      (name "N$6")
+      (class "Default")
+      (node
+        (ref "JP2")
+        (pin "2")
+        (pintype "PASSIVE"))
+      (node
+        (ref "U1")
+        (pin "15")
+        (pintype "BIDIRECTIONAL")))
+    (net
+      (code 21)
+      (name "N$7")
+      (class "Default")
+      (node
+        (ref "JP2")
+        (pin "3")
+        (pintype "PASSIVE"))
+      (node
+        (ref "U1")
+        (pin "16")
+        (pintype "BIDIRECTIONAL")))
+    (net
+      (code 22)
+      (name "N$8")
+      (class "Default")
+      (node
+        (ref "JP2")
+        (pin "4")
+        (pintype "PASSIVE"))
+      (node
+        (ref "U1")
+        (pin "17")
+        (pintype "BIDIRECTIONAL")))
+    (net
+      (code 23)
+      (name "N$9")
+      (class "Default")
+      (node
+        (ref "JP2")
+        (pin "5")
+        (pintype "PASSIVE"))
+      (node
+        (ref "U1")
+        (pin "18")
+        (pintype "BIDIRECTIONAL")))
+    (net
+      (code 24)
+      (name "RESET_N")
+      (class "Default")
+      (node
+        (ref "R3")
+        (pin "2")
+        (pintype "PASSIVE"))
+      (node
+        (ref "S1")
+        (pin "1")
+        (pintype "PASSIVE"))
+      (node
+        (ref "U1")
+        (pin "24")
+        (pintype "BIDIRECTIONAL")))
+    (net
+      (code 25)
+      (name "USB_DM")
+      (class "Default")
+      (node
+        (ref "R2")
+        (pin "2")
+        (pintype "PASSIVE"))
+      (node
+        (ref "U1")
+        (pin "30")
+        (pintype "BIDIRECTIONAL")))
+    (net
+      (code 26)
+      (name "USB_DP")
+      (class "Default")
+      (node
+        (ref "R1")
+        (pin "2")
+        (pintype "PASSIVE"))
+      (node
+        (ref "U1")
+        (pin "29")
+        (pintype "BIDIRECTIONAL")))
+    (net
+      (code 27)
+      (name "XTAL1")
+      (class "Default")
+      (node
+        (ref "C4")
+        (pin "1")
+        (pintype "PASSIVE"))
+      (node
+        (ref "Q1")
+        (pin "1")
+        (pintype "PASSIVE"))
+      (node
+        (ref "U1")
+        (pin "1")
+        (pintype "INPUT")))
+    (net
+      (code 28)
+      (name "XTAL2")
+      (class "Default")
+      (node
+        (ref "C3")
+        (pin "1")
+        (pintype "PASSIVE"))
+      (node
+        (ref "Q1")
+        (pin "2")
+        (pintype "PASSIVE"))
+      (node
+        (ref "U1")
+        (pin "2")
+        (pintype "BIDIRECTIONAL")))))

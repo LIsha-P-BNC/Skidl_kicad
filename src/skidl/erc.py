@@ -84,6 +84,16 @@ def dflt_part_erc(part):
                     f"Incorrectly connected pin: {pin.erc_desc()} should not be connected to a net ({pin.net.name})."
                 )
 
+        # Error if a power pin is marked no-connect. A power pin left
+        # unconnected is a design mistake, not something to silently
+        # accept: NCNet sets net.do_erc=False so no other check catches
+        # this (dflt_net_erc skips the net entirely).
+        else:
+            if pin.func in (pin_types.PWRIN, pin_types.PWROUT):
+                active_logger.warning(
+                    f"Power pin marked no-connect: {pin.erc_desc()} should never be tied to a no-connect net ({pin.net.name})."
+                )
+
 
 @export_to_all
 def dflt_net_erc(net):

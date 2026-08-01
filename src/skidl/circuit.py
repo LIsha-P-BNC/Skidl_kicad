@@ -387,31 +387,28 @@ class Circuit(SkidlBaseObject):
 
     def rmv_parts(self, *parts):
         """
-        Remove parts from the circuit.
-        
+        Remove parts from the circuit, disconnecting them in the process.
+
         Args:
             *parts: Part objects to remove from the circuit.
-            
-        Raises:
-            ValueError: If attempting to remove an unmovable part.
         """
         for part in parts:
-            part.disconnect()
-            if part.is_movable():
-                if part.circuit == self and part in self.parts:
-                    part.node.parts.remove(part)
-                    part.node = None
-                    part.circuit = None
-                    part.hierarchy = None
-                    self.parts.remove(part)
-                else:
-                    active_logger.warning(
-                        f"Removing non-existent part {part.ref} from this circuit."
-                    )
+            # Only touch parts that actually belong to this circuit. The
+            # previous implementation disconnected *any* part passed in
+            # before checking membership, which meant a part belonging to
+            # some other circuit (or none) got silently ripped off its
+            # nets as a side effect, even though it was never removed from
+            # anywhere (the membership check only fires a warning).
+            if part.circuit == self and part in self.parts:
+                part.disconnect()
+                part.node.parts.remove(part)
+                part.node = None
+                part.circuit = None
+                part.hierarchy = None
+                self.parts.remove(part)
             else:
-                active_logger.raise_(
-                    ValueError,
-                    f"Can't remove part {part.ref} from this circuit.",
+                active_logger.warning(
+                    f"Removing non-existent part {part.ref} from this circuit."
                 )
 
     def add_nets(self, *nets):
@@ -1156,6 +1153,7 @@ class Circuit(SkidlBaseObject):
             pin_types.OPENCOLL: "output",
             pin_types.OPENEMIT: "output",
             pin_types.NOCONNECT: "nc",
+            pin_types.FREE: "nc",
         }
 
         cells = {}

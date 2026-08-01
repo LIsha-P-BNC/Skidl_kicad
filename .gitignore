@@ -3,6 +3,9 @@ __pycache__/
 *.py[cod]
 *$py.class
 
+# Generated test/example board builds (regenerable output, not source)
+mcp_circuits/
+
 # C extensions
 *.so
 
@@ -63,6 +66,8 @@ tests/examples/arduino_uno_r3_from_scratch/
 tests/examples/*/*.sch
 tests/examples/*/*.sch-bak
 tests/examples/*/*.pro
+tests/storage/
+documents/
 **/\.ipynb_checkpoints/
 
 # Mr Developer
@@ -187,3 +192,26 @@ uno_r3
 *.bak
 *.pkl
 
+
+tests/unit_tests/.pipeline_tmp/
+
+# Board pipeline: bundled router + JRE (96MB+, not source)
+tools/jre/
+tools/*.jar
+
+# Board pipeline: transient build/route artifacts (sources + sidecars stay tracked)
+mcp_circuits/*.ses
+mcp_circuits/*.dsn
+mcp_circuits/*.drc.json
+mcp_circuits/*.review_drc.json
+mcp_circuits/*.pcb_build.log
+mcp_circuits/*.pcb_build.*.log
+mcp_circuits/*.pcb_result.json
+mcp_circuits/*.kicad_pcb.best*
+mcp_circuits/*.kicad_pcb.session_best
+mcp_circuits/_t.json
+mcp_circuits/logs/
+
+# VSCode local-history extension caches
+.history/
+mcp_circuits/*.attempt*

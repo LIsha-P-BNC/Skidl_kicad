@@ -22,6 +22,7 @@ from skidl.utilities import export_to_all, rmv_attr
 
 from .sexp_schematic import write_top_schematic
 from .bboxes import calc_hier_label_bbox, calc_symbol_bbox
+from .constants import GRID, PIN_LABEL_FONT_SIZE
 
 
 __all__ = []
@@ -72,11 +73,13 @@ def auto_stub_nets(circuit, **options):
 
     Args:
         circuit: The Circuit object containing nets to analyze.
-        options: Dict of options. Recognizes 'auto_stub_fanout' (default 5).
+        options: Dict of options. Recognizes 'auto_stub_fanout' (default 8).
     """
     import sys
 
-    fanout_threshold = options.get("auto_stub_fanout", 5)
+    # This is only an early routing safety valve. Let the post-placement
+    # classifier decide ordinary 2-3 pin local connections from geometry.
+    fanout_threshold = options.get("auto_stub_fanout", 8)
     stubbed_power = []
     stubbed_fanout = []
 
@@ -213,69 +216,271 @@ def _stub_nets_for_erc_errors(circuit, errors):
     return stubbed_any
 
 
-def _classify_and_stub_complex_nets(circuit, node, **options):
-    """Classify nets after placement: stub complex ones, keep simple ones as wires.
+def _net_span_and_pins(net, node_parts):
+    """Return (pins-in-node, farthest-apart-pin-pair Manhattan distance,
+    a Segment spanning that pair) for a net, using each pin's absolute
+    placed position (part.tx already reflects the finished placement at
+    this point -- pin.place_pt/route_pt have already been stripped by
+    node.rmv_placement_stuff(), so pin.pt is used instead).
+    """
+    from skidl.geometry import Point, Segment
 
-    Called after placement succeeds, before routing. Nets with too many pins
-    or pins too far apart get converted to labels for reliable connectivity.
-    Simple 2-3 pin short-distance nets remain as wires.
+    pins = [p for p in net.pins if p.part in node_parts]
+    if len(pins) < 2:
+        return pins, 0, None
+
+    pts = []
+    for p in pins:
+        pin_pt = getattr(p, "pt", Point(p.x, p.y))
+        part_tx = getattr(p.part, "tx", None)
+        pts.append(pin_pt * part_tx if part_tx else pin_pt)
+
+    max_dist = 0
+    span = None
+    for i, a in enumerate(pts):
+        for b in pts[i + 1 :]:
+            dist = abs(a.x - b.x) + abs(a.y - b.y)
+            if dist > max_dist:
+                max_dist = dist
+                span = Segment(a, b)
+
+    return pins, max_dist, span
+
+
+def _net_pin_points(net, node_parts):
+    """Absolute placed positions of this net's pins that live in node_parts."""
+    from skidl.geometry import Point
+
+    pts = []
+    for p in net.pins:
+        if p.part not in node_parts:
+            continue
+        pin_pt = getattr(p, "pt", Point(p.x, p.y))
+        part_tx = getattr(p.part, "tx", None)
+        pts.append(pin_pt * part_tx if part_tx else pin_pt)
+    return pts
+
+
+def _min_pin_distance(pts):
+    """Closest-pair Manhattan distance among placed pin points (0 if <2).
+
+    The wire-vs-label decision keys on the CLOSEST connected pins, not the
+    farthest (span) and not symbol centers: an MCU whose XTAL pins sit right
+    beside the crystal reads as "adjacent" and must wire even if the two symbol
+    bodies' centers are ~1200 mil apart.
+    """
+    if len(pts) < 2:
+        return 0
+    best = None
+    for i, a in enumerate(pts):
+        for b in pts[i + 1:]:
+            d = abs(a.x - b.x) + abs(a.y - b.y)
+            if best is None or d < best:
+                best = d
+    return best or 0
+
+
+def _all_pin_points(node_parts):
+    """(point, part) for every pin of every part -- input to congestion."""
+    from skidl.geometry import Point
+
+    pts = []
+    for part in node_parts:
+        for p in getattr(part, "pins", []):
+            pin_pt = getattr(p, "pt", Point(p.x, p.y))
+            part_tx = getattr(part, "tx", None)
+            pts.append((pin_pt * part_tx if part_tx else pin_pt, part))
+    return pts
+
+
+def _pin_congestion(net_pts, own_parts, all_pin_pts, radius):
+    """Max, over the net's pins, of the number of OTHER parts' pins within
+    `radius` (Manhattan). A short net whose pin sits in a dense pin field (a
+    many-pin IC edge with several satellites crowding it) is hard to read as a
+    wire -> bias to a label. Counts pins of parts NOT on this net only."""
+    best = 0
+    for a in net_pts:
+        c = 0
+        for b, part in all_pin_pts:
+            if part in own_parts:
+                continue
+            if abs(a.x - b.x) + abs(a.y - b.y) <= radius:
+                c += 1
+        if c > best:
+            best = c
+    return best
+
+
+def _cluster_id_map(node_parts):
+    """Map each part to an id shared by every part in its detected
+    functional cluster (see schematics.cluster.detect_clusters()), so
+    _classify_and_stub_complex_nets() can bias same-cluster nets toward
+    staying wired. Parts outside any cluster get their own unique id
+    (i.e. never considered "same cluster" as anything else).
+    """
+    from skidl.schematics.cluster import detect_clusters
+
+    cluster_of = {}
+    for cluster_id, cluster in enumerate(detect_clusters(list(node_parts))):
+        for part in cluster:
+            cluster_of[part] = cluster_id
+    for part in node_parts:
+        cluster_of.setdefault(part, object())
+    return cluster_of
+
+
+def _classify_and_stub_complex_nets(circuit, node, **options):
+    """Classify nets after placement: keep local ones as wires, stub the rest.
+
+    Called after placement succeeds, before routing. Power/ground nets are
+    already power symbols (stubbed pre-placement) and never reach here. Each
+    remaining candidate internal net is decided by a set of INDEPENDENT
+    short-circuit gates -- NOT an additive score -- in this order (the first
+    gate that matches wins):
+
+        1. < 2 pins in this node        -> skip (left as-is).
+        2. FUNCTION -> WIRE: classify_net_function(net) is not None
+           (clock / reset / usb_diff / decoupling). These read as direct
+           local connections regardless of distance.
+        3. AFFINITY -> WIRE: all pins in ONE detected functional cluster
+           AND fanout <= auto_stub_cluster_wire_max_pins.
+        4. CROSSINGS -> LABEL: net span intersects
+           >= auto_stub_crossing_label_threshold other nets' spans.
+        5. CONGESTION -> LABEL: _pin_congestion (other-part pins within
+           auto_stub_congestion_radius) >= auto_stub_congestion_label_threshold.
+        6. DISTANCE -> LABEL: CLOSEST pin-to-pin Manhattan distance
+           >= auto_stub_far_label_dist (closest pins, not the symbol span).
+        7. FANOUT -> LABEL: fanout > auto_stub_max_wire_pins.
+        8. otherwise                    -> WIRE.
+
+    label == wire electrically; smart_schematic re-verifies every seed, so a
+    borderline call can only look worse, never short.
 
     Args:
         circuit: The Circuit object.
         node: The placed SchNode.
-        options: Dict of options including:
-            auto_stub_max_wire_pins (int): Max pins for wire routing. Default 3.
-            auto_stub_max_wire_dist (int): Max manhattan distance (mils) for wires. Default 2000.
+        options: Dict of options (all with dynamic defaults):
+            auto_stub_max_wire_pins (int): fanout above which a net labels
+                (gate 7); also the cluster-wire fanout cap base. Default 3.
+            auto_stub_far_label_dist (int): closest pin-to-pin distance, in
+                mils, at/above which a net labels (gate 6). Default 1500.
+            auto_stub_crossing_label_threshold (int): span-crossing count
+                at/above which a net labels (gate 4). Default 4.
+            auto_stub_congestion_label_threshold (int): nearby other-part
+                pin count at/above which a net labels (gate 5). Default 16.
+            auto_stub_congestion_radius (int): radius in mils for the
+                congestion count (gate 5). Default 300.
+            auto_stub_cluster_wire_max_pins (int): fanout cap for the
+                single-cluster wire gate (gate 3). Default max_wire_pins = 3.
     """
-    from skidl.geometry import Point
+    # --- DYNAMIC wire-vs-label decision (RULE_ENGINE Phase 7) ---------------
+    # Decide like an experienced designer: FUNCTION first (a net whose local
+    # circuitry must read as directly connected always wires), then avoid
+    # CLUTTER (label only when crossings / pin-congestion / distance / fanout
+    # would hurt readability). Distance is ONE input, never the sole gate, and
+    # it is the CLOSEST pin-to-pin distance, not the symbol span. Power nets are
+    # already power symbols (stubbed pre-placement) and never reach here; SKiDL
+    # Bus members render as a bus overlay (sexp_schematic). label==wire
+    # electrically, and smart_schematic re-verifies every seed, so a wrong call
+    # can only look worse, never short.
+    from skidl.schematics.net_classify import classify_net_function
 
     max_wire_pins = options.get("auto_stub_max_wire_pins", 3)
-    max_wire_dist = options.get("auto_stub_max_wire_dist", 2000)
+    far_label_dist = options.get("auto_stub_far_label_dist", 1500)  # mil, closest-pin
+    cross_label_at = options.get("auto_stub_crossing_label_threshold", 4)
+    congest_at = options.get("auto_stub_congestion_label_threshold", 16)
+    congest_radius = options.get("auto_stub_congestion_radius", 300)  # mil
+    cluster_wire_max_pins = options.get("auto_stub_cluster_wire_max_pins", max_wire_pins)
 
     node_parts = set(node.parts)
+    candidate_nets = [
+        net
+        for net in node.get_internal_nets()
+        if not getattr(net, "_stub_explicit", False)
+        and not getattr(net, "_stub", False)
+    ]
+
+    spans = {}
+    pins_by_net = {}
+    pts_by_net = {}
+    mindist_by_net = {}
+    for net in candidate_nets:
+        pins, _max_dist, span = _net_span_and_pins(net, node_parts)
+        pins_by_net[net] = pins
+        pts = _net_pin_points(net, node_parts)
+        pts_by_net[net] = pts
+        mindist_by_net[net] = _min_pin_distance(pts)
+        if span is not None:
+            spans[net] = span
+
+    all_pin_pts = _all_pin_points(node_parts)
+    cluster_of = _cluster_id_map(node_parts)
+
+    def _stub(net):
+        net._stub = True
+        net._stub_explicit = False
+        for p in net.get_pins():
+            p.stub = True
+
     stubbed_count = 0
-
-    for net in node.get_internal_nets():
-        if getattr(net, "_stub_explicit", False):
+    for net in candidate_nets:
+        pins = pins_by_net[net]
+        if len(pins) < 2:
             continue
-        if getattr(net, "_stub", False):
+        fanout = len(pins)
+
+        # (3) FUNCTION priority -> WIRE. Clock (crystal/XTAL/OSC), reset, USB
+        #     differential pair, and decoupling nets must read as direct local
+        #     connections -- never a label, whatever the distance. (Power is
+        #     already a symbol and returns "power" here, but power nets don't
+        #     reach this loop, so the only categories seen are the wire ones.)
+        if classify_net_function(net) is not None:
             continue
 
-        pins = [p for p in net.pins if p.part in node_parts]
+        # (4) AFFINITY -> WIRE: all pins in one functional cluster (crystal/
+        #     decap/reset/USB-R/LED grouped around an anchor IC), low fanout.
+        if fanout <= cluster_wire_max_pins and len(
+            {cluster_of[p.part] for p in pins}
+        ) == 1:
+            continue
 
-        # Too many pins → label.
-        if len(pins) > max_wire_pins:
-            net._stub = True
-            net._stub_explicit = False
-            for p in net.get_pins():
-                p.stub = True
+        # Clutter metrics (only computed for ordinary signal nets).
+        net_span = spans.get(net)
+        crossings = (
+            sum(
+                1
+                for other_net, other_span in spans.items()
+                if other_net is not net and net_span.intersects(other_span)
+            )
+            if net_span is not None
+            else 0
+        )
+        congestion = _pin_congestion(
+            pts_by_net[net], {p.part for p in pins}, all_pin_pts, congest_radius
+        )
+        eff_dist = mindist_by_net[net]
+
+        # (5) many CROSSINGS -> LABEL (a wire would tangle the drawing).
+        if crossings >= cross_label_at:
+            _stub(net)
             stubbed_count += 1
             continue
-
-        # Pins too far apart → label.
-        if len(pins) >= 2:
-            pts = []
-            for p in pins:
-                pin_pt = getattr(p, "place_pt", getattr(p, "pt", Point(p.x, p.y)))
-                part_tx = getattr(p.part, "tx", None)
-                if part_tx:
-                    pts.append(pin_pt * part_tx)
-                else:
-                    pts.append(pin_pt)
-
-            max_dist = 0
-            for i, a in enumerate(pts):
-                for b in pts[i + 1:]:
-                    dist = abs(a.x - b.x) + abs(a.y - b.y)
-                    if dist > max_dist:
-                        max_dist = dist
-
-            if max_dist > max_wire_dist:
-                net._stub = True
-                net._stub_explicit = False
-                for p in net.get_pins():
-                    p.stub = True
-                stubbed_count += 1
+        # (6) high pin-CONGESTION -> LABEL (unreadable even if short).
+        if congestion >= congest_at:
+            _stub(net)
+            stubbed_count += 1
+            continue
+        # (7) FAR (closest pins beyond far_label_dist) -> LABEL.
+        if eff_dist >= far_label_dist:
+            _stub(net)
+            stubbed_count += 1
+            continue
+        # (8) high FANOUT -> LABEL (bus-like clutter; a real Bus renders as one).
+        if fanout > max_wire_pins:
+            _stub(net)
+            stubbed_count += 1
+            continue
+        # (9) otherwise -> WIRE (near, low fanout, few crossings, uncongested).
 
     if stubbed_count:
         from skidl.logger import active_logger
@@ -399,9 +604,17 @@ def preprocess_circuit(circuit, **options):
                 pin.routed = False
 
     def rotate_power_pins(part):
-        """Rotate a part based on the direction of its power pins."""
+        """Seed a part's orientation so power pins point up and ground pins point
+        down (professional convention: power at top, ground at bottom).
 
-        if not getattr(part, "symtx", ""):
+        Runs before placement as an INITIAL orientation; the tension/crossing
+        optimizer may still adjust it. A part with no power or ground pins tallies
+        nothing and is left untouched, so this only reorients power-bearing parts
+        (ICs, regulators, decoupling caps) -- pure signal parts are unaffected.
+        Manual ``symtx`` always wins and skips this seed.
+        """
+
+        if getattr(part, "symtx", ""):
             return
 
         def is_pwr(net_name):
@@ -468,6 +681,23 @@ def preprocess_circuit(circuit, **options):
                     hlbl_bbox *= Tx().move(pin.pt)
                     part_unit.lbl_bbox.add(hlbl_bbox)
 
+            # Reserve space for the Reference/Value property text that gets
+            # written at a fixed +/-2*GRID offset from the part origin (see
+            # part_to_sexp() in sexp_schematic.py). Without this, the placer
+            # only avoids overlapping symbol bodies and stub labels, so
+            # tightly-packed layouts end up with Reference/Value text
+            # overlapping neighboring parts even when the parts themselves
+            # don't collide.
+            half_h = PIN_LABEL_FONT_SIZE / 2
+            ref_len = len(str(getattr(part, "ref", "") or "")) * PIN_LABEL_FONT_SIZE
+            val_len = len(str(getattr(part, "value", "") or "")) * PIN_LABEL_FONT_SIZE
+            part_unit.lbl_bbox.add(
+                BBox(Point(0, -2 * GRID - half_h), Point(ref_len, -2 * GRID + half_h))
+            )
+            part_unit.lbl_bbox.add(
+                BBox(Point(0, 2 * GRID - half_h), Point(val_len, 2 * GRID + half_h))
+            )
+
             part_unit.bbox = part_unit.lbl_bbox
 
     for part in circuit.parts:
@@ -518,8 +748,8 @@ def gen_schematic(
         auto_stub_fanout (int): Nets with more pins than this are stubbed pre-routing. Default 3.
         auto_stub_max_wire_pins (int): Max pins on a net before selective routing stubs it
             post-placement. Default 3.
-        auto_stub_max_wire_dist (int): Max manhattan distance (mils) between pins before
-            selective routing stubs the net. Default 2000.
+        auto_stub_far_label_dist (int): Closest pin-to-pin Manhattan distance (mils) at/above
+            which selective routing stubs the net to a label. Default 1500.
         erc_max_iterations (int): Max ERC correction loop passes. Default 8.
         auto_stub_fallback (str): What to do when routing fails with auto_stub enabled.
             "labels" (default) — fall back to labels-only schematic.

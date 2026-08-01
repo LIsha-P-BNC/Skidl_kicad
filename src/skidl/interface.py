@@ -13,6 +13,7 @@ connecting subsystems with matching interfaces using simple operators.
 
 from .alias import Alias
 from .bus import Bus
+from .logger import active_logger
 from .net import Net
 from .netpinlist import NetPinList
 from .pin import Pin
@@ -109,7 +110,18 @@ class Interface(dict):
         if isinstance(value, SkidlBaseObject):
             # Only SKiDL-type objects get added as dictionary items.
             super().__setitem__(key, value)
-        super().__setattr__(key, value)
+        if key in dict.__dict__ or key in Interface.__dict__:
+            # Don't shadow dict/Interface methods (e.g. a signal literally
+            # named "values", "items", or "get") with an instance attribute -
+            # doing so would break every method here that calls
+            # self.values()/self.items() internally. The item is still
+            # reachable via dict-style access (interface[key]).
+            active_logger.warning(
+                f"Interface entry '{key}' collides with a built-in method name "
+                f"and won't be accessible as an attribute; use interface['{key}'] instead."
+            )
+        else:
+            super().__setattr__(key, value)
 
         # If enabled, expand a bus and add its individual nets.
         if isinstance(value, Bus) and unbundle:

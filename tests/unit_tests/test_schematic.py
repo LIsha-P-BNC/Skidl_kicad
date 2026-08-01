@@ -229,6 +229,180 @@ def test_gen_sch_1():
     create_schematic(num_trials=1,flatness=1.0)
 
 
+def test_gen_sch_no_connect():
+    """Pins tied to skidl's NC net get their own no_connect marker and are
+    never wired/labeled to each other, even though they share one global
+    NCNet object under the hood."""
+    from skidl import generate_schematic as _generate_schematic
+
+    r1 = Part(
+        "Device", "R", footprint="Resistor_SMD:R_0805_2012Metric", value="1K"
+    )
+    r2 = Part(
+        "Device", "R", footprint="Resistor_SMD:R_0805_2012Metric", value="1K"
+    )
+    gnd = Net("GND")
+    sig = Net("SIG")
+    gnd & r1[1]
+    sig & r2[1]
+    r1[2] += NC  # Unused pin, intentionally unconnected.
+    r2[2] += NC  # Unrelated unused pin -- shares the same global NC net.
+
+    output_dir = "./test_data/schematic_output"
+    os.makedirs(output_dir, exist_ok=True)
+    top_name = "test_gen_sch_no_connect_0"
+    for f in glob.glob(os.path.join(output_dir, top_name) + "*"):
+        os.remove(f)
+
+    _generate_schematic(filepath=output_dir, top_name=top_name, flatness=1.0, retries=3)
+
+    sch_file = os.path.join(output_dir, top_name + ".kicad_sch")
+    with open(sch_file, "r") as fp:
+        content = fp.read()
+
+    assert content.count("(no_connect") == 2
+    # The shared NC net must never render as a wire or label joining the
+    # two unrelated pins.
+    assert "__NOCONNECT" not in content
+
+
+def test_gen_sch_block_role_ordering():
+    """Sibling subcircuits with recognizable functional roles (a power
+    regulator block, an MCU block, a connector block) get laid out
+    left-to-right in Power -> MCU -> Connector order."""
+    import re
+
+    from skidl import generate_schematic as _generate_schematic
+
+    with Group("PWR"):
+        l1 = Part("Device", "L", footprint="a")
+        reg = Part("Regulator_Switching", "LM2596S-3.3", footprint="b")
+        vbat = Net("VBAT")
+        vout = Net("PWR_OUT")
+        vbat += reg["VIN"]
+        vout += reg["OUT"], l1[1]
+        gnd = Net("GND")
+        gnd += reg["GND"]
+
+    with Group("MCU"):
+        mcu = Part("MCU_Microchip_ATmega", "ATmega328P-P", footprint="c")
+        sig = Net("GPIO_SIG")
+        sig += mcu["PB0"]
+
+    with Group("CONN"):
+        j1 = Part("Connector_Generic", "Conn_01x02", footprint="d")
+        sig2 = Net("CONN_SIG")
+        sig2 += j1[1]
+
+    output_dir = "./test_data/schematic_output"
+    os.makedirs(output_dir, exist_ok=True)
+    top_name = "test_gen_sch_block_role_ordering_0"
+    for f in glob.glob(os.path.join(output_dir, top_name) + "*"):
+        os.remove(f)
+
+    _generate_schematic(filepath=output_dir, top_name=top_name, flatness=0.0, retries=3)
+
+    sch_file = os.path.join(output_dir, top_name + ".kicad_sch")
+    with open(sch_file, "r") as fp:
+        content = fp.read()
+
+    positions = {}
+    for m in re.finditer(
+        r'\(sheet\s*\n\s*\(at ([\d.\-]+) ([\d.\-]+)\).*?"Sheetname" "([^"]+)"',
+        content,
+        re.S,
+    ):
+        x, _y, name = m.groups()
+        positions[name] = float(x)
+
+    assert set(positions) == {"PWR1", "MCU1", "CONN1"}
+    assert positions["PWR1"] < positions["MCU1"] < positions["CONN1"]
+
+
+def test_gen_sch_power_ground_directional_bias():
+    """VCC ends up seeded toward the top of the sheet and GND toward the
+    bottom (smaller/larger KiCad Y respectively -- KiCad is Y-down), and
+    that bias survives force-directed convergence across several seeds."""
+    import re
+
+    from skidl import generate_schematic as _generate_schematic
+
+    mcu = Part("MCU_Microchip_ATmega", "ATmega328P-P", footprint="c")
+    gndt = Part("power", "GND", footprint="TestPoint:TestPoint_Pad_D4.0mm")
+    vcct = Part("power", "VCC", footprint="TestPoint:TestPoint_Pad_D4.0mm")
+    vcc = Net("VCC")
+    gnd = Net("GND")
+    vcc += mcu["VCC"], vcct[1]
+    gnd += mcu["GND"], gndt[1]
+
+    output_dir = "./test_data/schematic_output"
+    os.makedirs(output_dir, exist_ok=True)
+    top_name = "test_gen_sch_power_ground_directional_bias_0"
+    for f in glob.glob(os.path.join(output_dir, top_name) + "*"):
+        os.remove(f)
+
+    _generate_schematic(
+        filepath=output_dir, top_name=top_name, flatness=1.0, retries=3
+    )
+
+    sch_file = os.path.join(output_dir, top_name + ".kicad_sch")
+    with open(sch_file, "r") as fp:
+        content = fp.read()
+
+    positions = {}
+    for m in re.finditer(
+        r'\(symbol\s*\n\s*\(lib_id "power:([^"]+)"\)\s*\n\s*\(at ([\d.\-]+) ([\d.\-]+)',
+        content,
+    ):
+        name, _x, y = m.groups()
+        positions[name] = float(y)
+
+    assert set(positions) == {"GND", "VCC"}
+    assert positions["GND"] > positions["VCC"]
+
+
+def test_gen_sch_bus_notation():
+    """Stubbed pins on a SKiDL Bus render one graphical bus line plus a
+    bus_entry per member pin, on top of (not instead of) each member
+    net's own individual label."""
+    import re
+
+    from skidl import generate_schematic as _generate_schematic
+
+    mcu = Part("MCU_Microchip_ATmega", "ATmega328P-P", footprint="c")
+    conn = Part("Connector_Generic", "Conn_02x04_Odd_Even", footprint="j")
+
+    data = Bus("DATA", 4)
+    for i in range(4):
+        data[i] += mcu[f"PC{i}"], conn[i + 1]
+
+    output_dir = "./test_data/schematic_output"
+    os.makedirs(output_dir, exist_ok=True)
+    top_name = "test_gen_sch_bus_notation_0"
+    for f in glob.glob(os.path.join(output_dir, top_name) + "*"):
+        os.remove(f)
+
+    _generate_schematic(
+        filepath=output_dir,
+        top_name=top_name,
+        flatness=1.0,
+        retries=3,
+        auto_stub=True,
+        auto_stub_max_wire_pins=1,
+    )
+
+    sch_file = os.path.join(output_dir, top_name + ".kicad_sch")
+    with open(sch_file, "r") as fp:
+        content = fp.read()
+
+    assert content.count("(bus\n") == 1
+    assert content.count("(bus_entry") == 8  # 4 bits x 2 pins (MCU + conn) each.
+    assert "DATA[0..3]" in content
+    # Each DATA bit remains a same-sheet local label alongside the bus.
+    for i in range(4):
+        assert f'label "DATA{i}"' in content
+
+
 @pytest.mark.xfail(raises=(PlacementFailure, RoutingFailure))
 def test_gen_sch_place():
     @subcircuit

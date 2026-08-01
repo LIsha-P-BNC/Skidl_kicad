@@ -131,8 +131,10 @@ class SchLib(object):
 
         # Load this SchLib with an existing SchLib object if the file name hash
         # matches one in the cache.
+        loaded_from_pickle = False
         if lib_pickle_abs_fn in self._cache:
             self.__dict__.update(self._cache[lib_pickle_abs_fn].__dict__)
+            loaded_from_pickle = True
 
         # Load this Schlib from the pickle file if it exists and it's more recent
         # than the original part library file.
@@ -141,8 +143,24 @@ class SchLib(object):
             and os.path.exists(lib_pickle_abs_fn)
             and os.path.getmtime(lib_pickle_abs_fn) >= os.path.getmtime(abs_filename)
         ):
-            with open(lib_pickle_abs_fn, "rb") as f:
-                self.__dict__.update(pickle.load(f).__dict__)
+            try:
+                with open(lib_pickle_abs_fn, "rb") as f:
+                    self.__dict__.update(pickle.load(f).__dict__)
+                loaded_from_pickle = True
+            except Exception as e:
+                # A corrupted, truncated, or version-incompatible cache file
+                # shouldn't abort the whole run - fall back to re-parsing the
+                # library from source below, the same as a cache miss.
+                active_logger.warning(
+                    f"Couldn't load cached library pickle {lib_pickle_abs_fn} ({e}); "
+                    "re-parsing library from source instead."
+                )
+                try:
+                    os.remove(lib_pickle_abs_fn)
+                except OSError:
+                    pass
+
+        if loaded_from_pickle:
             # Cache a reference to the library.
             if use_cache:
                 self._cache[lib_pickle_abs_fn] = self

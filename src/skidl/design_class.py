@@ -166,10 +166,14 @@ class DesignClasses(ABC, dict):
             classes: Another DesignClasses object to compare with this collection
             
         Returns:
-            bool: True if both objects are of the same type with identical attributes
+            bool: True if both objects are of the same type, hold the same
+                design classes, and have identical other attributes.
         """
         if isinstance(classes, type(self)):
-            return vars(self) == vars(classes)
+            # DesignClasses is a dict subclass - vars() only reflects plain
+            # instance attributes like classes_name, not the dict's actual
+            # key/value contents, so both must be compared explicitly.
+            return dict.__eq__(self, classes) and vars(self) == vars(classes)
         return False
 
     def __contains__(self, cls):

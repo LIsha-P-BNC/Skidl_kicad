@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "anvil_cad": {
+      "command": "C:\\Users\\Admin\\AppData\\Local\\Programs\\Python\\Python311\\python.exe",
+      "args": ["C:\\MCP\\bnc_mcp\\bnc_mcp_server.py"]
+    },
+    "anvilcad": {
+      "command": "C:\\Users\\Admin\\AppData\\Local\\Programs\\Python\\Python311\\python.exe",
+      "args": ["f:\\skidl\\skidl_mcp_server.py"]
+    }
+  }
+}

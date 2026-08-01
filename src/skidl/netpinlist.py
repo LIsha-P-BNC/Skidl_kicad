@@ -282,18 +282,18 @@ class NetPinList(list):
         """
         raise NotImplementedError
 
-    @do_erc.setter
+    @drive.setter
     def drive(self, strength):
         """
         Set the drive strength for all pins/nets in the list.
-        
+
         Args:
             strength: The drive strength value to set for all pins/nets.
         """
         for pn in self:
             pn.drive = strength
 
-    @do_erc.deleter
+    @drive.deleter
     def drive(self):
         """
         Restore the default drive strength for all pins/nets in the list.

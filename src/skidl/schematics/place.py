@@ -92,11 +92,16 @@ def get_snap_pt(part_or_blk):
     """
     try:
         return part_or_blk.pins[0].pt
-    except AttributeError:
+    except (AttributeError, IndexError):
+        # No pins (e.g. a 0-pin mechanical part like a fiducial or mounting
+        # hole) -- fall back to any explicit snap point, then the bbox corner.
         try:
             return part_or_blk.snap_pt
         except AttributeError:
-            return None
+            try:
+                return part_or_blk.place_bbox.max
+            except AttributeError:
+                return None
 
 
 def snap_to_grid(part_or_blk):
@@ -236,6 +241,7 @@ def add_anchor_pull_pins(parts, nets, **options):
             except ValueError:
                 # Set anchor for part with no pins at all.
                 anchor_pull_pin = Pin()
+                anchor_pull_pin.part = part
                 anchor_pull_pin.place_pt = part.place_bbox.max
             part.anchor_pins["similarity"] = [anchor_pull_pin]
             part.pull_pins["similarity"] = all_pull_pins
@@ -260,6 +266,50 @@ def restore_anchor_pull_pins(parts):
 
     # Remove the attributes where the original lists were saved.
     rmv_attr(parts, ("saved_anchor_pins", "saved_pull_pins"))
+
+
+def retain_closest_anchor_pull_pins(parts):
+    """Trim each part's pull-pin lists down to the single closest pull
+    pin per net, so alignment-pass forces pull along one dominant lever
+    arm instead of being averaged across every pin on the net (which
+    blurs row/column snapping). Only pull_pins are trimmed -- anchor_pins
+    (a part's own pins) are left as-is.
+
+    Safe to call on consecutive force_schedule rows within the same
+    alignment sequence: the original (untrimmed) lists are only saved
+    the first time (parts that already have a pending save are skipped,
+    so a second call doesn't overwrite the true originals with an
+    already-trimmed copy), and restore_anchor_pull_pins() is expected to
+    put them back once the alignment phase ends.
+
+    Args:
+        parts (list): List of Parts whose pull pins should be trimmed.
+    """
+    parts_to_save = [part for part in parts if not hasattr(part, "saved_anchor_pins")]
+    if parts_to_save:
+        save_anchor_pull_pins(parts_to_save)
+
+    for part in parts:
+        # PartBlock (place_blocks()'s movable-group wrapper) has no
+        # pin_ctrs -- only real Parts get the full anchor/pull-pin
+        # machinery from add_anchor_pull_pins() -- so blocks pass
+        # through this loop with nothing to trim.
+        pin_ctrs = getattr(part, "pin_ctrs", None)
+        if not pin_ctrs:
+            continue
+        for net, pull_pins in part.pull_pins.items():
+            if len(pull_pins) <= 1:
+                continue
+            anchor_pt = pin_ctrs.get(net)
+            if anchor_pt is None:
+                # No centroid computed for this net (e.g. the floating-parts
+                # "similarity" pseudo-net) -- leave its pull pins untrimmed.
+                continue
+            closest = min(
+                pull_pins,
+                key=lambda pin: (pin.place_pt * pin.part.tx - anchor_pt).magnitude,
+            )
+            part.pull_pins[net] = [closest]
 
 
 def adjust_orientations(parts, **options):
@@ -374,6 +424,109 @@ def adjust_orientations(parts, **options):
     return iter_cnt > 0
 
 
+def _virtual_net_segments(parts):
+    """Build one straight Segment per anchor/pull-pin connection, keyed
+    by net -- an approximation of what the router will connect, using
+    the same pre-routing pin data net_tension_dist() uses. Internal
+    helper for reduce_crossings_by_orientation().
+    """
+    segments = defaultdict(list)
+    for part in parts:
+        for net, anchor_pins in part.anchor_pins.items():
+            pull_pins = part.pull_pins.get(net, [])
+            for anchor_pin in anchor_pins:
+                anchor_pt = anchor_pin.place_pt * anchor_pin.part.tx
+                for pull_pin in pull_pins:
+                    pull_pt = pull_pin.place_pt * pull_pin.part.tx
+                    segments[net].append(Segment(anchor_pt, pull_pt))
+    return segments
+
+
+def _count_virtual_crossings(segments_by_net):
+    """Count crossings between different-net virtual segments. Internal
+    helper for reduce_crossings_by_orientation(); mirrors
+    route.Router.count_wire_crossings()'s same-net exclusion, but over
+    the straight-line approximation built by _virtual_net_segments()
+    rather than actual routed geometry."""
+    items = list(segments_by_net.items())
+    count = 0
+    for i, (_net_a, segs_a) in enumerate(items):
+        for _net_b, segs_b in items[i + 1 :]:
+            for seg_a in segs_a:
+                for seg_b in segs_b:
+                    if seg_a.intersects(seg_b):
+                        count += 1
+    return count
+
+
+def reduce_crossings_by_orientation(parts, **options):
+    """Greedily rotate/flip parts to reduce estimated wire crossings.
+
+    A separate, standalone pass from adjust_orientations() (which
+    optimizes net tension via a Kernighan-Lin search) -- intentionally
+    NOT folded into that function's cost calculation, since combining a
+    crossing count with an already-expensive O(orientations x parts x
+    iterations) search would multiply the cost further. This instead
+    does one straightforward pass: for each part in turn, try its 8
+    orientations and keep whichever minimizes the total crossing count
+    among all parts' virtual net connections (see _virtual_net_segments())
+    at that point, given the choices already made for earlier parts.
+
+    Runs on the same straight anchor-to-pull-pin line data
+    net_tension_dist() uses (pre-routing, not actual routed wire
+    geometry), so it's safe to call before Router.route() -- there's no
+    routed geometry yet to invalidate by moving a part.
+
+    Args:
+        parts (list): Parts to consider for reorientation.
+        options (dict): Recognizes "minimize_crossings" (bool, default
+            False) -- this pass is opt-in and a no-op unless set.
+
+    Returns:
+        int: Number of parts that were reoriented.
+    """
+    if not options.get("minimize_crossings"):
+        return 0
+
+    movable_parts = [part for part in parts if not part.orientation_locked]
+    changed = 0
+
+    for part in movable_parts:
+        starting_tx = copy(part.tx)
+        part_ctr = (part.place_bbox * part.tx).ctr
+        starting_count = None
+        best_tx = starting_tx
+        best_count = None
+
+        # Cycle through all 8 orientations (4 rotations x 2 flip states),
+        # measuring every one -- including the starting orientation --
+        # same iteration structure as adjust_orientations()'s
+        # find_best_orientation(), which is what guarantees all 8 get
+        # visited exactly once.
+        for _flip in range(2):
+            for _rot in range(4):
+                count = _count_virtual_crossings(_virtual_net_segments(parts))
+                if starting_count is None:
+                    starting_count = count
+                if best_count is None or count < best_count:
+                    best_count = count
+                    best_tx = copy(part.tx)
+                part.tx = part.tx.move(-part_ctr).rot_90cw().move(part_ctr)
+            part.tx = part.tx.move(-part_ctr).flip_x().move(part_ctr)
+
+        # Restore the starting orientation, then apply the best one found
+        # only if it's a strict improvement (avoids counting a "change"
+        # when the best orientation is just a different-but-equivalent
+        # Tx object representing the same starting orientation -- Tx has
+        # no __eq__, so comparing Tx instances always differs by identity).
+        part.tx = starting_tx
+        if best_count < starting_count:
+            part.tx = best_tx
+            changed += 1
+
+    return changed
+
+
 def net_tension_dist(part, **options):
     """Calculate the tension of the nets trying to rotate/flip the part.
 
@@ -481,6 +634,11 @@ def net_force_dist(part, **options):
     # Get the force multiplier applied to point-to-point nets.
     pt_to_pt_mult = options.get("pt_to_pt_mult", 1)
 
+    # Extra per-net multiplier for nets identified (by cluster.py) as
+    # linking parts in the same functional cluster or a decoupling cap
+    # to its IC's power pin. Absent nets default to a multiplier of 1.0.
+    affinity_weights = options.get("net_affinity_weights") or {}
+
     # Compute the total force on the part from all the anchor/pulling points on each net.
     total_force = Vector(0, 0)
 
@@ -497,6 +655,7 @@ def net_force_dist(part, **options):
 
         # Multiply the force exerted by point-to-point nets.
         force_mult = pt_to_pt_mult if len(pull_pins[net]) <= 1 else 1
+        force_mult *= affinity_weights.get(net, 1.0)
 
         # Initialize net force.
         net_force = Vector(0, 0)
@@ -789,6 +948,164 @@ def random_placement(parts, **options):
         part.tx = part.tx.move(pt)
 
 
+def directional_seed_placement(parts, **options):
+    """Seed parts' initial position by signal-flow depth (left-to-right)
+    and power/ground role (top/bottom), before force-directed refinement.
+
+    This replaces the pure randomness of random_placement() with a
+    biased starting point: X follows each part's BFS depth from
+    net_classify.part_depth_map() (connector/input parts at depth 0
+    trend left, deeper parts trend right), and Y follows
+    net_classify.classify_net_role() on the part's pins (a part with
+    only power-classified pins trends toward the top of the sheet, only
+    ground-classified pins toward the bottom, otherwise -- including
+    parts with both, or neither -- Y stays random, same as before).
+    Random jitter is still added on both axes so parts sharing a depth
+    or role don't start stacked exactly on top of each other.
+
+    Unlike layout_blocks_by_role() (a hard post-convergence pass, see
+    its docstring for why), this is only a seed: net_force_dist()'s
+    connectivity-driven attraction is topology-aware (zero force between
+    parts that share no net), not the uniform same-tag attraction that
+    required a hard override for blocks, so a directional seed here
+    isn't expected to be erased by the solver the same way.
+
+    Args:
+        parts (list): List of Parts to place (NetTerminals excluded by
+            the caller; depth/role classification needs real Parts).
+
+    KiCad's coordinate system is Y-down (top of page = smaller Y) but
+    this placement engine is Y-up internally -- sheet rendering applies
+    a Y-flip (see tools/kicadN/sexp_schematic.py's _calc_sheet_tx()) --
+    so a LARGER internal Y ends up rendered CLOSER TO THE TOP of the
+    sheet, and a smaller one closer to the bottom. Verified empirically:
+    Point(0, 3000) * Tx(a=1, d=-1) == Point(0, -3000), i.e. increasing Y
+    here becomes decreasingly negative Y after the flip, which is
+    further toward the top in KiCad's smaller-Y-is-higher convention.
+    """
+    from skidl.schematics.net_classify import classify_net_role, part_depth_map
+
+    bbox = define_placement_bbox(parts, **options)
+    depths = part_depth_map(parts)
+    max_depth = max(depths.values(), default=0)
+
+    # How much X spread one depth "column" gets.
+    col_w = bbox.w / (max_depth + 1) if max_depth else bbox.w
+
+    def part_role(part):
+        roles = {
+            classify_net_role(pin.net)
+            for pin in getattr(part, "pins", [])
+            if getattr(pin, "net", None) is not None
+        }
+        roles.discard(None)
+        if roles == {"power"}:
+            return "power"
+        if roles == {"ground"}:
+            return "ground"
+        return None
+
+    for part in parts:
+        depth = depths.get(part, 0)
+        x = depth * col_w + random.random() * col_w
+        role = part_role(part)
+        if role == "power":
+            y = bbox.h * (0.75 + 0.25 * random.random())
+        elif role == "ground":
+            y = bbox.h * 0.25 * random.random()
+        else:
+            y = random.random() * bbox.h
+        part.tx = part.tx.move(Point(x, y))
+
+
+@export_to_all
+def layout_blocks_by_role(blocks, roles, **options):
+    """Arrange blocks in a left-to-right row, ordered by functional role.
+
+    Order is Power, MCU, Communication, Sensor, Connector, then Other
+    (see cluster.classify_block_role()/order_blocks_by_role()), applied
+    only when at least two distinct non-"Other" roles are present among
+    the blocks -- a circuit with no recognizable roles leaves every
+    block's position untouched.
+
+    This is a hard, deterministic final layout pass rather than just an
+    initial seed for the force-directed solver: place_blocks() ties
+    same-tag blocks together with strong mutual attraction (e.g. every
+    sibling subcircuit shares tag=3), which is symmetric and has no
+    notion of role, so a plain pre-seed gets pulled back together and
+    the ordering is lost by the time the solver converges. Running this
+    after evolve_placement() instead guarantees the ordering holds.
+
+    Args:
+        blocks (list): Objects with a mutable `.tx` (Tx) attribute and a
+            `.place_bbox` (BBox) attribute, e.g. place_blocks()'s PartBlock.
+        roles (dict): Mapping of block -> role string, e.g. built from
+            cluster.classify_block_role() per block.
+        options (dict): Recognizes "role_layout_pad" (extra spacing
+            between blocks in the row, defaults to BLK_EXT_PAD).
+
+    Returns:
+        bool: True if blocks were laid out, False if left unchanged.
+    """
+    from skidl.schematics.cluster import order_blocks_by_role
+
+    distinct_roles = {r for r in roles.values() if r != "Other"}
+    if len(distinct_roles) < 2:
+        return False
+
+    pad = options.get("role_layout_pad", BLK_EXT_PAD)
+    ordered_blocks = order_blocks_by_role([(roles[blk], blk) for blk in blocks])
+
+    # Wrap the role-ordered sequence into page-shaped ROWS (reading order:
+    # left->right then top->bottom, so the functional story is preserved).
+    # A single unbounded row overflows the sheet as soon as a design has
+    # more than a few blocks (observed: a 773 mm row on an A3 page).
+    widths = [b.place_bbox.w if b.place_bbox.w > 0 else 500 for b in ordered_blocks]
+    heights = [b.place_bbox.h if b.place_bbox.h > 0 else 500 for b in ordered_blocks]
+
+    def _wrap(target_w):
+        """Simulate the wrap at a given row width -> (W, H, positions)."""
+        x = y = row_h = 0
+        used_w = 0
+        posns = []
+        for w, h in zip(widths, heights):
+            if x > 0 and x + w > target_w:
+                used_w = max(used_w, x - pad)
+                x = 0
+                y += row_h + pad
+                row_h = 0
+            posns.append((x, y))
+            x += w + pad
+            row_h = max(row_h, h)
+        used_w = max(used_w, x - pad)
+        return used_w, y + row_h, posns
+
+    # Pick the row count whose overall shape is closest to a landscape page
+    # (sqrt(2):1, the A-series aspect) -- candidates are "total width / k".
+    total_w = sum(w + pad for w in widths)
+    if len(ordered_blocks) <= 6:
+        # Few blocks -- the typical multi-sheet PARENT (one sheet-box per
+        # functional cluster) or a small grouped design. These read best as a
+        # single role-ordered ROW (Power -> MCU -> Comms -> Memory -> ...
+        # left-to-right, the block-diagram convention) rather than an
+        # aspect-compact grid that scatters the flow into columns. A row of <=6
+        # equal boxes still fits a landscape page.
+        _W, _H, posns = _wrap(total_w + max(widths) + pad)
+        best = (0.0, posns)
+    else:
+        best = None
+        for k in range(1, len(ordered_blocks) + 1):
+            tw = max(max(widths), total_w / k)
+            W, H, posns = _wrap(tw)
+            score = abs((W / max(H, 1)) - 1.414)
+            if best is None or score < best[0]:
+                best = (score, posns)
+    for blk, (x, y) in zip(ordered_blocks, best[1]):
+        blk.tx = Tx().move(Point(x, y))
+        snap_to_grid(blk)
+    return True
+
+
 def push_and_pull(anchored_parts, mobile_parts, nets, force_func, **options):
     """Move parts under influence of attractive nets and repulsive part overlaps.
 
@@ -837,24 +1154,33 @@ def push_and_pull(anchored_parts, mobile_parts, nets, force_func, **options):
     # Start at 0 (all attractive) and gradually progress to 1 (all repulsive).
     # Also, set parameters for determining when parts are stable and for restricting
     # movements in the X & Y directions when parts are being aligned.
+    # Iteration cap per schedule row (last tuple entry below). Align rows
+    # get a much lower cap than the default 1000: axis-masked alignment
+    # forces (only X or only Y can move) often can't settle all the way
+    # below stable_threshold -- the masked-out axis's overlap/attraction
+    # imbalance keeps nudging the free axis -- so left uncapped they tend
+    # to burn the full 1000 iterations every time, which was observed to
+    # roughly double this function's runtime. A lower cap just means the
+    # alignment pass stops refining sooner; it doesn't affect correctness.
+    DEFAULT_MAX_ITER = 1000
+    ALIGN_MAX_ITER = 100
+
     force_schedule = [
-        (0.50, 0.0, 0.1, False, (1, 1)),  # Attractive forces only.
-        (0.25, 0.0, 0.01, False, (1, 1)),  # Attractive forces only.
+        (0.50, 0.0, 0.1, False, (1, 1), DEFAULT_MAX_ITER),  # Attractive forces only.
+        (0.25, 0.0, 0.01, False, (1, 1), DEFAULT_MAX_ITER),  # Attractive forces only.
         # (0.25, 0.2, 0.01, False, (1,1)), # Some repulsive forces.
-        (0.25, 0.4, 0.1, False, (1, 1)),  # More repulsive forces.
+        (0.25, 0.4, 0.1, False, (1, 1), DEFAULT_MAX_ITER),  # More repulsive forces.
         # (0.25, 0.6, 0.01, False, (1,1)), # More repulsive forces.
-        (0.25, 0.8, 0.1, False, (1, 1)),  # More repulsive forces.
-        # (0.25, 0.7, 0.01, True, (1,0)), # Align parts horiz.
-        # (0.25, 0.7, 0.01, True, (0,1)), # Align parts vert.
-        # (0.25, 0.7, 0.01, True, (1,0)), # Align parts horiz.
-        # (0.25, 0.7, 0.01, True, (0,1)), # Align parts vert.
-        (0.25, 1.0, 0.01, False, (1, 1)),  # Remove any part overlaps.
+        (0.25, 0.8, 0.1, False, (1, 1), DEFAULT_MAX_ITER),  # More repulsive forces.
+        (0.25, 0.7, 0.1, True, (1, 0), ALIGN_MAX_ITER),  # Align parts horiz.
+        (0.25, 0.7, 0.1, True, (0, 1), ALIGN_MAX_ITER),  # Align parts vert.
+        (0.25, 1.0, 0.01, False, (1, 1), DEFAULT_MAX_ITER),  # Remove any part overlaps.
     ]
     # N = 7
     # force_schedule = [(0.50, i/N, 0.01, False, (1,1)) for i in range(N+1)]
 
     # Step through the alpha sequence going from all-attractive to all-repulsive forces.
-    for speed, alpha, stability_coef, align_parts, force_mask in force_schedule:
+    for speed, alpha, stability_coef, align_parts, force_mask, max_iter in force_schedule:
         if align_parts:
             # Align parts by only using forces between the closest anchor/pull pins.
             retain_closest_anchor_pull_pins(mobile_parts)
@@ -868,7 +1194,7 @@ def push_and_pull(anchored_parts, mobile_parts, nets, force_func, **options):
 
         # Move parts for this alpha until they all settle into fixed positions.
         # Place an iteration limit to prevent an infinite loop.
-        for _ in range(1000):  # HACK: Ad-hoc iteration limit.
+        for _ in range(max_iter):  # HACK: Ad-hoc iteration limit.
             # Compute forces exerted on the parts by each other.
             sum_of_forces = 0
             for part in mobile_parts:
@@ -941,6 +1267,36 @@ def evolve_placement(anchored_parts, mobile_parts, nets, force_func, **options):
     # Snap parts to grid.
     for part in parts:
         snap_to_grid(part)
+
+    # Two DIFFERENT parts can converge to the same grid point: the force-directed
+    # simulation only guarantees convergence, not a minimum final separation, so two
+    # parts that end up within less than one grid cell of each other both round to
+    # the identical (dx, dy) here. When that happens their pins coincide exactly, so
+    # a schematic that stubs those pins as net labels/power symbols draws an
+    # unintended electrical short between two unrelated nets (e.g. GND shorted to an
+    # isolated ground domain) -- a silent correctness bug, not just a visual one.
+    # Guarantee every mobile part ends up on a distinct grid point.
+    _resolve_exact_overlaps(mobile_parts)
+
+
+def _resolve_exact_overlaps(parts):
+    """Nudge parts apart that landed on the exact same grid point after placement.
+
+    Args:
+        parts (list): Parts whose (dx, dy) may collide after grid-snapping.
+    """
+    seen = {}
+    for part in parts:
+        key = (round(part.tx.dx, 3), round(part.tx.dy, 3))
+        if key in seen:
+            # Move this part one grid cell away (alternate axis so a chain of
+            # collisions spreads out instead of re-colliding along one line).
+            n = seen[key]
+            offset = Tx(dx=GRID * (n // 2 + 1), dy=0) if n % 2 == 0 else Tx(dx=0, dy=GRID * (n // 2 + 1))
+            part.tx *= offset
+            snap_to_grid(part)
+            key = (round(part.tx.dx, 3), round(part.tx.dy, 3))
+        seen[key] = seen.get(key, 0) + 1
 
 
 def place_net_terminals(net_terminals, placed_parts, nets, force_func, **options):
@@ -1252,14 +1608,38 @@ class Placer:
         if real_count > node._ROW_PLACE_THRESHOLD:
             return node.place_connected_parts_rowbased(parts, nets, **options)
 
+        if "net_affinity_weights" not in options:
+            # Boost attraction for nets linking parts in the same detected
+            # functional cluster (e.g. an MCU and its crystal) or a
+            # decoupling cap to its IC's power pin, so they place closer
+            # together than generic net connectivity alone would manage.
+            # Real Parts only -- NetTerminals have no ref_prefix/pins to
+            # classify. An empty result (no recognized patterns) is a
+            # no-op: net_force_dist() defaults missing nets to 1.0.
+            from skidl.schematics.cluster import compute_net_affinity_weights
+
+            real_parts_for_affinity = [p for p in parts if not is_net_terminal(p)]
+            options["net_affinity_weights"] = compute_net_affinity_weights(
+                real_parts_for_affinity
+            )
+
         # Add bboxes with surrounding area so parts are not butted against each other.
         add_placement_bboxes(parts, **options)
 
         # Set anchor and pull pins that determine attractive forces between parts.
         add_anchor_pull_pins(parts, nets, **options)
 
-        # Randomly place connected parts.
-        random_placement(parts)
+        # Separate the NetTerminals from the other parts.
+        net_terminals = [part for part in parts if is_net_terminal(part)]
+        real_parts = [part for part in parts if not is_net_terminal(part)]
+
+        # Seed real parts by signal-flow depth (X) and power/ground role
+        # (Y) -- see directional_seed_placement() -- instead of pure
+        # randomness. NetTerminals get a dedicated placement pass later
+        # (place_net_terminals(), below) regardless of their initial
+        # position here, so plain random placement is fine for them.
+        directional_seed_placement(real_parts, **options)
+        random_placement(net_terminals)
 
         if options.get("draw_placement"):
             # Draw the placement for debug purposes.
@@ -1274,10 +1654,6 @@ class Placer:
 
         # Do force-directed placement of the parts in the parts.
 
-        # Separate the NetTerminals from the other parts.
-        net_terminals = [part for part in parts if is_net_terminal(part)]
-        real_parts = [part for part in parts if not is_net_terminal(part)]
-
         # Do the first trial placement.
         evolve_placement([], real_parts, nets, total_part_force, **options)
 
@@ -1286,6 +1662,12 @@ class Placer:
             if adjust_orientations(real_parts, **options):
                 # Some part orientations were changed, so re-do placement.
                 evolve_placement([], real_parts, nets, total_part_force, **options)
+
+        # Opt-in (see reduce_crossings_by_orientation()'s "minimize_crossings"
+        # option) pass to reduce estimated wire crossings by reorienting
+        # parts; a no-op unless that option is set.
+        if reduce_crossings_by_orientation(real_parts, **options):
+            evolve_placement([], real_parts, nets, total_part_force, **options)
 
         # Place NetTerminals after all the other parts.
         place_net_terminals(
@@ -1459,6 +1841,18 @@ class Placer:
                 # so just pad around the outside of its graphical box.
                 pad = BLK_EXT_PAD
             bbox = bbox.resize(Vector(pad, pad))
+            if not child.flattened:
+                # An unflattened child renders as a hierarchical SHEET box with
+                # its Sheetname text ABOVE and its (long) Sheetfile text BELOW
+                # the rectangle -- both outside the graphical bbox. Reserve that
+                # text area so neighbouring boxes/parts can't land on it
+                # (observed: side-by-side sheet boxes smear their File: texts
+                # together, and top-sheet parts sit on the text). ~50 mil per
+                # filename char at KiCad's default 50-mil font; 2 text rows.
+                fname = str(getattr(child, "sheet_filename", "") or "")
+                text_w = len(fname) * 50
+                extra_w = max(0, (text_w - bbox.w) / 2)
+                bbox = bbox.resize(Vector(extra_w, 100))
 
             # Set the grid snapping point and tag for this child node.
             snap_pt = child.get_snap_pt()
@@ -1500,6 +1894,36 @@ class Placer:
             # Abort if nothing to place.
             return
 
+        # Classify each block's functional role (Power/MCU/Communication/
+        # Sensor/Connector/Other) so blocks can be laid out left-to-right
+        # in that order below, instead of only relying on tag-based
+        # attraction (which groups by structural type -- connected-parts
+        # group vs. floating-parts group vs. child sheet -- not function).
+        #
+        # Only attempted when there are actual child-node blocks (real
+        # @subcircuit/Group hierarchy): a flat circuit's incidental
+        # connected-component/floating-part split isn't the "Power sheet
+        # vs. MCU sheet vs. Connector sheet" grouping this is meant to
+        # order, and forcing those into a role-ordered row too has been
+        # observed to produce layouts the router's switchbox assumptions
+        # don't handle for some flat, non-hierarchical circuits.
+        block_roles = {}
+        if children:
+            from skidl.schematics.cluster import classify_block_role
+
+            def _block_parts(blk):
+                src = blk.src
+                if isinstance(src, (list, set, tuple, frozenset)):
+                    return [p for p in src if not is_net_terminal(p)]
+                # A child SchNode: use its own (immediate) parts.
+                return [
+                    p for p in getattr(src, "parts", []) if not is_net_terminal(p)
+                ]
+
+            block_roles = {
+                blk: classify_block_role(_block_parts(blk)) for blk in part_blocks
+            }
+
         # For large block counts, use a simple grid layout instead of
         # O(n²) force-directed placement.
         if len(part_blocks) > node._ROW_PLACE_THRESHOLD:
@@ -1534,6 +1958,15 @@ class Placer:
         # Arrange the part blocks with similarity force-directed placement.
         force_func = functools.partial(total_similarity_force, similarity=blk_attr)
         evolve_placement([], part_blocks, [], force_func, **options)
+
+        # If at least two distinct functional roles were recognized among
+        # the blocks, override the force-directed result with a
+        # deterministic left-to-right role-ordered row (see
+        # layout_blocks_by_role()) -- otherwise same-tag mutual
+        # attraction (e.g. every sibling subcircuit sharing tag=3) tends
+        # to pull same-role and different-role blocks together with no
+        # preference, leaving the role order unreflected in the result.
+        layout_blocks_by_role(part_blocks, block_roles, **options)
 
         if options.get("draw_placement"):
             # Pause to look at placement for debugging purposes.
@@ -1639,20 +2072,45 @@ class Placer:
 
         max_group = options.get("auto_stub_max_group", 20)
 
+        # ANCHOR NETS must never be stubbed here. These are the tight
+        # functional-cluster links -- a crystal to the MCU's XTAL pins, a
+        # decoupling cap to a VDD pin, a reset network to the RESET pin.
+        # Cutting one scatters the satellite far from its anchor pin and
+        # forces a net LABEL where a short local WIRE belongs (the exact
+        # "crystal placed at the top, labeled" defect). Collect them from the
+        # cluster affinity map and exclude them from the split candidates.
+        # (S1/S2 anchor placement -- SCHEMATIC_ENGINE_RULES A1 / B1 / C2.)
+        from skidl.schematics.cluster import compute_net_affinity_weights
+
+        protected = set()
         for group in groups:
+            real = [p for p in group if not is_net_terminal(p)]
+            for net, weight in compute_net_affinity_weights(real).items():
+                if weight > 1.0:
+                    protected.add(id(net))
+
+        for group in groups:
+            # Keep the original split trigger (group size incl. terminals):
+            # the split is what keeps a dense group ROUTABLE. We only change
+            # WHICH nets get cut -- never the anchor nets (below).
             if len(group) <= max_group:
                 continue
 
+            real_parts = [p for p in group if not is_net_terminal(p)]
+
             # Collect low-fanout internal nets in this group (chain links
-            # and small-fanout connections). Prioritize 2-pin nets (chains),
-            # then 3-pin, then 4-pin.
-            group_ids = {id(p) for p in group}
+            # and small-fanout connections), skipping protected anchor nets
+            # so the cuts land on port/breakout nets (PB*/PD* -> header),
+            # not on crystal/reset/decap.
+            group_ids = {id(p) for p in real_parts}
             chain_nets = []
             for net in internal_nets:
                 if getattr(net, "_stub_explicit", False) or getattr(
                     net, "stub", False
                 ):
                     continue
+                if id(net) in protected:
+                    continue  # never cut an anchor net
                 net_parts = {
                     id(p.part) for p in net.pins if id(p.part) in group_ids
                 }
@@ -1668,7 +2126,7 @@ class Placer:
 
             active_logger.info(
                 f"  [auto_stub_large_groups] Group of {len(group)} parts, "
-                f"{len(chain_nets)} chain nets, splitting..."
+                f"{len(chain_nets)} non-anchor chain nets, splitting..."
             )
 
             # Stub evenly-spaced chain nets to split the group into chunks
@@ -1719,6 +2177,27 @@ class Placer:
             for child in node.children.values():
                 child.place(tool=tool, **options)
 
+            # Anchor-centric placement (opt-in via placement_mode="anchor").
+            # A separate module (anchor_place) assigns coordinates from the
+            # SIGNAL graph (power edges excluded). It returns True on success;
+            # ANY failure/False falls through to the legacy placer below, so
+            # this can never regress existing (legacy) builds. See
+            # docs/anchor_placer_design.md.
+            if options.get("placement_mode") == "anchor":
+                try:
+                    from skidl.schematics import anchor_place
+                    if anchor_place.place_node(node, **options):
+                        node.rmv_placement_stuff()
+                        node.calc_bbox()
+                        return
+                except Exception as _anchor_exc:  # never let it break the build
+                    import warnings as _warnings
+                    _warnings.warn(
+                        "anchor_place failed (%r) -- using legacy placer"
+                        % (_anchor_exc,),
+                        RuntimeWarning,
+                    )
+
             # Group parts into those that are connected by explicit nets and
             # those that float freely connected only by stub nets.
             connected_parts, internal_nets, floating_parts = node.group_parts(**options)
@@ -1748,6 +2227,21 @@ class Placer:
             node.place_blocks(
                 connected_parts, floating_parts, node.children.values(), **options
             )
+
+            # Normalise 2-pin passive orientation (rail pin up / ground pin
+            # down) so each part's power symbol lands on the away side and its
+            # arrow exits the circuit -- universal, from connectivity alone.
+            # The anchor placer applies the same pass inside place_node; doing
+            # it here covers the legacy (single-sheet / fallback) path so ALL
+            # circuits get it. Runs before routing (a separate phase), so the
+            # router sees the final pin geometry.
+            try:
+                from skidl.schematics import anchor_place
+                anchor_place._orient_passives_rail_up(
+                    [p for p in node.parts if not is_net_terminal(p)]
+                )
+            except Exception:
+                pass
 
             # Remove any stuff leftover from this place & route run.
             node.rmv_placement_stuff()

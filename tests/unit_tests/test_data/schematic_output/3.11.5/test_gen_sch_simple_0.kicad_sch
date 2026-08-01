@@ -1,0 +1,2060 @@
+(kicad_sch
+  (version 20230409)
+  (generator "skidl")
+  (generator_version "2.2.3")
+  (uuid 218b5f90-a139-55d3-a988-331ecbe7ee0c)
+  (paper "A3")
+  (title_block
+    (title "SKiDL-Generated Schematic")
+    (date "2026-07-20")
+    (company "")
+    (comment 1 "Generated with SKiDL")
+    (comment 2 "")
+    (comment 3 "")
+    (comment 4 ""))
+  (lib_symbols
+    (symbol "Device:Q_PNP_CBE"
+      (pin_numbers
+        (hide no))
+      (pin_names
+        (offset 0.508))
+      (exclude_from_sim no)
+      (in_bom yes)
+      (on_board yes)
+      (property "Reference" "Q"
+        (at 2.032 0 90)
+        (effects
+          (font
+            (size 1.27 1.27))))
+      (property "Value" "Q_PNP_CBE"
+        (at 0 0 90)
+        (effects
+          (font
+            (size 1.27 1.27))))
+      (property "Footprint" ""
+        (at 0 0 0)
+        (effects
+          (font
+            (size 1.27 1.27))
+          (hide yes)))
+      (property "Datasheet" "~"
+        (at 0 0 0)
+        (effects
+          (font
+            (size 1.27 1.27))
+          (hide yes)))
+      (property "Description" "PNP bipolar junction transistor (C-B-E pinout)"
+        (at 0 0 0)
+        (effects
+          (font
+            (size 1.27 1.27))
+          (hide yes)))
+      (symbol "Q_PNP_CBE_0_1"
+        (polyline
+          (pts
+            (xy -2.54 0)
+            (xy 0.635 0))
+          (stroke
+            (width 0)
+            (type default))
+          (fill
+            (type none)))
+        (polyline
+          (pts
+            (xy 0.635 1.905)
+            (xy 0.635 -1.905))
+          (stroke
+            (width 0.508)
+            (type default))
+          (fill
+            (type none)))
+        (polyline
+          (pts
+            (xy 0.635 0.635)
+            (xy 2.54 2.54))
+          (stroke
+            (width 0)
+            (type default))
+          (fill
+            (type none)))
+        (polyline
+          (pts
+            (xy 0.635 -0.635)
+            (xy 2.54 -2.54))
+          (stroke
+            (width 0)
+            (type default))
+          (fill
+            (type none)))
+        (circle
+          (center 1.27 0)
+          (radius 2.8194)
+          (stroke
+            (width 0.254)
+            (type default))
+          (fill
+            (type none)))
+        (polyline
+          (pts
+            (xy 2.286 -1.778)
+            (xy 1.778 -2.286)
+            (xy 1.27 -1.27)
+            (xy 2.286 -1.778))
+          (stroke
+            (width 0)
+            (type default))
+          (fill
+            (type outline))))
+      (symbol "Q_PNP_CBE_1_1"
+        (polyline
+          (pts
+            (xy -2.54 0)
+            (xy 0.635 0))
+          (stroke
+            (width 0)
+            (type default))
+          (fill
+            (type none)))
+        (polyline
+          (pts
+            (xy 0.635 1.905)
+            (xy 0.635 -1.905))
+          (stroke
+            (width 0.508)
+            (type default))
+          (fill
+            (type none)))
+        (polyline
+          (pts
+            (xy 0.635 0.635)
+            (xy 2.54 2.54))
+          (stroke
+            (width 0)
+            (type default))
+          (fill
+            (type none)))
+        (polyline
+          (pts
+            (xy 0.635 -0.635)
+            (xy 2.54 -2.54))
+          (stroke
+            (width 0)
+            (type default))
+          (fill
+            (type none)))
+        (circle
+          (center 1.27 0)
+          (radius 2.8194)
+          (stroke
+            (width 0.254)
+            (type default))
+          (fill
+            (type none)))
+        (polyline
+          (pts
+            (xy 2.286 -1.778)
+            (xy 1.778 -2.286)
+            (xy 1.27 -1.27)
+            (xy 2.286 -1.778))
+          (stroke
+            (width 0)
+            (type default))
+          (fill
+            (type outline)))
+        (pin input line
+          (at -5.08 0 0)
+          (length 2.54)
+          (name "B"
+            (effects
+              (font
+                (size 1.27 1.27))))
+          (number "2"
+            (effects
+              (font
+                (size 1.27 1.27)))))
+        (pin passive line
+          (at 2.54 5.08 270)
+          (length 2.54)
+          (name "C"
+            (effects
+              (font
+                (size 1.27 1.27))))
+          (number "1"
+            (effects
+              (font
+                (size 1.27 1.27)))))
+        (pin passive line
+          (at 2.54 -5.08 90)
+          (length 2.54)
+          (name "E"
+            (effects
+              (font
+                (size 1.27 1.27))))
+          (number "3"
+            (effects
+              (font
+                (size 1.27 1.27))))))
+      (embedded_fonts no)))
+  (symbol
+    (lib_id "Device:Q_PNP_CBE")
+    (at 207.01 78.74 0)
+    (mirror y)
+    (unit 1)
+    (exclude_from_sim no)
+    (in_bom yes)
+    (on_board yes)
+    (dnp no)
+    (fields_autoplaced yes)
+    (uuid 9699dfdd-a6d3-59e3-8793-7f24db869fba)
+    (property "Reference" "Q1"
+      (at 207.01 76.19999999999999 0)
+      (effects
+        (font
+          (size 1.27 1.27))
+        (justify left)))
+    (property "Value" "Q_PNP_CBE"
+      (at 207.01 81.28 0)
+      (effects
+        (font
+          (size 1.27 1.27))
+        (justify left)))
+    (property "Footprint" "Package_TO_SOT_SMD:SOT-223-3_TabPin2"
+      (at 207.01 78.74 0)
+      (effects
+        (font
+          (size 1.27 1.27))
+        (hide yes)))
+    (property "Datasheet" "~"
+      (at 207.01 78.74 0)
+      (effects
+        (font
+          (size 1.27 1.27))
+        (hide yes)))
+    (property "Description" "PNP bipolar junction transistor (C-B-E pinout)"
+      (at 207.01 78.74 0)
+      (effects
+        (font
+          (size 1.27 1.27))
+        (hide yes)))
+    (pin "2"
+      (uuid b5a4fd7a-94e6-53fa-bd15-916fa698801b))
+    (pin "1"
+      (uuid 646d3a9d-9b05-5057-9d6c-6f120cc8ecab))
+    (pin "3"
+      (uuid 73de6b6e-94c3-56ac-b6ac-c2b648626792))
+    (instances
+      (project "SKiDL-Generated"
+        (path "/218b5f90-a139-55d3-a988-331ecbe7ee0c"
+          (reference "Q1")
+          (unit 1)))))
+  (symbol
+    (lib_id "Device:Q_PNP_CBE")
+    (at 207.01 246.38 0)
+    (mirror y)
+    (unit 1)
+    (exclude_from_sim no)
+    (in_bom yes)
+    (on_board yes)
+    (dnp no)
+    (fields_autoplaced yes)
+    (uuid 7852643a-7934-5503-82c8-62f05e9bd38e)
+    (property "Reference" "Q2"
+      (at 207.01 243.84 0)
+      (effects
+        (font
+          (size 1.27 1.27))
+        (justify left)))
+    (property "Value" "Q_PNP_CBE"
+      (at 207.01 248.92 0)
+      (effects
+        (font
+          (size 1.27 1.27))
+        (justify left)))
+    (property "Footprint" "Package_TO_SOT_SMD:SOT-223-3_TabPin2"
+      (at 207.01 246.38 0)
+      (effects
+        (font
+          (size 1.27 1.27))
+        (hide yes)))
+    (property "Datasheet" "~"
+      (at 207.01 246.38 0)
+      (effects
+        (font
+          (size 1.27 1.27))
+        (hide yes)))
+    (property "Description" "PNP bipolar junction transistor (C-B-E pinout)"
+      (at 207.01 246.38 0)
+      (effects
+        (font
+          (size 1.27 1.27))
+        (hide yes)))
+    (pin "2"
+      (uuid 606c5a53-0b2b-5950-9b1d-d40e07441676))
+    (pin "1"
+      (uuid c2a0e8af-ef2a-5367-98a9-a8daa197adef))
+    (pin "3"
+      (uuid 8bb45663-daf3-57e0-b14c-3be9f355f3ad))
+    (instances
+      (project "SKiDL-Generated"
+        (path "/218b5f90-a139-55d3-a988-331ecbe7ee0c"
+          (reference "Q2")
+          (unit 1)))))
+  (symbol
+    (lib_id "Device:Q_PNP_CBE")
+    (at 207.01 161.29 0)
+    (mirror y)
+    (unit 1)
+    (exclude_from_sim no)
+    (in_bom yes)
+    (on_board yes)
+    (dnp no)
+    (fields_autoplaced yes)
+    (uuid fc2a17e0-9b04-5028-8d2e-9de8184e1c9f)
+    (property "Reference" "Q3"
+      (at 207.01 158.75 0)
+      (effects
+        (font
+          (size 1.27 1.27))
+        (justify left)))
+    (property "Value" "Q_PNP_CBE"
+      (at 207.01 163.82999999999998 0)
+      (effects
+        (font
+          (size 1.27 1.27))
+        (justify left)))
+    (property "Footprint" "Package_TO_SOT_SMD:SOT-223-3_TabPin2"
+      (at 207.01 161.29 0)
+      (effects
+        (font
+          (size 1.27 1.27))
+        (hide yes)))
+    (property "Datasheet" "~"
+      (at 207.01 161.29 0)
+      (effects
+        (font
+          (size 1.27 1.27))
+        (hide yes)))
+    (property "Description" "PNP bipolar junction transistor (C-B-E pinout)"
+      (at 207.01 161.29 0)
+      (effects
+        (font
+          (size 1.27 1.27))
+        (hide yes)))
+    (pin "2"
+      (uuid 5d6dc6a9-29f4-5e68-af87-694cefdec0bd))
+    (pin "1"
+      (uuid f61ac06f-5b30-545b-a12b-c544e243d7bc))
+    (pin "3"
+      (uuid d5e7f303-fa17-5a88-92db-71b3f3dc20a4))
+    (instances
+      (project "SKiDL-Generated"
+        (path "/218b5f90-a139-55d3-a988-331ecbe7ee0c"
+          (reference "Q3")
+          (unit 1)))))
+  (symbol
+    (lib_id "Device:Q_PNP_CBE")
+    (at 207.01 175.26 0)
+    (mirror y)
+    (unit 1)
+    (exclude_from_sim no)
+    (in_bom yes)
+    (on_board yes)
+    (dnp no)
+    (fields_autoplaced yes)
+    (uuid cc4e8343-4c03-5917-9689-4aee76b32c2b)
+    (property "Reference" "Q4"
+      (at 207.01 172.72 0)
+      (effects
+        (font
+          (size 1.27 1.27))
+        (justify left)))
+    (property "Value" "Q_PNP_CBE"
+      (at 207.01 177.79999999999998 0)
+      (effects
+        (font
+          (size 1.27 1.27))
+        (justify left)))
+    (property "Footprint" "Package_TO_SOT_SMD:SOT-223-3_TabPin2"
+      (at 207.01 175.26 0)
+      (effects
+        (font
+          (size 1.27 1.27))
+        (hide yes)))
+    (property "Datasheet" "~"
+      (at 207.01 175.26 0)
+      (effects
+        (font
+          (size 1.27 1.27))
+        (hide yes)))
+    (property "Description" "PNP bipolar junction transistor (C-B-E pinout)"
+      (at 207.01 175.26 0)
+      (effects
+        (font
+          (size 1.27 1.27))
+        (hide yes)))
+    (pin "2"
+      (uuid 47247068-d781-51d0-9ae1-449066a46824))
+    (pin "1"
+      (uuid 00c1c35a-69bf-5d8b-bc0e-72c39ed455c5))
+    (pin "3"
+      (uuid 587d8de3-737c-5cd6-be8b-fe1c34bd4c93))
+    (instances
+      (project "SKiDL-Generated"
+        (path "/218b5f90-a139-55d3-a988-331ecbe7ee0c"
+          (reference "Q4")
+          (unit 1)))))
+  (symbol
+    (lib_id "Device:Q_PNP_CBE")
+    (at 207.01 134.62 0)
+    (mirror y)
+    (unit 1)
+    (exclude_from_sim no)
+    (in_bom yes)
+    (on_board yes)
+    (dnp no)
+    (fields_autoplaced yes)
+    (uuid 8b3eeb49-422c-5be2-865d-3dfba2211852)
+    (property "Reference" "Q5"
+      (at 207.01 132.08 0)
+      (effects
+        (font
+          (size 1.27 1.27))
+        (justify left)))
+    (property "Value" "Q_PNP_CBE"
+      (at 207.01 137.16 0)
+      (effects
+        (font
+          (size 1.27 1.27))
+        (justify left)))
+    (property "Footprint" "Package_TO_SOT_SMD:SOT-223-3_TabPin2"
+      (at 207.01 134.62 0)
+      (effects
+        (font
+          (size 1.27 1.27))
+        (hide yes)))
+    (property "Datasheet" "~"
+      (at 207.01 134.62 0)
+      (effects
+        (font
+          (size 1.27 1.27))
+        (hide yes)))
+    (property "Description" "PNP bipolar junction transistor (C-B-E pinout)"
+      (at 207.01 134.62 0)
+      (effects
+        (font
+          (size 1.27 1.27))
+        (hide yes)))
+    (pin "2"
+      (uuid 16de7600-3ffa-5068-b6f6-2c0cff7e409a))
+    (pin "1"
+      (uuid 262a8fc7-832f-5567-bf9a-2b2b048467e3))
+    (pin "3"
+      (uuid d5fdd6af-d5b9-5e22-99de-4731cf76f8fa))
+    (instances
+      (project "SKiDL-Generated"
+        (path "/218b5f90-a139-55d3-a988-331ecbe7ee0c"
+          (reference "Q5")
+          (unit 1)))))
+  (symbol
+    (lib_id "Device:Q_PNP_CBE")
+    (at 207.01 203.2 0)
+    (mirror y)
+    (unit 1)
+    (exclude_from_sim no)
+    (in_bom yes)
+    (on_board yes)
+    (dnp no)
+    (fields_autoplaced yes)
+    (uuid e1b2b674-b3d5-5a98-ba80-08b09ecb1a48)
+    (property "Reference" "Q6"
+      (at 207.01 200.66 0)
+      (effects
+        (font
+          (size 1.27 1.27))
+        (justify left)))
+    (property "Value" "Q_PNP_CBE"
+      (at 207.01 205.73999999999998 0)
+      (effects
+        (font
+          (size 1.27 1.27))
+        (justify left)))
+    (property "Footprint" "Package_TO_SOT_SMD:SOT-223-3_TabPin2"
+      (at 207.01 203.2 0)
+      (effects
+        (font
+          (size 1.27 1.27))
+        (hide yes)))
+    (property "Datasheet" "~"
+      (at 207.01 203.2 0)
+      (effects
+        (font
+          (size 1.27 1.27))
+        (hide yes)))
+    (property "Description" "PNP bipolar junction transistor (C-B-E pinout)"
+      (at 207.01 203.2 0)
+      (effects
+        (font
+          (size 1.27 1.27))
+        (hide yes)))
+    (pin "2"
+      (uuid f792fe0e-3c2d-5852-928d-f77961cafde9))
+    (pin "1"
+      (uuid e8264031-00ae-5273-a75f-7b7bf0dd6f09))
+    (pin "3"
+      (uuid f486b883-f742-565c-9b8e-9010f12b96bf))
+    (instances
+      (project "SKiDL-Generated"
+        (path "/218b5f90-a139-55d3-a988-331ecbe7ee0c"
+          (reference "Q6")
+          (unit 1)))))
+  (symbol
+    (lib_id "Device:Q_PNP_CBE")
+    (at 207.01 189.23 0)
+    (mirror y)
+    (unit 1)
+    (exclude_from_sim no)
+    (in_bom yes)
+    (on_board yes)
+    (dnp no)
+    (fields_autoplaced yes)
+    (uuid adb2fbb9-0c8a-5053-b9af-969360b55a78)
+    (property "Reference" "Q7"
+      (at 207.01 186.69 0)
+      (effects
+        (font
+          (size 1.27 1.27))
+        (justify left)))
+    (property "Value" "Q_PNP_CBE"
+      (at 207.01 191.76999999999998 0)
+      (effects
+        (font
+          (size 1.27 1.27))
+        (justify left)))
+    (property "Footprint" "Package_TO_SOT_SMD:SOT-223-3_TabPin2"
+      (at 207.01 189.23 0)
+      (effects
+        (font
+          (size 1.27 1.27))
+        (hide yes)))
+    (property "Datasheet" "~"
+      (at 207.01 189.23 0)
+      (effects
+        (font
+          (size 1.27 1.27))
+        (hide yes)))
+    (property "Description" "PNP bipolar junction transistor (C-B-E pinout)"
+      (at 207.01 189.23 0)
+      (effects
+        (font
+          (size 1.27 1.27))
+        (hide yes)))
+    (pin "2"
+      (uuid e78fb56a-13ad-5642-b55d-a2a95fe0d731))
+    (pin "1"
+      (uuid f0938fdc-4957-5a19-89b3-6d4e665edab5))
+    (pin "3"
+      (uuid 9199f29c-e939-59de-a2a5-f2c5322ce70d))
+    (instances
+      (project "SKiDL-Generated"
+        (path "/218b5f90-a139-55d3-a988-331ecbe7ee0c"
+          (reference "Q7")
+          (unit 1)))))
+  (symbol
+    (lib_id "Device:Q_PNP_CBE")
+    (at 207.01 92.71 0)
+    (mirror y)
+    (unit 1)
+    (exclude_from_sim no)
+    (in_bom yes)
+    (on_board yes)
+    (dnp no)
+    (fields_autoplaced yes)
+    (uuid bf74539e-eeb9-5cbb-a918-172936a3271b)
+    (property "Reference" "Q8"
+      (at 207.01 90.16999999999999 0)
+      (effects
+        (font
+          (size 1.27 1.27))
+        (justify left)))
+    (property "Value" "Q_PNP_CBE"
+      (at 207.01 95.25 0)
+      (effects
+        (font
+          (size 1.27 1.27))
+        (justify left)))
+    (property "Footprint" "Package_TO_SOT_SMD:SOT-223-3_TabPin2"
+      (at 207.01 92.71 0)
+      (effects
+        (font
+          (size 1.27 1.27))
+        (hide yes)))
+    (property "Datasheet" "~"
+      (at 207.01 92.71 0)
+      (effects
+        (font
+          (size 1.27 1.27))
+        (hide yes)))
+    (property "Description" "PNP bipolar junction transistor (C-B-E pinout)"
+      (at 207.01 92.71 0)
+      (effects
+        (font
+          (size 1.27 1.27))
+        (hide yes)))
+    (pin "2"
+      (uuid 57fb5d36-bca5-5f40-ac32-decb98a0cdc4))
+    (pin "1"
+      (uuid 7de5bf0b-ef7e-540a-a1a2-f9b9a481921c))
+    (pin "3"
+      (uuid 6eb75014-0aa3-5e44-9d1e-aea53d733f5d))
+    (instances
+      (project "SKiDL-Generated"
+        (path "/218b5f90-a139-55d3-a988-331ecbe7ee0c"
+          (reference "Q8")
+          (unit 1)))))
+  (symbol
+    (lib_id "Device:Q_PNP_CBE")
+    (at 207.01 49.53 0)
+    (mirror y)
+    (unit 1)
+    (exclude_from_sim no)
+    (in_bom yes)
+    (on_board yes)
+    (dnp no)
+    (fields_autoplaced yes)
+    (uuid 866a8843-afb3-5e6f-8b8b-3bccff8b2dd7)
+    (property "Reference" "Q9"
+      (at 207.01 46.99 0)
+      (effects
+        (font
+          (size 1.27 1.27))
+        (justify left)))
+    (property "Value" "Q_PNP_CBE"
+      (at 207.01 52.07 0)
+      (effects
+        (font
+          (size 1.27 1.27))
+        (justify left)))
+    (property "Footprint" "Package_TO_SOT_SMD:SOT-223-3_TabPin2"
+      (at 207.01 49.53 0)
+      (effects
+        (font
+          (size 1.27 1.27))
+        (hide yes)))
+    (property "Datasheet" "~"
+      (at 207.01 49.53 0)
+      (effects
+        (font
+          (size 1.27 1.27))
+        (hide yes)))
+    (property "Description" "PNP bipolar junction transistor (C-B-E pinout)"
+      (at 207.01 49.53 0)
+      (effects
+        (font
+          (size 1.27 1.27))
+        (hide yes)))
+    (pin "2"
+      (uuid d5077bbf-647e-5781-a330-13d209edb272))
+    (pin "1"
+      (uuid 8452c0d2-053e-5fc1-9421-7fc2f6a33b8a))
+    (pin "3"
+      (uuid 02a039ae-c545-5a73-9c3a-f9485af4bdba))
+    (instances
+      (project "SKiDL-Generated"
+        (path "/218b5f90-a139-55d3-a988-331ecbe7ee0c"
+          (reference "Q9")
+          (unit 1)))))
+  (symbol
+    (lib_id "Device:Q_PNP_CBE")
+    (at 207.01 232.41 0)
+    (mirror y)
+    (unit 1)
+    (exclude_from_sim no)
+    (in_bom yes)
+    (on_board yes)
+    (dnp no)
+    (fields_autoplaced yes)
+    (uuid be5597de-aaa9-5747-a73a-3f79c9d76c43)
+    (property "Reference" "Q10"
+      (at 207.01 229.87 0)
+      (effects
+        (font
+          (size 1.27 1.27))
+        (justify left)))
+    (property "Value" "Q_PNP_CBE"
+      (at 207.01 234.95 0)
+      (effects
+        (font
+          (size 1.27 1.27))
+        (justify left)))
+    (property "Footprint" "Package_TO_SOT_SMD:SOT-223-3_TabPin2"
+      (at 207.01 232.41 0)
+      (effects
+        (font
+          (size 1.27 1.27))
+        (hide yes)))
+    (property "Datasheet" "~"
+      (at 207.01 232.41 0)
+      (effects
+        (font
+          (size 1.27 1.27))
+        (hide yes)))
+    (property "Description" "PNP bipolar junction transistor (C-B-E pinout)"
+      (at 207.01 232.41 0)
+      (effects
+        (font
+          (size 1.27 1.27))
+        (hide yes)))
+    (pin "2"
+      (uuid ad85b79e-f53a-5488-816e-4b7a25cb0508))
+    (pin "1"
+      (uuid aa10e848-bb5f-5de6-a877-b551cf6a96cd))
+    (pin "3"
+      (uuid f31ca63a-c6a1-5403-b2a7-1f5aff9b982e))
+    (instances
+      (project "SKiDL-Generated"
+        (path "/218b5f90-a139-55d3-a988-331ecbe7ee0c"
+          (reference "Q10")
+          (unit 1)))))
+  (symbol
+    (lib_id "Device:Q_PNP_CBE")
+    (at 207.01 217.17 0)
+    (mirror y)
+    (unit 1)
+    (exclude_from_sim no)
+    (in_bom yes)
+    (on_board yes)
+    (dnp no)
+    (fields_autoplaced yes)
+    (uuid 906b3b64-6dcb-5c1a-a976-91f60ce00653)
+    (property "Reference" "Q11"
+      (at 207.01 214.63 0)
+      (effects
+        (font
+          (size 1.27 1.27))
+        (justify left)))
+    (property "Value" "Q_PNP_CBE"
+      (at 207.01 219.70999999999998 0)
+      (effects
+        (font
+          (size 1.27 1.27))
+        (justify left)))
+    (property "Footprint" "Package_TO_SOT_SMD:SOT-223-3_TabPin2"
+      (at 207.01 217.17 0)
+      (effects
+        (font
+          (size 1.27 1.27))
+        (hide yes)))
+    (property "Datasheet" "~"
+      (at 207.01 217.17 0)
+      (effects
+        (font
+          (size 1.27 1.27))
+        (hide yes)))
+    (property "Description" "PNP bipolar junction transistor (C-B-E pinout)"
+      (at 207.01 217.17 0)
+      (effects
+        (font
+          (size 1.27 1.27))
+        (hide yes)))
+    (pin "2"
+      (uuid 8e28ed69-ea48-5d03-8f16-f1c60ade1b49))
+    (pin "1"
+      (uuid 21ad5dcf-16e0-5c9c-96bd-7a012a14f934))
+    (pin "3"
+      (uuid 4aeaaf34-fe55-5248-bdbe-6f15d3d9017d))
+    (instances
+      (project "SKiDL-Generated"
+        (path "/218b5f90-a139-55d3-a988-331ecbe7ee0c"
+          (reference "Q11")
+          (unit 1)))))
+  (symbol
+    (lib_id "Device:Q_PNP_CBE")
+    (at 207.01 148.59 0)
+    (mirror y)
+    (unit 1)
+    (exclude_from_sim no)
+    (in_bom yes)
+    (on_board yes)
+    (dnp no)
+    (fields_autoplaced yes)
+    (uuid 7148dca1-877f-5f73-bf1b-26933bea5554)
+    (property "Reference" "Q12"
+      (at 207.01 146.05 0)
+      (effects
+        (font
+          (size 1.27 1.27))
+        (justify left)))
+    (property "Value" "Q_PNP_CBE"
+      (at 207.01 151.13 0)
+      (effects
+        (font
+          (size 1.27 1.27))
+        (justify left)))
+    (property "Footprint" "Package_TO_SOT_SMD:SOT-223-3_TabPin2"
+      (at 207.01 148.59 0)
+      (effects
+        (font
+          (size 1.27 1.27))
+        (hide yes)))
+    (property "Datasheet" "~"
+      (at 207.01 148.59 0)
+      (effects
+        (font
+          (size 1.27 1.27))
+        (hide yes)))
+    (property "Description" "PNP bipolar junction transistor (C-B-E pinout)"
+      (at 207.01 148.59 0)
+      (effects
+        (font
+          (size 1.27 1.27))
+        (hide yes)))
+    (pin "2"
+      (uuid 9cddd6e5-850a-5c30-81d1-e397818becec))
+    (pin "1"
+      (uuid c33b92d7-50d2-5db5-82a0-9323c669df7e))
+    (pin "3"
+      (uuid eafeebaa-a7cb-5b09-894f-839e40c32501))
+    (instances
+      (project "SKiDL-Generated"
+        (path "/218b5f90-a139-55d3-a988-331ecbe7ee0c"
+          (reference "Q12")
+          (unit 1)))))
+  (symbol
+    (lib_id "Device:Q_PNP_CBE")
+    (at 207.01 63.5 0)
+    (mirror y)
+    (unit 1)
+    (exclude_from_sim no)
+    (in_bom yes)
+    (on_board yes)
+    (dnp no)
+    (fields_autoplaced yes)
+    (uuid 5a302957-57f4-5cd3-bfab-28ea276bb4bf)
+    (property "Reference" "Q13"
+      (at 207.01 60.96 0)
+      (effects
+        (font
+          (size 1.27 1.27))
+        (justify left)))
+    (property "Value" "Q_PNP_CBE"
+      (at 207.01 66.04 0)
+      (effects
+        (font
+          (size 1.27 1.27))
+        (justify left)))
+    (property "Footprint" "Package_TO_SOT_SMD:SOT-223-3_TabPin2"
+      (at 207.01 63.5 0)
+      (effects
+        (font
+          (size 1.27 1.27))
+        (hide yes)))
+    (property "Datasheet" "~"
+      (at 207.01 63.5 0)
+      (effects
+        (font
+          (size 1.27 1.27))
+        (hide yes)))
+    (property "Description" "PNP bipolar junction transistor (C-B-E pinout)"
+      (at 207.01 63.5 0)
+      (effects
+        (font
+          (size 1.27 1.27))
+        (hide yes)))
+    (pin "2"
+      (uuid 95acca6e-f5c0-5d51-a3fc-172095a2457a))
+    (pin "1"
+      (uuid 7e916e81-013c-52fc-b91c-94d48d0f5d80))
+    (pin "3"
+      (uuid 25494063-cbc7-5e42-830b-81deb311b056))
+    (instances
+      (project "SKiDL-Generated"
+        (path "/218b5f90-a139-55d3-a988-331ecbe7ee0c"
+          (reference "Q13")
+          (unit 1)))))
+  (symbol
+    (lib_id "Device:Q_PNP_CBE")
+    (at 207.01 120.65 0)
+    (mirror y)
+    (unit 1)
+    (exclude_from_sim no)
+    (in_bom yes)
+    (on_board yes)
+    (dnp no)
+    (fields_autoplaced yes)
+    (uuid ec84446a-6783-5feb-8ff3-86fbf471f0e4)
+    (property "Reference" "Q14"
+      (at 207.01 118.11 0)
+      (effects
+        (font
+          (size 1.27 1.27))
+        (justify left)))
+    (property "Value" "Q_PNP_CBE"
+      (at 207.01 123.19000000000001 0)
+      (effects
+        (font
+          (size 1.27 1.27))
+        (justify left)))
+    (property "Footprint" "Package_TO_SOT_SMD:SOT-223-3_TabPin2"
+      (at 207.01 120.65 0)
+      (effects
+        (font
+          (size 1.27 1.27))
+        (hide yes)))
+    (property "Datasheet" "~"
+      (at 207.01 120.65 0)
+      (effects
+        (font
+          (size 1.27 1.27))
+        (hide yes)))
+    (property "Description" "PNP bipolar junction transistor (C-B-E pinout)"
+      (at 207.01 120.65 0)
+      (effects
+        (font
+          (size 1.27 1.27))
+        (hide yes)))
+    (pin "2"
+      (uuid 59a20dcc-f88a-581f-b423-71dd256a1da6))
+    (pin "1"
+      (uuid ccc5e79f-ea4d-5b1a-948a-de614665eb32))
+    (pin "3"
+      (uuid f354e06a-a72d-5093-90ad-5cc56133937b))
+    (instances
+      (project "SKiDL-Generated"
+        (path "/218b5f90-a139-55d3-a988-331ecbe7ee0c"
+          (reference "Q14")
+          (unit 1)))))
+  (symbol
+    (lib_id "Device:Q_PNP_CBE")
+    (at 207.01 106.68 0)
+    (mirror y)
+    (unit 1)
+    (exclude_from_sim no)
+    (in_bom yes)
+    (on_board yes)
+    (dnp no)
+    (fields_autoplaced yes)
+    (uuid 0fd3a058-f328-592c-a0d4-67a4a40b4a38)
+    (property "Reference" "Q15"
+      (at 207.01 104.14 0)
+      (effects
+        (font
+          (size 1.27 1.27))
+        (justify left)))
+    (property "Value" "Q_PNP_CBE"
+      (at 207.01 109.22000000000001 0)
+      (effects
+        (font
+          (size 1.27 1.27))
+        (justify left)))
+    (property "Footprint" "Package_TO_SOT_SMD:SOT-223-3_TabPin2"
+      (at 207.01 106.68 0)
+      (effects
+        (font
+          (size 1.27 1.27))
+        (hide yes)))
+    (property "Datasheet" "~"
+      (at 207.01 106.68 0)
+      (effects
+        (font
+          (size 1.27 1.27))
+        (hide yes)))
+    (property "Description" "PNP bipolar junction transistor (C-B-E pinout)"
+      (at 207.01 106.68 0)
+      (effects
+        (font
+          (size 1.27 1.27))
+        (hide yes)))
+    (pin "2"
+      (uuid 98900409-b6fc-5d64-a3c0-2fd154beb1bf))
+    (pin "1"
+      (uuid a44a8967-b422-53b3-ab28-e1c9c393ce7f))
+    (pin "3"
+      (uuid 9389519a-e4b5-5b1b-880b-3c1e234056b2))
+    (instances
+      (project "SKiDL-Generated"
+        (path "/218b5f90-a139-55d3-a988-331ecbe7ee0c"
+          (reference "Q15")
+          (unit 1)))))
+  (wire
+    (pts
+      (xy 199.39 85.09)
+      (xy 209.55 85.09))
+    (stroke
+      (width 0)
+      (type default))
+    (uuid 9d2b9da3-5f95-5204-95b3-cef55f0828d5))
+  (wire
+    (pts
+      (xy 199.39 209.55)
+      (xy 209.55 209.55))
+    (stroke
+      (width 0)
+      (type default))
+    (uuid 8365bcfb-d828-5855-96cb-911f1c52e86c))
+  (wire
+    (pts
+      (xy 199.39 54.61)
+      (xy 209.55 54.61))
+    (stroke
+      (width 0)
+      (type default))
+    (uuid 8da21a65-c044-5aa7-8dbd-59e21f14dbfb))
+  (wire
+    (pts
+      (xy 199.39 127.0)
+      (xy 209.55 127.0))
+    (stroke
+      (width 0)
+      (type default))
+    (uuid 2fcadb49-9e0d-55fe-bab3-1fcc3930d5c9))
+  (wire
+    (pts
+      (xy 199.39 181.61)
+      (xy 209.55 181.61))
+    (stroke
+      (width 0)
+      (type default))
+    (uuid 3dbc1ac8-0177-52d0-aba0-1036591389bd))
+  (wire
+    (pts
+      (xy 199.39 223.52)
+      (xy 209.55 223.52))
+    (stroke
+      (width 0)
+      (type default))
+    (uuid 53e8ccbe-58e1-5c68-9c35-b392567ae515))
+  (wire
+    (pts
+      (xy 199.39 99.06)
+      (xy 209.55 99.06))
+    (stroke
+      (width 0)
+      (type default))
+    (uuid 117d4d3f-734e-5131-ab4f-bff959b29668))
+  (wire
+    (pts
+      (xy 199.39 140.97)
+      (xy 209.55 140.97))
+    (stroke
+      (width 0)
+      (type default))
+    (uuid 8d0619e1-1b46-5d4b-a086-44dcb3837fcc))
+  (wire
+    (pts
+      (xy 199.39 195.58)
+      (xy 209.55 195.58))
+    (stroke
+      (width 0)
+      (type default))
+    (uuid 06358b94-88f1-5ee6-8c43-83182417f696))
+  (wire
+    (pts
+      (xy 199.39 238.76)
+      (xy 209.55 238.76))
+    (stroke
+      (width 0)
+      (type default))
+    (uuid 901322e6-5215-5184-b853-0aab5890ea7c))
+  (wire
+    (pts
+      (xy 199.39 113.03)
+      (xy 209.55 113.03))
+    (stroke
+      (width 0)
+      (type default))
+    (uuid f6164e1a-c6d4-58c7-a58e-dc25f057471d))
+  (wire
+    (pts
+      (xy 199.39 153.67)
+      (xy 209.55 153.67))
+    (stroke
+      (width 0)
+      (type default))
+    (uuid c503b2f4-0e12-5553-9a44-15ae7805a02c))
+  (wire
+    (pts
+      (xy 199.39 167.64)
+      (xy 209.55 167.64))
+    (stroke
+      (width 0)
+      (type default))
+    (uuid c2483de9-ac1d-5857-9391-b07755b897e8))
+  (wire
+    (pts
+      (xy 199.39 69.85)
+      (xy 209.55 69.85))
+    (stroke
+      (width 0)
+      (type default))
+    (uuid ca7d6103-f752-513c-b903-ab676849bdfa))
+  (wire
+    (pts
+      (xy 199.39 251.46)
+      (xy 209.55 251.46))
+    (stroke
+      (width 0)
+      (type default))
+    (uuid f1cdd17e-1d40-5c26-94fa-dc4e7b631820))
+  (wire
+    (pts
+      (xy 209.55 238.76)
+      (xy 209.55 237.49))
+    (stroke
+      (width 0)
+      (type default))
+    (uuid 57edf7e9-5596-54b9-bbd2-ca323c1e20b6))
+  (wire
+    (pts
+      (xy 209.55 223.52)
+      (xy 209.55 222.25))
+    (stroke
+      (width 0)
+      (type default))
+    (uuid 8972ed5e-9cf9-5109-8950-9a01337a5e4e))
+  (wire
+    (pts
+      (xy 209.55 209.55)
+      (xy 209.55 208.28))
+    (stroke
+      (width 0)
+      (type default))
+    (uuid 4d321d3e-ea95-5a14-b80b-aa84de5c811d))
+  (wire
+    (pts
+      (xy 209.55 195.58)
+      (xy 209.55 194.31))
+    (stroke
+      (width 0)
+      (type default))
+    (uuid 589ba51e-43af-56e9-972b-50608c3b7a3e))
+  (wire
+    (pts
+      (xy 209.55 181.61)
+      (xy 209.55 180.34))
+    (stroke
+      (width 0)
+      (type default))
+    (uuid 0333fcaf-9652-5a6c-8a13-0759bb1b4ab2))
+  (wire
+    (pts
+      (xy 209.55 167.64)
+      (xy 209.55 166.37))
+    (stroke
+      (width 0)
+      (type default))
+    (uuid 880204b7-9161-5a98-b531-a0707c128857))
+  (wire
+    (pts
+      (xy 209.55 140.97)
+      (xy 209.55 139.7))
+    (stroke
+      (width 0)
+      (type default))
+    (uuid b43bd021-5d09-58f3-bd1b-99b353bde414))
+  (wire
+    (pts
+      (xy 209.55 127.0)
+      (xy 209.55 125.73))
+    (stroke
+      (width 0)
+      (type default))
+    (uuid 3711e7c6-654a-5b63-b0b9-e1ae8d1b0f83))
+  (wire
+    (pts
+      (xy 209.55 113.03)
+      (xy 209.55 111.76))
+    (stroke
+      (width 0)
+      (type default))
+    (uuid 4b35fb40-758d-5a7d-bfc1-a8f78bcc2e30))
+  (wire
+    (pts
+      (xy 209.55 99.06)
+      (xy 209.55 97.79))
+    (stroke
+      (width 0)
+      (type default))
+    (uuid 0904a167-3950-5248-bbb0-0f1c1b06e190))
+  (wire
+    (pts
+      (xy 209.55 85.09)
+      (xy 209.55 83.82))
+    (stroke
+      (width 0)
+      (type default))
+    (uuid 014b724e-a745-5eba-a249-ae593534c692))
+  (wire
+    (pts
+      (xy 209.55 69.85)
+      (xy 209.55 68.58))
+    (stroke
+      (width 0)
+      (type default))
+    (uuid 9433248d-b442-57e5-bf5d-f824efeeb9a9))
+  (wire
+    (pts
+      (xy 199.39 251.46)
+      (xy 199.39 238.76))
+    (stroke
+      (width 0)
+      (type default))
+    (uuid a3ac5e82-8f96-514d-9c8d-7388b57449ef))
+  (wire
+    (pts
+      (xy 199.39 238.76)
+      (xy 199.39 223.52))
+    (stroke
+      (width 0)
+      (type default))
+    (uuid 57e7f273-8a18-577a-811c-21e3aaba47fa))
+  (wire
+    (pts
+      (xy 199.39 223.52)
+      (xy 199.39 209.55))
+    (stroke
+      (width 0)
+      (type default))
+    (uuid aede280c-0f4e-5f90-b7a2-ea3b1964a1ad))
+  (wire
+    (pts
+      (xy 199.39 209.55)
+      (xy 199.39 195.58))
+    (stroke
+      (width 0)
+      (type default))
+    (uuid 498795e0-7a8d-52db-9171-575248313517))
+  (wire
+    (pts
+      (xy 199.39 195.58)
+      (xy 199.39 181.61))
+    (stroke
+      (width 0)
+      (type default))
+    (uuid 73d0dd42-5e30-5db9-a2a3-4dfc9951bab8))
+  (wire
+    (pts
+      (xy 199.39 181.61)
+      (xy 199.39 167.64))
+    (stroke
+      (width 0)
+      (type default))
+    (uuid dbd8ca40-cdd8-514a-ac9d-d644ed984eb8))
+  (wire
+    (pts
+      (xy 199.39 167.64)
+      (xy 199.39 153.67))
+    (stroke
+      (width 0)
+      (type default))
+    (uuid eeb58f97-68a0-5018-a194-657eae3cebb8))
+  (wire
+    (pts
+      (xy 199.39 153.67)
+      (xy 199.39 140.97))
+    (stroke
+      (width 0)
+      (type default))
+    (uuid b8d5009c-c5e4-5ccb-823c-042db34890d6))
+  (wire
+    (pts
+      (xy 199.39 140.97)
+      (xy 199.39 127.0))
+    (stroke
+      (width 0)
+      (type default))
+    (uuid 6c4d751f-1039-5750-91ef-58914fb39b4f))
+  (wire
+    (pts
+      (xy 199.39 127.0)
+      (xy 199.39 113.03))
+    (stroke
+      (width 0)
+      (type default))
+    (uuid c08e4393-85c2-58ba-83b7-8a7acd10a1ca))
+  (wire
+    (pts
+      (xy 199.39 113.03)
+      (xy 199.39 99.06))
+    (stroke
+      (width 0)
+      (type default))
+    (uuid 976eaf0a-9999-591e-9a16-43fd2c6893d7))
+  (wire
+    (pts
+      (xy 199.39 99.06)
+      (xy 199.39 85.09))
+    (stroke
+      (width 0)
+      (type default))
+    (uuid 6db59ad9-e360-5940-a18d-5c97aa083f25))
+  (wire
+    (pts
+      (xy 199.39 85.09)
+      (xy 199.39 69.85))
+    (stroke
+      (width 0)
+      (type default))
+    (uuid 564d05b1-30fe-5ee1-8667-f597bc0b7ace))
+  (wire
+    (pts
+      (xy 199.39 69.85)
+      (xy 199.39 54.61))
+    (stroke
+      (width 0)
+      (type default))
+    (uuid f2758429-018b-55de-91fa-cb6c2bd16695))
+  (wire
+    (pts
+      (xy 200.66 134.62)
+      (xy 201.93 134.62))
+    (stroke
+      (width 0)
+      (type default))
+    (uuid b419f041-877e-5093-bee8-db654709c1e4))
+  (wire
+    (pts
+      (xy 200.66 120.65)
+      (xy 201.93 120.65))
+    (stroke
+      (width 0)
+      (type default))
+    (uuid 558c04f8-834f-513f-86f6-2cbc10bc6515))
+  (wire
+    (pts
+      (xy 200.66 148.59)
+      (xy 201.93 148.59))
+    (stroke
+      (width 0)
+      (type default))
+    (uuid db541cd4-7cfd-5f74-b5c7-170cf6ef4c9f))
+  (wire
+    (pts
+      (xy 200.66 217.17)
+      (xy 201.93 217.17))
+    (stroke
+      (width 0)
+      (type default))
+    (uuid f2b1b170-d50c-53c6-a90f-9852f17f3b34))
+  (wire
+    (pts
+      (xy 200.66 161.29)
+      (xy 201.93 161.29))
+    (stroke
+      (width 0)
+      (type default))
+    (uuid b23b52c8-1ac4-5e71-be0e-06f924ac1747))
+  (wire
+    (pts
+      (xy 200.66 203.2)
+      (xy 201.93 203.2))
+    (stroke
+      (width 0)
+      (type default))
+    (uuid fd1401b6-3125-5b57-87df-4da2561b8522))
+  (wire
+    (pts
+      (xy 200.66 63.5)
+      (xy 201.93 63.5))
+    (stroke
+      (width 0)
+      (type default))
+    (uuid 012af050-3dd6-5e24-82d3-73f9c0e5d692))
+  (wire
+    (pts
+      (xy 200.66 106.68)
+      (xy 201.93 106.68))
+    (stroke
+      (width 0)
+      (type default))
+    (uuid 14707807-181b-5a3d-8388-2f9e8db715a9))
+  (wire
+    (pts
+      (xy 200.66 232.41)
+      (xy 201.93 232.41))
+    (stroke
+      (width 0)
+      (type default))
+    (uuid ddc6c963-a6c4-5737-b230-5cf4ac4158b4))
+  (wire
+    (pts
+      (xy 200.66 78.74)
+      (xy 201.93 78.74))
+    (stroke
+      (width 0)
+      (type default))
+    (uuid 469d3088-3f85-542d-892c-96f74ffb7c26))
+  (wire
+    (pts
+      (xy 200.66 49.53)
+      (xy 201.93 49.53))
+    (stroke
+      (width 0)
+      (type default))
+    (uuid c27a4e8e-88a8-5c1b-812b-b1365c18a7ee))
+  (wire
+    (pts
+      (xy 200.66 175.26)
+      (xy 201.93 175.26))
+    (stroke
+      (width 0)
+      (type default))
+    (uuid 469083eb-44bf-5c26-813a-1e3e7b39d5b9))
+  (wire
+    (pts
+      (xy 200.66 189.23)
+      (xy 201.93 189.23))
+    (stroke
+      (width 0)
+      (type default))
+    (uuid 19b25746-6e77-59be-a92e-c9a18739c1e2))
+  (wire
+    (pts
+      (xy 200.66 92.71)
+      (xy 201.93 92.71))
+    (stroke
+      (width 0)
+      (type default))
+    (uuid 1502d906-397d-56c7-bc73-dbf20d6031e4))
+  (wire
+    (pts
+      (xy 200.66 246.38)
+      (xy 201.93 246.38))
+    (stroke
+      (width 0)
+      (type default))
+    (uuid 913615d2-c4e1-57d7-b652-3a73437cd43a))
+  (wire
+    (pts
+      (xy 200.66 246.38)
+      (xy 200.66 232.41))
+    (stroke
+      (width 0)
+      (type default))
+    (uuid 8c3a6b1c-8300-55dc-a43e-6f242d936b46))
+  (wire
+    (pts
+      (xy 200.66 232.41)
+      (xy 200.66 217.17))
+    (stroke
+      (width 0)
+      (type default))
+    (uuid cb05d948-5bd3-58a4-8371-88ab78ec19aa))
+  (wire
+    (pts
+      (xy 200.66 217.17)
+      (xy 200.66 203.2))
+    (stroke
+      (width 0)
+      (type default))
+    (uuid 4896d3b5-368f-5d82-8872-695f9e1e9f47))
+  (wire
+    (pts
+      (xy 200.66 203.2)
+      (xy 200.66 189.23))
+    (stroke
+      (width 0)
+      (type default))
+    (uuid 292cc5da-bb3b-5bba-a5e9-61004b7a4d71))
+  (wire
+    (pts
+      (xy 200.66 189.23)
+      (xy 200.66 175.26))
+    (stroke
+      (width 0)
+      (type default))
+    (uuid 14887860-e0bc-5861-a61f-7e5a108934c3))
+  (wire
+    (pts
+      (xy 200.66 175.26)
+      (xy 200.66 161.29))
+    (stroke
+      (width 0)
+      (type default))
+    (uuid 55338435-eb1c-5f36-9cf0-a5bb8131fec3))
+  (wire
+    (pts
+      (xy 200.66 161.29)
+      (xy 200.66 148.59))
+    (stroke
+      (width 0)
+      (type default))
+    (uuid d19dfcbb-c463-5e4d-af97-893b5c31ebea))
+  (wire
+    (pts
+      (xy 200.66 148.59)
+      (xy 200.66 134.62))
+    (stroke
+      (width 0)
+      (type default))
+    (uuid 746f2fa3-65de-5dd9-97c1-dc8bf453d6de))
+  (wire
+    (pts
+      (xy 200.66 134.62)
+      (xy 200.66 120.65))
+    (stroke
+      (width 0)
+      (type default))
+    (uuid f0ebeade-faf5-5852-8e9b-8045ce56bdd0))
+  (wire
+    (pts
+      (xy 200.66 120.65)
+      (xy 200.66 106.68))
+    (stroke
+      (width 0)
+      (type default))
+    (uuid d9620100-137d-5d46-964b-d0015cf554ea))
+  (wire
+    (pts
+      (xy 200.66 106.68)
+      (xy 200.66 92.71))
+    (stroke
+      (width 0)
+      (type default))
+    (uuid 0bf79094-821e-5e6c-a528-81d3e0e5daff))
+  (wire
+    (pts
+      (xy 200.66 92.71)
+      (xy 200.66 78.74))
+    (stroke
+      (width 0)
+      (type default))
+    (uuid 8671f661-3c32-582c-a355-b10c8b883048))
+  (wire
+    (pts
+      (xy 200.66 78.74)
+      (xy 200.66 63.5))
+    (stroke
+      (width 0)
+      (type default))
+    (uuid f7f5b9af-f62e-56de-bbd9-d976c7e0393e))
+  (wire
+    (pts
+      (xy 200.66 63.5)
+      (xy 200.66 49.53))
+    (stroke
+      (width 0)
+      (type default))
+    (uuid d4104d1d-1b9a-5bd4-ac53-dee993db089b))
+  (wire
+    (pts
+      (xy 209.55 142.24)
+      (xy 219.71 142.24))
+    (stroke
+      (width 0)
+      (type default))
+    (uuid 5dfd4521-2abe-50b0-98e1-f4d1678eb898))
+  (wire
+    (pts
+      (xy 209.55 226.06)
+      (xy 219.71 226.06))
+    (stroke
+      (width 0)
+      (type default))
+    (uuid fc436d5e-3a04-5bb6-9b20-c7d48e3e0712))
+  (wire
+    (pts
+      (xy 209.55 128.27)
+      (xy 219.71 128.27))
+    (stroke
+      (width 0)
+      (type default))
+    (uuid 61f714b9-c616-5fd8-864b-727a3ddf5329))
+  (wire
+    (pts
+      (xy 209.55 57.15)
+      (xy 219.71 57.15))
+    (stroke
+      (width 0)
+      (type default))
+    (uuid 745538d0-4297-537a-a1f3-bd67e61067e4))
+  (wire
+    (pts
+      (xy 209.55 44.45)
+      (xy 219.71 44.45))
+    (stroke
+      (width 0)
+      (type default))
+    (uuid d6f4c0a5-f48c-5f57-b1c6-99f2fb1c918c))
+  (wire
+    (pts
+      (xy 209.55 101.6)
+      (xy 219.71 101.6))
+    (stroke
+      (width 0)
+      (type default))
+    (uuid 13c2053a-f1fa-52c0-b612-5414a18e3b39))
+  (wire
+    (pts
+      (xy 209.55 210.82)
+      (xy 219.71 210.82))
+    (stroke
+      (width 0)
+      (type default))
+    (uuid ba66acf2-e984-5719-b4b5-731972294ebf))
+  (wire
+    (pts
+      (xy 209.55 72.39)
+      (xy 219.71 72.39))
+    (stroke
+      (width 0)
+      (type default))
+    (uuid c9ec67eb-f1d0-5d62-abcb-587ba383bcf1))
+  (wire
+    (pts
+      (xy 209.55 182.88)
+      (xy 219.71 182.88))
+    (stroke
+      (width 0)
+      (type default))
+    (uuid 0003092c-d3e5-59b9-972c-4c5f26d825fa))
+  (wire
+    (pts
+      (xy 209.55 114.3)
+      (xy 219.71 114.3))
+    (stroke
+      (width 0)
+      (type default))
+    (uuid f8413b0f-aa44-5344-b434-6ce924477e32))
+  (wire
+    (pts
+      (xy 209.55 241.3)
+      (xy 219.71 241.3))
+    (stroke
+      (width 0)
+      (type default))
+    (uuid d590fe90-dfe0-5ad7-b0a7-35d10a256bd6))
+  (wire
+    (pts
+      (xy 209.55 168.91)
+      (xy 219.71 168.91))
+    (stroke
+      (width 0)
+      (type default))
+    (uuid 263d9a4e-06f4-5824-b68b-4f0eb7da3b79))
+  (wire
+    (pts
+      (xy 209.55 86.36)
+      (xy 219.71 86.36))
+    (stroke
+      (width 0)
+      (type default))
+    (uuid 9b1cd427-9451-5ca0-be6a-1166871ffd46))
+  (wire
+    (pts
+      (xy 209.55 196.85)
+      (xy 219.71 196.85))
+    (stroke
+      (width 0)
+      (type default))
+    (uuid 32d85b5c-8000-5650-8e1f-025dc88bf458))
+  (wire
+    (pts
+      (xy 209.55 154.94)
+      (xy 219.71 154.94))
+    (stroke
+      (width 0)
+      (type default))
+    (uuid 7e7f4755-e99e-5a2e-b080-958543f0dc70))
+  (wire
+    (pts
+      (xy 219.71 241.3)
+      (xy 219.71 226.06))
+    (stroke
+      (width 0)
+      (type default))
+    (uuid 3070eceb-a6c5-583d-8a2c-728ebb05e950))
+  (wire
+    (pts
+      (xy 219.71 226.06)
+      (xy 219.71 210.82))
+    (stroke
+      (width 0)
+      (type default))
+    (uuid 148496a6-6119-5cd4-a60d-1b6ed4194c14))
+  (wire
+    (pts
+      (xy 219.71 210.82)
+      (xy 219.71 196.85))
+    (stroke
+      (width 0)
+      (type default))
+    (uuid d0209300-ff0c-50bd-88ae-30b27f655f6b))
+  (wire
+    (pts
+      (xy 219.71 196.85)
+      (xy 219.71 182.88))
+    (stroke
+      (width 0)
+      (type default))
+    (uuid 508883b1-6947-5a70-9ac8-c4563696f515))
+  (wire
+    (pts
+      (xy 219.71 182.88)
+      (xy 219.71 168.91))
+    (stroke
+      (width 0)
+      (type default))
+    (uuid 885869bb-4055-5174-90e7-caa9af4626d0))
+  (wire
+    (pts
+      (xy 219.71 168.91)
+      (xy 219.71 154.94))
+    (stroke
+      (width 0)
+      (type default))
+    (uuid da339990-8512-5a85-8b52-bb7e34a775e8))
+  (wire
+    (pts
+      (xy 219.71 154.94)
+      (xy 219.71 142.24))
+    (stroke
+      (width 0)
+      (type default))
+    (uuid 0bb469be-e157-579e-83b6-ba8c25cc2a35))
+  (wire
+    (pts
+      (xy 219.71 142.24)
+      (xy 219.71 128.27))
+    (stroke
+      (width 0)
+      (type default))
+    (uuid e33a74ca-3ae0-58df-8b15-1645dde521bb))
+  (wire
+    (pts
+      (xy 219.71 128.27)
+      (xy 219.71 114.3))
+    (stroke
+      (width 0)
+      (type default))
+    (uuid e0082096-0dd8-58c0-9f1f-9325f906f96a))
+  (wire
+    (pts
+      (xy 219.71 114.3)
+      (xy 219.71 101.6))
+    (stroke
+      (width 0)
+      (type default))
+    (uuid 9ec932c4-c54d-50b9-b1d6-4e849b291f56))
+  (wire
+    (pts
+      (xy 219.71 101.6)
+      (xy 219.71 86.36))
+    (stroke
+      (width 0)
+      (type default))
+    (uuid 5d5ef4a0-3f85-5a4e-b765-d4232ee4209d))
+  (wire
+    (pts
+      (xy 219.71 86.36)
+      (xy 219.71 72.39))
+    (stroke
+      (width 0)
+      (type default))
+    (uuid 09248f16-9509-5840-9e87-00cfc3caaa49))
+  (wire
+    (pts
+      (xy 219.71 72.39)
+      (xy 219.71 57.15))
+    (stroke
+      (width 0)
+      (type default))
+    (uuid 4c3c9180-231f-502c-bcc1-bfb5d8bd28fb))
+  (wire
+    (pts
+      (xy 219.71 57.15)
+      (xy 219.71 44.45))
+    (stroke
+      (width 0)
+      (type default))
+    (uuid 18d4f424-c595-5eae-bda7-97cf24c59452))
+  (wire
+    (pts
+      (xy 209.55 227.33)
+      (xy 209.55 226.06))
+    (stroke
+      (width 0)
+      (type default))
+    (uuid 21d4cb2a-865e-5e14-8bb3-ed2813a0ad12))
+  (wire
+    (pts
+      (xy 209.55 212.09)
+      (xy 209.55 210.82))
+    (stroke
+      (width 0)
+      (type default))
+    (uuid fefa1fc8-b35a-586f-97c2-69787b8892ec))
+  (wire
+    (pts
+      (xy 209.55 198.12)
+      (xy 209.55 196.85))
+    (stroke
+      (width 0)
+      (type default))
+    (uuid 587ea32c-a33f-5b40-8c16-9e3f3d146612))
+  (wire
+    (pts
+      (xy 209.55 184.15)
+      (xy 209.55 182.88))
+    (stroke
+      (width 0)
+      (type default))
+    (uuid 307f8a9b-ae3c-5baa-83c6-5bbb038aad25))
+  (wire
+    (pts
+      (xy 209.55 170.18)
+      (xy 209.55 168.91))
+    (stroke
+      (width 0)
+      (type default))
+    (uuid a6b39425-2b49-5097-927c-ad45d7129230))
+  (wire
+    (pts
+      (xy 209.55 156.21)
+      (xy 209.55 154.94))
+    (stroke
+      (width 0)
+      (type default))
+    (uuid b4f744b3-ef7f-5b76-be2e-b5f220b7e9a8))
+  (wire
+    (pts
+      (xy 209.55 143.51)
+      (xy 209.55 142.24))
+    (stroke
+      (width 0)
+      (type default))
+    (uuid bd2266d2-8628-5ff7-9c43-591e9c942fe3))
+  (wire
+    (pts
+      (xy 209.55 129.54)
+      (xy 209.55 128.27))
+    (stroke
+      (width 0)
+      (type default))
+    (uuid 99a6ef8f-dbd9-554d-bf6e-e12b3f2e559b))
+  (wire
+    (pts
+      (xy 209.55 115.57)
+      (xy 209.55 114.3))
+    (stroke
+      (width 0)
+      (type default))
+    (uuid 52dfea8f-6784-52a6-893f-6287d5e93ddb))
+  (wire
+    (pts
+      (xy 209.55 87.63)
+      (xy 209.55 86.36))
+    (stroke
+      (width 0)
+      (type default))
+    (uuid d48b98c8-5ca8-5a1d-9b9c-9627553d9dc2))
+  (wire
+    (pts
+      (xy 209.55 73.66)
+      (xy 209.55 72.39))
+    (stroke
+      (width 0)
+      (type default))
+    (uuid 91d71453-f098-5577-9417-0c90ba0cdb70))
+  (wire
+    (pts
+      (xy 209.55 58.42)
+      (xy 209.55 57.15))
+    (stroke
+      (width 0)
+      (type default))
+    (uuid 31fb846d-7614-52df-8ddc-eced065fc719))
+  (junction
+    (at 199.39 85.09)
+    (diameter 0)
+    (color 0 0 0 0)
+    (uuid 6cfef6ef-c7e4-5c24-bd3b-1aed721b126b))
+  (junction
+    (at 199.39 209.55)
+    (diameter 0)
+    (color 0 0 0 0)
+    (uuid acb0c5d9-10c7-5fdb-b782-9ba87f390e45))
+  (junction
+    (at 199.39 127.0)
+    (diameter 0)
+    (color 0 0 0 0)
+    (uuid fe69da31-1997-53c4-b55b-9da5abe14ff2))
+  (junction
+    (at 199.39 181.61)
+    (diameter 0)
+    (color 0 0 0 0)
+    (uuid 990f4114-091c-5d16-acda-bd8737bb7cd5))
+  (junction
+    (at 199.39 223.52)
+    (diameter 0)
+    (color 0 0 0 0)
+    (uuid 0b7b99ae-9089-57b4-ae70-61a0fed06734))
+  (junction
+    (at 199.39 99.06)
+    (diameter 0)
+    (color 0 0 0 0)
+    (uuid 0826b50d-3059-5954-af90-6274541ddd02))
+  (junction
+    (at 199.39 140.97)
+    (diameter 0)
+    (color 0 0 0 0)
+    (uuid 0e7fe7da-a1b0-5964-b6bb-6a606151072b))
+  (junction
+    (at 199.39 195.58)
+    (diameter 0)
+    (color 0 0 0 0)
+    (uuid d0e16482-df39-5657-a4cc-5581250ea5f9))
+  (junction
+    (at 199.39 238.76)
+    (diameter 0)
+    (color 0 0 0 0)
+    (uuid f5492203-fdc2-58f6-b85c-53972a744f0f))
+  (junction
+    (at 199.39 113.03)
+    (diameter 0)
+    (color 0 0 0 0)
+    (uuid a51291a6-7eaa-50b5-bc9a-1dadbbfdcced))
+  (junction
+    (at 199.39 153.67)
+    (diameter 0)
+    (color 0 0 0 0)
+    (uuid bbd429bc-daab-5da4-96de-b7004b7a9394))
+  (junction
+    (at 199.39 167.64)
+    (diameter 0)
+    (color 0 0 0 0)
+    (uuid 980043c1-9b39-5814-9777-0ffbe0dfe285))
+  (junction
+    (at 199.39 69.85)
+    (diameter 0)
+    (color 0 0 0 0)
+    (uuid e55983da-5d67-587c-977e-1d17b736ca2f))
+  (junction
+    (at 200.66 134.62)
+    (diameter 0)
+    (color 0 0 0 0)
+    (uuid 4ec8acd1-5270-5c9e-bed8-d3022046f8af))
+  (junction
+    (at 200.66 120.65)
+    (diameter 0)
+    (color 0 0 0 0)
+    (uuid ddee1a10-de2e-5453-a239-4179bcb76eab))
+  (junction
+    (at 200.66 148.59)
+    (diameter 0)
+    (color 0 0 0 0)
+    (uuid 399f271c-38ba-5930-bc22-012bef94d703))
+  (junction
+    (at 200.66 217.17)
+    (diameter 0)
+    (color 0 0 0 0)
+    (uuid 2bec4c7e-8316-5488-a06f-f464277b90e9))
+  (junction
+    (at 200.66 161.29)
+    (diameter 0)
+    (color 0 0 0 0)
+    (uuid 3bc6ce7c-a73e-5822-a8e6-6c7cdd8e048b))
+  (junction
+    (at 200.66 203.2)
+    (diameter 0)
+    (color 0 0 0 0)
+    (uuid 79669737-22da-5423-a79e-f8ac7f9c68c0))
+  (junction
+    (at 200.66 63.5)
+    (diameter 0)
+    (color 0 0 0 0)
+    (uuid bb5eb5fb-88dc-5438-bbf9-a2511b7bb267))
+  (junction
+    (at 200.66 106.68)
+    (diameter 0)
+    (color 0 0 0 0)
+    (uuid c79bfe10-093c-57ca-835c-f2b58e65dde2))
+  (junction
+    (at 200.66 232.41)
+    (diameter 0)
+    (color 0 0 0 0)
+    (uuid 822bfe84-d11d-590e-a713-a442968db76a))
+  (junction
+    (at 200.66 78.74)
+    (diameter 0)
+    (color 0 0 0 0)
+    (uuid 76c6efd2-fbb8-5a53-8c3a-06278f231f40))
+  (junction
+    (at 200.66 175.26)
+    (diameter 0)
+    (color 0 0 0 0)
+    (uuid eafb8419-cdfe-528d-b8a4-12d101273681))
+  (junction
+    (at 200.66 189.23)
+    (diameter 0)
+    (color 0 0 0 0)
+    (uuid 7eed234b-3a8c-5231-a77a-6a5328a9ad6a))
+  (junction
+    (at 200.66 92.71)
+    (diameter 0)
+    (color 0 0 0 0)
+    (uuid 3f1fbf75-c0c5-56f0-8397-e3a4b1a888ca))
+  (junction
+    (at 219.71 142.24)
+    (diameter 0)
+    (color 0 0 0 0)
+    (uuid a6e6ad01-4d33-558a-a3a9-c6e517687d12))
+  (junction
+    (at 219.71 226.06)
+    (diameter 0)
+    (color 0 0 0 0)
+    (uuid da0c04a2-57f3-52fa-a60f-383de296b66b))
+  (junction
+    (at 219.71 128.27)
+    (diameter 0)
+    (color 0 0 0 0)
+    (uuid eeee39a0-ff4f-54da-b6fb-b3faf578a989))
+  (junction
+    (at 219.71 57.15)
+    (diameter 0)
+    (color 0 0 0 0)
+    (uuid 4bf0f42a-fcb8-5b56-85cb-6453eecff946))
+  (junction
+    (at 219.71 101.6)
+    (diameter 0)
+    (color 0 0 0 0)
+    (uuid 878949a8-1322-57d9-871b-76ed12a87bd3))
+  (junction
+    (at 219.71 210.82)
+    (diameter 0)
+    (color 0 0 0 0)
+    (uuid c5b6d968-2838-5106-86e7-ec4068368c28))
+  (junction
+    (at 219.71 72.39)
+    (diameter 0)
+    (color 0 0 0 0)
+    (uuid fa329e7c-bd6c-572d-ace4-257b5360c868))
+  (junction
+    (at 219.71 182.88)
+    (diameter 0)
+    (color 0 0 0 0)
+    (uuid 70fe16a5-fe71-5d68-9566-1203aef84464))
+  (junction
+    (at 219.71 114.3)
+    (diameter 0)
+    (color 0 0 0 0)
+    (uuid 7f721980-6343-5880-8bf0-2cecdd81321d))
+  (junction
+    (at 219.71 168.91)
+    (diameter 0)
+    (color 0 0 0 0)
+    (uuid 5e2b2a18-b193-512a-9eec-11009eede523))
+  (junction
+    (at 219.71 86.36)
+    (diameter 0)
+    (color 0 0 0 0)
+    (uuid 4408afce-562b-52ae-bf41-f46c60b6e631))
+  (junction
+    (at 219.71 196.85)
+    (diameter 0)
+    (color 0 0 0 0)
+    (uuid 78375b39-5287-5617-92c3-a7767ce7daa9))
+  (junction
+    (at 219.71 154.94)
+    (diameter 0)
+    (color 0 0 0 0)
+    (uuid 6258fcc9-4f1a-5fa3-b90b-3a5fcfa1c24b)))

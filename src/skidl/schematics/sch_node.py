@@ -106,6 +106,19 @@ class SchNode(Placer, Router):
         # Get list of names of hierarchical levels (in order) leading to this part.
         level_names = list(part.hiertuple)
 
+        # A part tagged with a functional group (smart_schematic.block() or the
+        # connectivity-graph auto-grouping) becomes a CHILD BLOCK of its level:
+        # the tag turns into a real SchNode, so the placer keeps the group's
+        # parts together and orders sibling blocks left-to-right by functional
+        # role (cluster.classify_block_role: Power -> MCU -> ... -> Connector).
+        # Without this a group tag was purely decorative and a flat circuit
+        # placed as one unorganized soup.
+        _grp = getattr(part, "group", None)
+        if _grp:
+            _grp = re.sub(r"[^\w.+-]+", "_", str(_grp)).strip("_")
+            if _grp:
+                level_names.append(_grp)
+
         # Get depth in hierarchy for this part.
         part_level = len(level_names) - 1
         assert part_level >= level
@@ -150,9 +163,20 @@ class SchNode(Placer, Router):
             self.add_part(part)
 
         # Add terminals to nodes in the hierarchy for nets that span across nodes.
+        from skidl.net import NCNet
+
         for net in circuit.nets:
             # Skip nets that are stubbed since there will be no wire to attach to the NetTerminal.
             if getattr(net, "stub", False):
+                continue
+
+            # Skip the no-connect net. Unlike other named nets, its pins are
+            # deliberately unrelated to each other (each is independently
+            # "not connected to anything"), so it must never get a
+            # NetTerminal/label -- that would visually wire together pins
+            # from different, possibly unrelated parts. Each pin instead
+            # gets its own no_connect marker (see no_connect_to_sexp()).
+            if isinstance(net, NCNet):
                 continue
 
             # Search for pins in different nodes.

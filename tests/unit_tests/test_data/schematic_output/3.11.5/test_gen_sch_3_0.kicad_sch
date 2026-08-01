@@ -1,0 +1,364 @@
+(kicad_sch
+  (version 20230409)
+  (generator "skidl")
+  (generator_version "2.2.3")
+  (uuid 218b5f90-a139-55d3-a988-331ecbe7ee0c)
+  (paper "A4")
+  (title_block
+    (title "SKiDL-Generated Schematic")
+    (date "2026-07-20")
+    (company "")
+    (comment 1 "Generated with SKiDL")
+    (comment 2 "")
+    (comment 3 "")
+    (comment 4 ""))
+  (lib_symbols
+    (symbol "Amplifier_Operational:AD8676xR"
+      (pin_numbers
+        (hide no))
+      (pin_names
+        (offset 0.508))
+      (exclude_from_sim no)
+      (in_bom yes)
+      (on_board yes)
+      (property "Reference" "U"
+        (at 2.032 0 90)
+        (effects
+          (font
+            (size 1.27 1.27))))
+      (property "Value" "AD8676xR"
+        (at 0 0 90)
+        (effects
+          (font
+            (size 1.27 1.27))))
+      (property "Footprint" ""
+        (at 0 0 0)
+        (effects
+          (font
+            (size 1.27 1.27))
+          (hide yes)))
+      (property "Datasheet" "https://www.analog.com/media/en/technical-documentation/data-sheets/AD8676.pdf"
+        (at 0 0 0)
+        (effects
+          (font
+            (size 1.27 1.27))
+          (hide yes)))
+      (property "Description" "Dual operational amplifier, Ultra-precision, 36V, Rail-to-rail output, SOIC-8"
+        (at 0 0 0)
+        (effects
+          (font
+            (size 1.27 1.27))
+          (hide yes)))
+      (symbol "AD8676xR_1_1"
+        (polyline
+          (pts
+            (xy 5.08 0)
+            (xy -5.08 5.08)
+            (xy -5.08 -5.08)
+            (xy 5.08 0))
+          (stroke
+            (width 0.254)
+            (type default))
+          (fill
+            (type background)))
+        (pin output line
+          (at 7.62 0 180)
+          (length 2.54)
+          (name ""
+            (effects
+              (font
+                (size 1.27 1.27))))
+          (number "1"
+            (effects
+              (font
+                (size 1.27 1.27)))))
+        (pin input line
+          (at -7.62 -2.54 0)
+          (length 2.54)
+          (name "-"
+            (effects
+              (font
+                (size 1.27 1.27))))
+          (number "2"
+            (effects
+              (font
+                (size 1.27 1.27)))))
+        (pin input line
+          (at -7.62 2.54 0)
+          (length 2.54)
+          (name "+"
+            (effects
+              (font
+                (size 1.27 1.27))))
+          (number "3"
+            (effects
+              (font
+                (size 1.27 1.27))))))
+      (symbol "AD8676xR_2_2"
+        (polyline
+          (pts
+            (xy 5.08 0)
+            (xy -5.08 5.08)
+            (xy -5.08 -5.08)
+            (xy 5.08 0))
+          (stroke
+            (width 0.254)
+            (type default))
+          (fill
+            (type background)))
+        (pin input line
+          (at -7.62 2.54 0)
+          (length 2.54)
+          (name "+"
+            (effects
+              (font
+                (size 1.27 1.27))))
+          (number "5"
+            (effects
+              (font
+                (size 1.27 1.27)))))
+        (pin input line
+          (at -7.62 -2.54 0)
+          (length 2.54)
+          (name "-"
+            (effects
+              (font
+                (size 1.27 1.27))))
+          (number "6"
+            (effects
+              (font
+                (size 1.27 1.27)))))
+        (pin output line
+          (at 7.62 0 180)
+          (length 2.54)
+          (name ""
+            (effects
+              (font
+                (size 1.27 1.27))))
+          (number "7"
+            (effects
+              (font
+                (size 1.27 1.27))))))
+      (symbol "AD8676xR_3_3"
+        (pin power_in line
+          (at 0 -7.62 90)
+          (length 3.81)
+          (name "V-"
+            (effects
+              (font
+                (size 1.27 1.27))))
+          (number "4"
+            (effects
+              (font
+                (size 1.27 1.27)))))
+        (pin power_in line
+          (at 0 7.62 270)
+          (length 3.81)
+          (name "V+"
+            (effects
+              (font
+                (size 1.27 1.27))))
+          (number "8"
+            (effects
+              (font
+                (size 1.27 1.27))))))
+      (embedded_fonts no)))
+  (symbol
+    (lib_id "Amplifier_Operational:AD8676xR")
+    (at 147.32 85.09 0)
+    (unit 1)
+    (exclude_from_sim no)
+    (in_bom yes)
+    (on_board yes)
+    (dnp no)
+    (fields_autoplaced yes)
+    (uuid 3ca3f487-a8a1-5a1d-94a6-eedc69d83344)
+    (property "Reference" "U1.uA"
+      (at 147.32 82.55 0)
+      (effects
+        (font
+          (size 1.27 1.27))
+        (justify left)))
+    (property "Value" "AD8676xR"
+      (at 147.32 87.63000000000001 0)
+      (effects
+        (font
+          (size 1.27 1.27))
+        (justify left)))
+    (property "Footprint" "Package_SO:SOIC-8_3.9x4.9mm_P1.27mm"
+      (at 147.32 85.09 0)
+      (effects
+        (font
+          (size 1.27 1.27))
+        (hide yes)))
+    (property "Datasheet" "https://www.analog.com/media/en/technical-documentation/data-sheets/AD8676.pdf"
+      (at 147.32 85.09 0)
+      (effects
+        (font
+          (size 1.27 1.27))
+        (hide yes)))
+    (property "Description" "Dual operational amplifier, Ultra-precision, 36V, Rail-to-rail output, SOIC-8"
+      (at 147.32 85.09 0)
+      (effects
+        (font
+          (size 1.27 1.27))
+        (hide yes)))
+    (pin "1"
+      (uuid 3b353251-51c9-5cb0-8da6-ea959ead0491))
+    (pin "2"
+      (uuid aa8c2376-3878-56c7-9441-f01263cfa41b))
+    (pin "3"
+      (uuid 9f5d7f73-c7f7-5e5b-b630-accf3b56dc59))
+    (instances
+      (project "SKiDL-Generated"
+        (path "/218b5f90-a139-55d3-a988-331ecbe7ee0c"
+          (reference "U1.uA")
+          (unit 1)))))
+  (symbol
+    (lib_id "Amplifier_Operational:AD8676xR")
+    (at 147.32 105.41 90)
+    (unit 2)
+    (exclude_from_sim no)
+    (in_bom yes)
+    (on_board yes)
+    (dnp no)
+    (fields_autoplaced yes)
+    (uuid 7a10cdab-8847-5df2-912f-87d9a829add5)
+    (property "Reference" "U1.uB"
+      (at 147.32 102.86999999999999 90)
+      (effects
+        (font
+          (size 1.27 1.27))
+        (justify left)))
+    (property "Value" "AD8676xR"
+      (at 147.32 107.95 90)
+      (effects
+        (font
+          (size 1.27 1.27))
+        (justify left)))
+    (property "Footprint" "Package_SO:SOIC-8_3.9x4.9mm_P1.27mm"
+      (at 147.32 105.41 90)
+      (effects
+        (font
+          (size 1.27 1.27))
+        (hide yes)))
+    (property "Datasheet" "https://www.analog.com/media/en/technical-documentation/data-sheets/AD8676.pdf"
+      (at 147.32 105.41 90)
+      (effects
+        (font
+          (size 1.27 1.27))
+        (hide yes)))
+    (property "Description" "Dual operational amplifier, Ultra-precision, 36V, Rail-to-rail output, SOIC-8"
+      (at 147.32 105.41 90)
+      (effects
+        (font
+          (size 1.27 1.27))
+        (hide yes)))
+    (pin "7"
+      (uuid c01556a2-ea1d-5ad0-b477-30ff5f054884))
+    (pin "6"
+      (uuid a255d31a-5970-5c2b-85f7-3552d2635e6f))
+    (pin "5"
+      (uuid 178f5ac5-44c3-561f-973e-6e7aea7c2d1f))
+    (instances
+      (project "SKiDL-Generated"
+        (path "/218b5f90-a139-55d3-a988-331ecbe7ee0c"
+          (reference "U1.uB")
+          (unit 2)))))
+  (symbol
+    (lib_id "Amplifier_Operational:AD8676xR")
+    (at 144.78 123.19 0)
+    (unit 3)
+    (exclude_from_sim no)
+    (in_bom yes)
+    (on_board yes)
+    (dnp no)
+    (fields_autoplaced yes)
+    (uuid f6958461-10d2-57e0-ad83-1c4517629bf3)
+    (property "Reference" "U1.uC"
+      (at 144.78 120.64999999999999 0)
+      (effects
+        (font
+          (size 1.27 1.27))
+        (justify left)))
+    (property "Value" "AD8676xR"
+      (at 144.78 125.73 0)
+      (effects
+        (font
+          (size 1.27 1.27))
+        (justify left)))
+    (property "Footprint" "Package_SO:SOIC-8_3.9x4.9mm_P1.27mm"
+      (at 144.78 123.19 0)
+      (effects
+        (font
+          (size 1.27 1.27))
+        (hide yes)))
+    (property "Datasheet" "https://www.analog.com/media/en/technical-documentation/data-sheets/AD8676.pdf"
+      (at 144.78 123.19 0)
+      (effects
+        (font
+          (size 1.27 1.27))
+        (hide yes)))
+    (property "Description" "Dual operational amplifier, Ultra-precision, 36V, Rail-to-rail output, SOIC-8"
+      (at 144.78 123.19 0)
+      (effects
+        (font
+          (size 1.27 1.27))
+        (hide yes)))
+    (pin "4"
+      (uuid 7bd22512-a461-5c02-b6e5-eceb3219f940))
+    (pin "8"
+      (uuid f59c8d4c-a61f-514a-b6a2-5881792d9c08))
+    (instances
+      (project "SKiDL-Generated"
+        (path "/218b5f90-a139-55d3-a988-331ecbe7ee0c"
+          (reference "U1.uC")
+          (unit 3)))))
+  (global_label "IN1"
+    (shape bidirectional)
+    (at 130.81 87.63 0)
+    (effects
+      (font
+        (size 1.27 1.27))
+      (justify left))
+    (uuid 41bfa443-2cf7-545f-a3d7-d9911c3b1f18))
+  (global_label "OUT"
+    (shape bidirectional)
+    (at 165.1 85.09 180)
+    (effects
+      (font
+        (size 1.27 1.27))
+      (justify right))
+    (uuid dcd88fea-5f91-5895-a952-5e88ee042900))
+  (global_label "IN2"
+    (shape bidirectional)
+    (at 130.81 82.55 0)
+    (effects
+      (font
+        (size 1.27 1.27))
+      (justify left))
+    (uuid e2d88741-2919-5e3d-bb31-16703cc165c9))
+  (wire
+    (pts
+      (xy 154.94 85.09)
+      (xy 165.1 85.09))
+    (stroke
+      (width 0)
+      (type default))
+    (uuid 8a30a15c-0e34-5034-85a7-a1625521ce46))
+  (wire
+    (pts
+      (xy 130.81 87.63)
+      (xy 139.7 87.63))
+    (stroke
+      (width 0)
+      (type default))
+    (uuid c73b92d3-4e8e-5716-bc26-43811a7b5fe2))
+  (wire
+    (pts
+      (xy 130.81 82.55)
+      (xy 139.7 82.55))
+    (stroke
+      (width 0)
+      (type default))
+    (uuid ccebf19a-7579-59bb-bee9-491d85c307df)))

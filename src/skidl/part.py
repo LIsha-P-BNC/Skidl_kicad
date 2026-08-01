@@ -1065,7 +1065,10 @@ class Part(PinMixin, SkidlBaseObject):
 
         # Now name the object with the given reference or some variation
         # of it that doesn't collide with anything else in the list.
-        self._ref = get_unique_name(self.circuit.parts, "ref", self.ref_prefix, r)
+        # TEMPLATE/LIBRARY parts have no circuit (self.circuit is None) and
+        # so have no sibling parts to collide with.
+        parts = self.circuit.parts if self.circuit is not None else []
+        self._ref = get_unique_name(parts, "ref", self.ref_prefix, r)
         return
 
     @ref.deleter
@@ -1073,7 +1076,8 @@ class Part(PinMixin, SkidlBaseObject):
         """
         Delete the part reference.
         """
-        rmv_unique_name(self.circuit.parts, "ref", self._ref)
+        if self.circuit is not None:
+            rmv_unique_name(self.circuit.parts, "ref", self._ref)
         self._ref = None
 
     @property

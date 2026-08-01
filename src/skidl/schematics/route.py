@@ -121,6 +121,21 @@ class SwitchboxRoutingFailure(RoutingFailure):
     pass
 
 
+def _stub_pin(pin):
+    """Label-convert a single pin (and mark its net auto-stubbed).
+
+    Pin-scoped on purpose: stubbing a whole net's pins would also stub the
+    sibling-sheet pins of a shared boundary net, making those already-routed
+    siblings emit a wire *and* a spurious label on the same pin. Setting
+    ``net._stub`` (but not ``_stub_explicit``) is harmless to routed siblings --
+    it only suppresses a redundant boundary hierarchical label.
+    """
+    net = pin.net
+    if net is not None and not getattr(net, "_stub_explicit", False):
+        net._stub = True
+    pin.stub = True
+
+
 class Boundary:
     """Class for indicating a boundary.
 
@@ -1313,8 +1328,15 @@ class SwitchBox:
                     active_directions.remove(direction)
                     break
                 # Get the box which will be added if expansion occurs.
-                # Every face borders two switchboxes, so the adjacent box is the other one.
-                adj_box = (box_face.switchboxes - {box}).pop()
+                # Interior faces border two switchboxes; a boundary/one-neighbor face
+                # borders only one. A boundary face here just blocks expansion in this
+                # direction (mirrors the box_face.part case above) -- don't crash on the
+                # empty set.
+                neighbors = box_face.switchboxes - {box}
+                if not neighbors:
+                    active_directions.remove(direction)
+                    break
+                adj_box = neighbors.pop()
                 if adj_box not in switchboxes:
                     # This box cannot be added, so expansion in this direction is blocked.
                     active_directions.remove(direction)
@@ -1325,7 +1347,21 @@ class SwitchBox:
                 for i, box in enumerate(box_list[:]):
                     # Get the adjacent box for the current box on the growth side.
                     box_face = box.face_list[direction]
-                    adj_box = (box_face.switchboxes - {box}).pop()
+                    neighbors = box_face.switchboxes - {box}
+                    if not neighbors:
+                        # Inconsistent geometry: a committed-expansion face has no
+                        # adjacent switchbox. Log and raise a catchable failure so the
+                        # per-sheet fallback converts just this sheet to labels instead
+                        # of crashing the whole schematic generation.
+                        from skidl.logger import active_logger
+                        active_logger.warning(
+                            "coalesce: switchbox boundary face has no adjacent "
+                            "switchbox; falling back to labels for this sheet."
+                        )
+                        raise SwitchboxRoutingFailure(
+                            "coalesce: face borders fewer than two switchboxes"
+                        )
+                    adj_box = neighbors.pop()
                     # Replace the current box with the new box from the expansion.
                     box_list[i] = adj_box
                     # Remove the newly added box from the list of available boxes for growth.
@@ -2427,12 +2463,18 @@ class Router:
                 # Try routing switchbox from left-to-right.
                 swbx.route(**options)
 
-            except RoutingFailure:
+            except (RoutingFailure, AssertionError):
                 # Routing failed, so try routing top-to-bottom instead.
                 swbx.flip_xy()
-                # If this fails, then a routing exception will terminate the whole routing process.
-                swbx.route(**options)
-                swbx.flip_xy()
+                try:
+                    # Convert an internal routing invariant failure into the
+                    # public failure type so the schematic generator can
+                    # expand the placement or use its labels fallback.
+                    swbx.route(**options)
+                except AssertionError as exc:
+                    raise RoutingFailure from exc
+                finally:
+                    swbx.flip_xy()
 
             # Add switchbox routes to existing node wiring.
             for net, segments in swbx.segments.items():
@@ -3099,12 +3141,65 @@ class Router:
             junctions = find_junctions(segments)
             node.junctions[net].extend(junctions)
 
+    def count_wire_crossings(node):
+        """Count geometric crossings between routed segments of DIFFERENT nets.
+
+        Same-net segment intersections are real electrical junctions
+        (see add_junctions()), not visual crossings, so pairs of segments
+        belonging to the same net are excluded here. This is a diagnostic
+        metric (see schematics/metrics.py's readability_score()), used to
+        validate placement/routing changes against a fixed test corpus
+        and, separately, to drive a post-routing orientation-swap
+        reduction pass -- it doesn't affect routing itself.
+
+        Args:
+            node: A routed SchNode (or anything with a `.wires` dict of
+                net -> list of Segment).
+
+        Returns:
+            int: Number of distinct-net segment pairs that cross.
+        """
+        items = list(node.wires.items())
+        count = 0
+        for i, (_net_a, segs_a) in enumerate(items):
+            for _net_b, segs_b in items[i + 1 :]:
+                for seg_a in segs_a:
+                    for seg_b in segs_b:
+                        if seg_a.intersects(seg_b):
+                            count += 1
+        return count
+
     def rmv_routing_stuff(node):
         """Remove attributes added to parts/pins during routing."""
 
         rmv_attr(node.parts, ("left_track", "right_track", "top_track", "bottom_track"))
         for part in node.parts:
             rmv_attr(part.pins, ("route_pt", "face"))
+
+    def stub_internal_nets(node):
+        """Convert this sheet to labels-only after its own routing failed.
+
+        Called by the parent's child-routing loop when ``child.route()`` raises
+        RoutingFailure. It stubs only the pins on THIS node's own parts (not whole
+        nets), so sibling sheets that already routed a shared net keep their wires.
+        It does NOT re-run routing: the sheet is left consistent (no wires drawn;
+        own pins rendered as labels). Already-routed grandchildren are untouched.
+        """
+        # Absolute import on purpose: route() injects the tool module's constants into
+        # this module's __dict__, corrupting __package__ so a relative ".net_terminal"
+        # would wrongly resolve under skidl.tools.<tool>. place.py imports it the same way.
+        from skidl.schematics.net_terminal import NetTerminal
+
+        node.rmv_routing_stuff()
+        node.wires.clear()
+        node.junctions.clear()
+        for part in node.parts:
+            if isinstance(part, NetTerminal):
+                # NetTerminals already render as labels (emitted with force=True).
+                continue
+            for pin in part.pins:
+                if pin.is_connected():
+                    _stub_pin(pin)
 
     def route(node, tool=None, **options):
         """Route the wires between part pins in this node and its children.
@@ -3138,7 +3233,12 @@ class Router:
         # First, recursively route any children of this node.
         # TODO: Child nodes are independent so could they be processed in parallel?
         for child in node.children.values():
-            child.route(tool=tool, **options)
+            try:
+                child.route(tool=tool, **options)
+            except RoutingFailure:
+                # This child sheet is too dense to route: convert only THIS sheet to
+                # net labels and keep going, so sibling sheets retain their drawn wires.
+                child.stub_internal_nets()
 
         # Exit if no parts to route in this node.
         if not node.parts:

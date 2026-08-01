@@ -266,7 +266,7 @@ def extract_instances(tree: list) -> list[dict]:
             continue
 
         instances.append({
-            "lib_id": lib_id,
+            "lib_id": lib_id_node[1],
             "ref": ref,
             "sx": sx, "sy": sy,
             "rotation": rotation,

@@ -10,7 +10,6 @@ customizable formatting and field selection.
 
 import argparse
 import sys
-import readline
 
 import skidl
 from skidl.part_query import PartSearchDB
@@ -21,6 +20,14 @@ try:
     RICH_AVAILABLE = True
 except ImportError:
     RICH_AVAILABLE = False
+
+try:
+    # readline isn't available on Windows (no pyreadline3 dependency is
+    # declared), so command-history support degrades gracefully without it.
+    import readline
+    READLINE_AVAILABLE = True
+except ImportError:
+    READLINE_AVAILABLE = False
 
 
 # Available part attributes that can be displayed and description labels.
@@ -295,9 +302,10 @@ def interactive_search(db, args, field_list, format_string):
     print("Type 'quit', 'exit', or 'q' to exit, 'browse' to enter browse mode.")
     print()
     
-    # Configure readline for history
-    readline.parse_and_bind('"\\e[A": previous-history')
-    readline.parse_and_bind('"\\e[B": next-history')
+    # Configure readline for history (falls back to plain input() without it).
+    if READLINE_AVAILABLE:
+        readline.parse_and_bind('"\\e[A": previous-history')
+        readline.parse_and_bind('"\\e[B": next-history')
     
     # current_parts = []  # Store current search results for browse mode
     parts = db.search(args.terms, limit=args.limit)
@@ -337,7 +345,8 @@ def interactive_search(db, args, field_list, format_string):
                 continue
             
             # Add to history (readline automatically handles this)
-            readline.add_history(search_terms)
+            if READLINE_AVAILABLE:
+                readline.add_history(search_terms)
             
             # Perform search and display results
             parts = db.search(search_terms, limit=args.limit)
@@ -487,7 +496,8 @@ Interactive mode:
         
         # Add initial search to history for interactive mode
         if args.interactive:
-            readline.add_history(args.terms)
+            if READLINE_AVAILABLE:
+                readline.add_history(args.terms)
             print()
 
     # Enter interactive mode if requested

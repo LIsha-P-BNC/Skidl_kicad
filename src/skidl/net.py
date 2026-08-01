@@ -709,6 +709,9 @@ class Net(SkidlBaseObject):
         Raises:
             TypeError: If the given object is not a Pin, Net, or Bus.
         """
+        from .pin import Pin
+        from .bus import Bus
+
         if isinstance(pin_net_bus, Net):
             return pin_net_bus in self.nets
         if isinstance(pin_net_bus, Pin):
@@ -1013,6 +1016,7 @@ class Net(SkidlBaseObject):
                     active_logger.warning(
                         f"Attaching part template Pin {pn.name} to a Net {self.name}."
                     )
+                    connect_pin(pn)
                 else:
                     active_logger.raise_(
                         ValueError,

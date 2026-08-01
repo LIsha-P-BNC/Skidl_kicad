@@ -103,9 +103,13 @@ def main():
                         shutil.copytree(output_dir, backup_dir)
                     break
                 index += 1
-            
-            if args.overwrite:
-                shutil.rmtree(output_dir)
+
+        # This must run whenever --overwrite is given, independent of
+        # --nobackup - it was previously nested inside the backup block
+        # above, so --overwrite --nobackup together silently left the old
+        # directory contents in place instead of clearing them.
+        if args.overwrite:
+            shutil.rmtree(output_dir)
 
     # Create the output directory if it doesn't exist
     os.makedirs(output_dir, exist_ok=True)

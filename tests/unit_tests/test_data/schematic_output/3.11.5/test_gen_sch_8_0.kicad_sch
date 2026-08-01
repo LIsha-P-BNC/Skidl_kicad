@@ -1,0 +1,1908 @@
+(kicad_sch
+  (version 20230409)
+  (generator "skidl")
+  (generator_version "2.2.3")
+  (uuid 218b5f90-a139-55d3-a988-331ecbe7ee0c)
+  (paper "A4")
+  (title_block
+    (title "SKiDL-Generated Schematic")
+    (date "2026-07-20")
+    (company "")
+    (comment 1 "Generated with SKiDL")
+    (comment 2 "")
+    (comment 3 "")
+    (comment 4 ""))
+  (lib_symbols
+    (symbol "FPGA_Lattice:ICE40HX8K-BG121"
+      (pin_numbers
+        (hide no))
+      (pin_names
+        (offset 0.508))
+      (exclude_from_sim no)
+      (in_bom yes)
+      (on_board yes)
+      (property "Reference" "U"
+        (at 2.032 0 90)
+        (effects
+          (font
+            (size 1.27 1.27))))
+      (property "Value" "ICE40HX8K-BG121"
+        (at 0 0 90)
+        (effects
+          (font
+            (size 1.27 1.27))))
+      (property "Footprint" ""
+        (at 0 0 0)
+        (effects
+          (font
+            (size 1.27 1.27))
+          (hide yes)))
+      (property "Datasheet" "http://www.latticesemi.com/Products/FPGAandCPLD/iCE40"
+        (at 0 0 0)
+        (effects
+          (font
+            (size 1.27 1.27))
+          (hide yes)))
+      (property "Description" "iCE40 HX FPGA, 7680 LUTs, 1.2V, BGA-121"
+        (at 0 0 0)
+        (effects
+          (font
+            (size 1.27 1.27))
+          (hide yes)))
+      (symbol "ICE40HX8K-BG121_1_1"
+        (rectangle
+          (start -8.89 31.75)
+          (end 8.89 -38.1)
+          (stroke
+            (width 0.254)
+            (type default))
+          (fill
+            (type background)))
+        (pin bidirectional line
+          (at -12.7 -35.56 0)
+          (length 3.81)
+          (name "IOT_225"
+            (effects
+              (font
+                (size 1.27 1.27))))
+          (number "A1"
+            (effects
+              (font
+                (size 1.27 1.27)))))
+        (pin bidirectional line
+          (at -12.7 -30.48 0)
+          (length 3.81)
+          (name "IOT_222"
+            (effects
+              (font
+                (size 1.27 1.27))))
+          (number "A2"
+            (effects
+              (font
+                (size 1.27 1.27)))))
+        (pin bidirectional line
+          (at -12.7 -33.02 0)
+          (length 3.81)
+          (name "IOT_223"
+            (effects
+              (font
+                (size 1.27 1.27))))
+          (number "A3"
+            (effects
+              (font
+                (size 1.27 1.27)))))
+        (pin bidirectional line
+          (at -12.7 -20.32 0)
+          (length 3.81)
+          (name "IOT_211"
+            (effects
+              (font
+                (size 1.27 1.27))))
+          (number "A4"
+            (effects
+              (font
+                (size 1.27 1.27)))))
+        (pin bidirectional line
+          (at -12.7 -15.24 0)
+          (length 3.81)
+          (name "IOT_207"
+            (effects
+              (font
+                (size 1.27 1.27))))
+          (number "A5"
+            (effects
+              (font
+                (size 1.27 1.27)))))
+        (pin bidirectional line
+          (at -12.7 -12.7 0)
+          (length 3.81)
+          (name "IOT_206"
+            (effects
+              (font
+                (size 1.27 1.27))))
+          (number "A6"
+            (effects
+              (font
+                (size 1.27 1.27)))))
+        (pin bidirectional line
+          (at -12.7 -5.08 0)
+          (length 3.81)
+          (name "IOT_192"
+            (effects
+              (font
+                (size 1.27 1.27))))
+          (number "A7"
+            (effects
+              (font
+                (size 1.27 1.27)))))
+        (pin bidirectional line
+          (at -12.7 0 0)
+          (length 3.81)
+          (name "IOT_190"
+            (effects
+              (font
+                (size 1.27 1.27))))
+          (number "A8"
+            (effects
+              (font
+                (size 1.27 1.27)))))
+        (pin bidirectional line
+          (at -12.7 7.62 0)
+          (length 3.81)
+          (name "IOT_178"
+            (effects
+              (font
+                (size 1.27 1.27))))
+          (number "A9"
+            (effects
+              (font
+                (size 1.27 1.27)))))
+        (pin bidirectional line
+          (at -12.7 17.78 0)
+          (length 3.81)
+          (name "IOT_170"
+            (effects
+              (font
+                (size 1.27 1.27))))
+          (number "A10"
+            (effects
+              (font
+                (size 1.27 1.27)))))
+        (pin bidirectional line
+          (at -12.7 20.32 0)
+          (length 3.81)
+          (name "IOT_168"
+            (effects
+              (font
+                (size 1.27 1.27))))
+          (number "A11"
+            (effects
+              (font
+                (size 1.27 1.27)))))
+        (pin bidirectional line
+          (at -12.7 -27.94 0)
+          (length 3.81)
+          (name "IOT_221"
+            (effects
+              (font
+                (size 1.27 1.27))))
+          (number "B3"
+            (effects
+              (font
+                (size 1.27 1.27)))))
+        (pin bidirectional line
+          (at -12.7 -25.4 0)
+          (length 3.81)
+          (name "IOT_219"
+            (effects
+              (font
+                (size 1.27 1.27))))
+          (number "B4"
+            (effects
+              (font
+                (size 1.27 1.27)))))
+        (pin bidirectional line
+          (at -12.7 -17.78 0)
+          (length 3.81)
+          (name "IOT_208"
+            (effects
+              (font
+                (size 1.27 1.27))))
+          (number "B5"
+            (effects
+              (font
+                (size 1.27 1.27)))))
+        (pin bidirectional line
+          (at -12.7 -10.16 0)
+          (length 3.81)
+          (name "IOT_198_GBIN0"
+            (effects
+              (font
+                (size 1.27 1.27))))
+          (number "B6"
+            (effects
+              (font
+                (size 1.27 1.27)))))
+        (pin bidirectional line
+          (at -12.7 -7.62 0)
+          (length 3.81)
+          (name "IOT_197_GBIN1"
+            (effects
+              (font
+                (size 1.27 1.27))))
+          (number "B7"
+            (effects
+              (font
+                (size 1.27 1.27)))))
+        (pin bidirectional line
+          (at -12.7 10.16 0)
+          (length 3.81)
+          (name "IOT_177"
+            (effects
+              (font
+                (size 1.27 1.27))))
+          (number "B8"
+            (effects
+              (font
+                (size 1.27 1.27)))))
+        (pin bidirectional line
+          (at -12.7 12.7 0)
+          (length 3.81)
+          (name "IOT_174"
+            (effects
+              (font
+                (size 1.27 1.27))))
+          (number "B9"
+            (effects
+              (font
+                (size 1.27 1.27)))))
+        (pin bidirectional line
+          (at -12.7 -2.54 0)
+          (length 3.81)
+          (name "IOT_191"
+            (effects
+              (font
+                (size 1.27 1.27))))
+          (number "C7"
+            (effects
+              (font
+                (size 1.27 1.27)))))
+        (pin bidirectional line
+          (at -12.7 5.08 0)
+          (length 3.81)
+          (name "IOT_179"
+            (effects
+              (font
+                (size 1.27 1.27))))
+          (number "C8"
+            (effects
+              (font
+                (size 1.27 1.27)))))
+        (pin bidirectional line
+          (at -12.7 15.24 0)
+          (length 3.81)
+          (name "IOT_172"
+            (effects
+              (font
+                (size 1.27 1.27))))
+          (number "C9"
+            (effects
+              (font
+                (size 1.27 1.27)))))
+        (pin bidirectional line
+          (at -12.7 -22.86 0)
+          (length 3.81)
+          (name "IOT_212"
+            (effects
+              (font
+                (size 1.27 1.27))))
+          (number "D5"
+            (effects
+              (font
+                (size 1.27 1.27)))))
+        (pin power_in line
+          (at 0 35.56 270)
+          (length 3.81)
+          (name "VCCIO_0"
+            (effects
+              (font
+                (size 1.27 1.27))))
+          (number "D6"
+            (effects
+              (font
+                (size 1.27 1.27)))))
+        (pin bidirectional line
+          (at -12.7 2.54 0)
+          (length 3.81)
+          (name "IOT_181"
+            (effects
+              (font
+                (size 1.27 1.27))))
+          (number "D7"
+            (effects
+              (font
+                (size 1.27 1.27))))))
+      (symbol "ICE40HX8K-BG121_2_2"
+        (rectangle
+          (start -8.89 31.75)
+          (end 8.89 -33.02)
+          (stroke
+            (width 0.254)
+            (type default))
+          (fill
+            (type background)))
+        (pin bidirectional line
+          (at -12.7 -30.48 0)
+          (length 3.81)
+          (name "IOR_161"
+            (effects
+              (font
+                (size 1.27 1.27))))
+          (number "B11"
+            (effects
+              (font
+                (size 1.27 1.27)))))
+        (pin bidirectional line
+          (at -12.7 -27.94 0)
+          (length 3.81)
+          (name "IOR_160"
+            (effects
+              (font
+                (size 1.27 1.27))))
+          (number "C11"
+            (effects
+              (font
+                (size 1.27 1.27)))))
+        (pin bidirectional line
+          (at -12.7 -17.78 0)
+          (length 3.81)
+          (name "IOR_147"
+            (effects
+              (font
+                (size 1.27 1.27))))
+          (number "D9"
+            (effects
+              (font
+                (size 1.27 1.27)))))
+        (pin bidirectional line
+          (at -12.7 -25.4 0)
+          (length 3.81)
+          (name "IOR_154"
+            (effects
+              (font
+                (size 1.27 1.27))))
+          (number "D10"
+            (effects
+              (font
+                (size 1.27 1.27)))))
+        (pin bidirectional line
+          (at -12.7 -22.86 0)
+          (length 3.81)
+          (name "IOR_152"
+            (effects
+              (font
+                (size 1.27 1.27))))
+          (number "D11"
+            (effects
+              (font
+                (size 1.27 1.27)))))
+        (pin bidirectional line
+          (at -12.7 -15.24 0)
+          (length 3.81)
+          (name "IOR_146"
+            (effects
+              (font
+                (size 1.27 1.27))))
+          (number "E8"
+            (effects
+              (font
+                (size 1.27 1.27)))))
+        (pin bidirectional line
+          (at -12.7 -12.7 0)
+          (length 3.81)
+          (name "IOR_144"
+            (effects
+              (font
+                (size 1.27 1.27))))
+          (number "E9"
+            (effects
+              (font
+                (size 1.27 1.27)))))
+        (pin bidirectional line
+          (at -12.7 -10.16 0)
+          (length 3.81)
+          (name "IOR_141_GBIN2"
+            (effects
+              (font
+                (size 1.27 1.27))))
+          (number "E10"
+            (effects
+              (font
+                (size 1.27 1.27)))))
+        (pin bidirectional line
+          (at -12.7 -20.32 0)
+          (length 3.81)
+          (name "IOR_148"
+            (effects
+              (font
+                (size 1.27 1.27))))
+          (number "E11"
+            (effects
+              (font
+                (size 1.27 1.27)))))
+        (pin power_in line
+          (at 0 35.56 270)
+          (length 3.81)
+          (name "VCCIO_1"
+            (effects
+              (font
+                (size 1.27 1.27))))
+          (number "F8"
+            (effects
+              (font
+                (size 1.27 1.27)))))
+        (pin bidirectional line
+          (at -12.7 -5.08 0)
+          (length 3.81)
+          (name "IOR_137"
+            (effects
+              (font
+                (size 1.27 1.27))))
+          (number "F9"
+            (effects
+              (font
+                (size 1.27 1.27)))))
+        (pin bidirectional line
+          (at -12.7 -2.54 0)
+          (length 3.81)
+          (name "IOR_136"
+            (effects
+              (font
+                (size 1.27 1.27))))
+          (number "F10"
+            (effects
+              (font
+                (size 1.27 1.27)))))
+        (pin bidirectional line
+          (at -12.7 -7.62 0)
+          (length 3.81)
+          (name "IOR_140_GBIN3"
+            (effects
+              (font
+                (size 1.27 1.27))))
+          (number "F11"
+            (effects
+              (font
+                (size 1.27 1.27)))))
+        (pin bidirectional line
+          (at -12.7 10.16 0)
+          (length 3.81)
+          (name "IOR_118"
+            (effects
+              (font
+                (size 1.27 1.27))))
+          (number "G8"
+            (effects
+              (font
+                (size 1.27 1.27)))))
+        (pin bidirectional line
+          (at -12.7 2.54 0)
+          (length 3.81)
+          (name "IOR_128"
+            (effects
+              (font
+                (size 1.27 1.27))))
+          (number "G9"
+            (effects
+              (font
+                (size 1.27 1.27)))))
+        (pin bidirectional line
+          (at -12.7 5.08 0)
+          (length 3.81)
+          (name "IOR_120"
+            (effects
+              (font
+                (size 1.27 1.27))))
+          (number "G10"
+            (effects
+              (font
+                (size 1.27 1.27)))))
+        (pin bidirectional line
+          (at -12.7 0 0)
+          (length 3.81)
+          (name "IOR_129"
+            (effects
+              (font
+                (size 1.27 1.27))))
+          (number "G11"
+            (effects
+              (font
+                (size 1.27 1.27)))))
+        (pin bidirectional line
+          (at -12.7 15.24 0)
+          (length 3.81)
+          (name "IOR_116"
+            (effects
+              (font
+                (size 1.27 1.27))))
+          (number "H10"
+            (effects
+              (font
+                (size 1.27 1.27)))))
+        (pin bidirectional line
+          (at -12.7 7.62 0)
+          (length 3.81)
+          (name "IOR_119"
+            (effects
+              (font
+                (size 1.27 1.27))))
+          (number "H11"
+            (effects
+              (font
+                (size 1.27 1.27)))))
+        (pin bidirectional line
+          (at -12.7 12.7 0)
+          (length 3.81)
+          (name "IOR_117"
+            (effects
+              (font
+                (size 1.27 1.27))))
+          (number "J10"
+            (effects
+              (font
+                (size 1.27 1.27)))))
+        (pin bidirectional line
+          (at -12.7 20.32 0)
+          (length 3.81)
+          (name "IOR_114"
+            (effects
+              (font
+                (size 1.27 1.27))))
+          (number "J11"
+            (effects
+              (font
+                (size 1.27 1.27)))))
+        (pin bidirectional line
+          (at -12.7 17.78 0)
+          (length 3.81)
+          (name "IOR_115"
+            (effects
+              (font
+                (size 1.27 1.27))))
+          (number "K11"
+            (effects
+              (font
+                (size 1.27 1.27))))))
+      (symbol "ICE40HX8K-BG121_3_3"
+        (rectangle
+          (start -11.43 29.21)
+          (end 11.43 -31.75)
+          (stroke
+            (width 0.254)
+            (type default))
+          (fill
+            (type background)))
+        (pin power_in line
+          (at 0 33.02 270)
+          (length 3.81)
+          (name "VCCIO_2"
+            (effects
+              (font
+                (size 1.27 1.27))))
+          (number "H6"
+            (effects
+              (font
+                (size 1.27 1.27)))))
+        (pin bidirectional line
+          (at -15.24 -15.24 0)
+          (length 3.81)
+          (name "IOB_87"
+            (effects
+              (font
+                (size 1.27 1.27))))
+          (number "H7"
+            (effects
+              (font
+                (size 1.27 1.27)))))
+        (pin bidirectional line
+          (at -15.24 -27.94 0)
+          (length 3.81)
+          (name "IOB_104_CBSEL1"
+            (effects
+              (font
+                (size 1.27 1.27))))
+          (number "H9"
+            (effects
+              (font
+                (size 1.27 1.27)))))
+        (pin bidirectional line
+          (at -15.24 15.24 0)
+          (length 3.81)
+          (name "IOB_57"
+            (effects
+              (font
+                (size 1.27 1.27))))
+          (number "J3"
+            (effects
+              (font
+                (size 1.27 1.27)))))
+        (pin bidirectional line
+          (at -15.24 7.62 0)
+          (length 3.81)
+          (name "IOB_64"
+            (effects
+              (font
+                (size 1.27 1.27))))
+          (number "J4"
+            (effects
+              (font
+                (size 1.27 1.27)))))
+        (pin bidirectional line
+          (at -15.24 -2.54 0)
+          (length 3.81)
+          (name "IOB_78"
+            (effects
+              (font
+                (size 1.27 1.27))))
+          (number "J5"
+            (effects
+              (font
+                (size 1.27 1.27)))))
+        (pin bidirectional line
+          (at -15.24 -12.7 0)
+          (length 3.81)
+          (name "IOB_86"
+            (effects
+              (font
+                (size 1.27 1.27))))
+          (number "J7"
+            (effects
+              (font
+                (size 1.27 1.27)))))
+        (pin bidirectional line
+          (at -15.24 -20.32 0)
+          (length 3.81)
+          (name "IOB_91"
+            (effects
+              (font
+                (size 1.27 1.27))))
+          (number "J8"
+            (effects
+              (font
+                (size 1.27 1.27)))))
+        (pin bidirectional line
+          (at -15.24 10.16 0)
+          (length 3.81)
+          (name "IOB_63"
+            (effects
+              (font
+                (size 1.27 1.27))))
+          (number "K3"
+            (effects
+              (font
+                (size 1.27 1.27)))))
+        (pin bidirectional line
+          (at -15.24 0 0)
+          (length 3.81)
+          (name "IOB_73"
+            (effects
+              (font
+                (size 1.27 1.27))))
+          (number "K4"
+            (effects
+              (font
+                (size 1.27 1.27)))))
+        (pin bidirectional line
+          (at -15.24 -5.08 0)
+          (length 3.81)
+          (name "IOB_79"
+            (effects
+              (font
+                (size 1.27 1.27))))
+          (number "K5"
+            (effects
+              (font
+                (size 1.27 1.27)))))
+        (pin bidirectional line
+          (at -15.24 -10.16 0)
+          (length 3.81)
+          (name "IOB_82_GBIN4"
+            (effects
+              (font
+                (size 1.27 1.27))))
+          (number "K6"
+            (effects
+              (font
+                (size 1.27 1.27)))))
+        (pin bidirectional line
+          (at -15.24 -17.78 0)
+          (length 3.81)
+          (name "IOB_89"
+            (effects
+              (font
+                (size 1.27 1.27))))
+          (number "K7"
+            (effects
+              (font
+                (size 1.27 1.27)))))
+        (pin open_collector line
+          (at 15.24 25.4 180)
+          (length 3.81)
+          (name "CDONE"
+            (effects
+              (font
+                (size 1.27 1.27))))
+          (number "K8"
+            (effects
+              (font
+                (size 1.27 1.27)))))
+        (pin bidirectional line
+          (at -15.24 17.78 0)
+          (length 3.81)
+          (name "IOB_56"
+            (effects
+              (font
+                (size 1.27 1.27))))
+          (number "L1"
+            (effects
+              (font
+                (size 1.27 1.27)))))
+        (pin bidirectional line
+          (at -15.24 12.7 0)
+          (length 3.81)
+          (name "IOB_61"
+            (effects
+              (font
+                (size 1.27 1.27))))
+          (number "L2"
+            (effects
+              (font
+                (size 1.27 1.27)))))
+        (pin bidirectional line
+          (at -15.24 5.08 0)
+          (length 3.81)
+          (name "IOB_71"
+            (effects
+              (font
+                (size 1.27 1.27))))
+          (number "L3"
+            (effects
+              (font
+                (size 1.27 1.27)))))
+        (pin bidirectional line
+          (at -15.24 2.54 0)
+          (length 3.81)
+          (name "IOB_72"
+            (effects
+              (font
+                (size 1.27 1.27))))
+          (number "L4"
+            (effects
+              (font
+                (size 1.27 1.27)))))
+        (pin bidirectional line
+          (at -15.24 -7.62 0)
+          (length 3.81)
+          (name "IOB_81_GBIN5"
+            (effects
+              (font
+                (size 1.27 1.27))))
+          (number "L5"
+            (effects
+              (font
+                (size 1.27 1.27)))))
+        (pin bidirectional line
+          (at -15.24 -22.86 0)
+          (length 3.81)
+          (name "IOB_94"
+            (effects
+              (font
+                (size 1.27 1.27))))
+          (number "L7"
+            (effects
+              (font
+                (size 1.27 1.27)))))
+        (pin bidirectional line
+          (at -15.24 -25.4 0)
+          (length 3.81)
+          (name "IOB_103_CBSEL0"
+            (effects
+              (font
+                (size 1.27 1.27))))
+          (number "L8"
+            (effects
+              (font
+                (size 1.27 1.27)))))
+        (pin input line
+          (at -15.24 25.4 0)
+          (length 3.81)
+          (name "~{CRESET}"
+            (effects
+              (font
+                (size 1.27 1.27))))
+          (number "L9"
+            (effects
+              (font
+                (size 1.27 1.27))))))
+      (symbol "ICE40HX8K-BG121_4_4"
+        (rectangle
+          (start -8.89 39.37)
+          (end 8.89 -39.37)
+          (stroke
+            (width 0.254)
+            (type default))
+          (fill
+            (type background)))
+        (pin bidirectional line
+          (at -12.7 27.94 0)
+          (length 3.81)
+          (name "IOL_2A"
+            (effects
+              (font
+                (size 1.27 1.27))))
+          (number "B1"
+            (effects
+              (font
+                (size 1.27 1.27)))))
+        (pin bidirectional line
+          (at -12.7 25.4 0)
+          (length 3.81)
+          (name "IOL_2B"
+            (effects
+              (font
+                (size 1.27 1.27))))
+          (number "B2"
+            (effects
+              (font
+                (size 1.27 1.27)))))
+        (pin bidirectional line
+          (at -12.7 15.24 0)
+          (length 3.81)
+          (name "IOL_5B"
+            (effects
+              (font
+                (size 1.27 1.27))))
+          (number "C1"
+            (effects
+              (font
+                (size 1.27 1.27)))))
+        (pin bidirectional line
+          (at -12.7 17.78 0)
+          (length 3.81)
+          (name "IOL_5A"
+            (effects
+              (font
+                (size 1.27 1.27))))
+          (number "C2"
+            (effects
+              (font
+                (size 1.27 1.27)))))
+        (pin bidirectional line
+          (at -12.7 20.32 0)
+          (length 3.81)
+          (name "IOL_4B"
+            (effects
+              (font
+                (size 1.27 1.27))))
+          (number "C3"
+            (effects
+              (font
+                (size 1.27 1.27)))))
+        (pin bidirectional line
+          (at -12.7 22.86 0)
+          (length 3.81)
+          (name "IOL_4A"
+            (effects
+              (font
+                (size 1.27 1.27))))
+          (number "C4"
+            (effects
+              (font
+                (size 1.27 1.27)))))
+        (pin bidirectional line
+          (at -12.7 10.16 0)
+          (length 3.81)
+          (name "IOL_8B"
+            (effects
+              (font
+                (size 1.27 1.27))))
+          (number "D1"
+            (effects
+              (font
+                (size 1.27 1.27)))))
+        (pin bidirectional line
+          (at -12.7 7.62 0)
+          (length 3.81)
+          (name "IOL_9A"
+            (effects
+              (font
+                (size 1.27 1.27))))
+          (number "D2"
+            (effects
+              (font
+                (size 1.27 1.27)))))
+        (pin bidirectional line
+          (at -12.7 5.08 0)
+          (length 3.81)
+          (name "IOL_9B"
+            (effects
+              (font
+                (size 1.27 1.27))))
+          (number "D3"
+            (effects
+              (font
+                (size 1.27 1.27)))))
+        (pin bidirectional line
+          (at -12.7 12.7 0)
+          (length 3.81)
+          (name "IOL_8A"
+            (effects
+              (font
+                (size 1.27 1.27))))
+          (number "E1"
+            (effects
+              (font
+                (size 1.27 1.27)))))
+        (pin bidirectional line
+          (at -12.7 2.54 0)
+          (length 3.81)
+          (name "IOL_10A"
+            (effects
+              (font
+                (size 1.27 1.27))))
+          (number "E2"
+            (effects
+              (font
+                (size 1.27 1.27)))))
+        (pin bidirectional line
+          (at -12.7 0 0)
+          (length 3.81)
+          (name "IOL_10B"
+            (effects
+              (font
+                (size 1.27 1.27))))
+          (number "E3"
+            (effects
+              (font
+                (size 1.27 1.27)))))
+        (pin power_in line
+          (at 0 43.18 270)
+          (length 3.81)
+          (name "VCCIO_3"
+            (effects
+              (font
+                (size 1.27 1.27))))
+          (number "E4"
+            (effects
+              (font
+                (size 1.27 1.27)))))
+        (pin bidirectional line
+          (at -12.7 -2.54 0)
+          (length 3.81)
+          (name "IOL_12A"
+            (effects
+              (font
+                (size 1.27 1.27))))
+          (number "F1"
+            (effects
+              (font
+                (size 1.27 1.27)))))
+        (pin bidirectional line
+          (at -12.7 -5.08 0)
+          (length 3.81)
+          (name "IOL_12B"
+            (effects
+              (font
+                (size 1.27 1.27))))
+          (number "F2"
+            (effects
+              (font
+                (size 1.27 1.27)))))
+        (pin bidirectional line
+          (at -12.7 -10.16 0)
+          (length 3.81)
+          (name "IOL_13B_GBIN7"
+            (effects
+              (font
+                (size 1.27 1.27))))
+          (number "F3"
+            (effects
+              (font
+                (size 1.27 1.27)))))
+        (pin bidirectional line
+          (at -12.7 -7.62 0)
+          (length 3.81)
+          (name "IOL_13A"
+            (effects
+              (font
+                (size 1.27 1.27))))
+          (number "F4"
+            (effects
+              (font
+                (size 1.27 1.27)))))
+        (pin bidirectional line
+          (at -12.7 -12.7 0)
+          (length 3.81)
+          (name "IOL_14A_GBIN6"
+            (effects
+              (font
+                (size 1.27 1.27))))
+          (number "G1"
+            (effects
+              (font
+                (size 1.27 1.27)))))
+        (pin bidirectional line
+          (at -12.7 -15.24 0)
+          (length 3.81)
+          (name "IOL_14B"
+            (effects
+              (font
+                (size 1.27 1.27))))
+          (number "G2"
+            (effects
+              (font
+                (size 1.27 1.27)))))
+        (pin bidirectional line
+          (at -12.7 -17.78 0)
+          (length 3.81)
+          (name "IOL_17A"
+            (effects
+              (font
+                (size 1.27 1.27))))
+          (number "G3"
+            (effects
+              (font
+                (size 1.27 1.27)))))
+        (pin passive line
+          (at 0 43.18 270)
+          (length 3.81)
+          (hide yes)
+          (name "VCCIO_3"
+            (effects
+              (font
+                (size 1.27 1.27))))
+          (number "G4"
+            (effects
+              (font
+                (size 1.27 1.27)))))
+        (pin bidirectional line
+          (at -12.7 -22.86 0)
+          (length 3.81)
+          (name "IOL_18A"
+            (effects
+              (font
+                (size 1.27 1.27))))
+          (number "H1"
+            (effects
+              (font
+                (size 1.27 1.27)))))
+        (pin bidirectional line
+          (at -12.7 -25.4 0)
+          (length 3.81)
+          (name "IOL_18B"
+            (effects
+              (font
+                (size 1.27 1.27))))
+          (number "H2"
+            (effects
+              (font
+                (size 1.27 1.27)))))
+        (pin bidirectional line
+          (at -12.7 -20.32 0)
+          (length 3.81)
+          (name "IOL_17B"
+            (effects
+              (font
+                (size 1.27 1.27))))
+          (number "H3"
+            (effects
+              (font
+                (size 1.27 1.27)))))
+        (pin bidirectional line
+          (at -12.7 -27.94 0)
+          (length 3.81)
+          (name "IOL_23A"
+            (effects
+              (font
+                (size 1.27 1.27))))
+          (number "J1"
+            (effects
+              (font
+                (size 1.27 1.27)))))
+        (pin bidirectional line
+          (at -12.7 -35.56 0)
+          (length 3.81)
+          (name "IOL_25B"
+            (effects
+              (font
+                (size 1.27 1.27))))
+          (number "J2"
+            (effects
+              (font
+                (size 1.27 1.27)))))
+        (pin bidirectional line
+          (at -12.7 -30.48 0)
+          (length 3.81)
+          (name "IOL_23B"
+            (effects
+              (font
+                (size 1.27 1.27))))
+          (number "K1"
+            (effects
+              (font
+                (size 1.27 1.27)))))
+        (pin bidirectional line
+          (at -12.7 -33.02 0)
+          (length 3.81)
+          (name "IOL_25A"
+            (effects
+              (font
+                (size 1.27 1.27))))
+          (number "K2"
+            (effects
+              (font
+                (size 1.27 1.27))))))
+      (symbol "ICE40HX8K-BG121_5_5"
+        (rectangle
+          (start -11.43 13.97)
+          (end 11.43 -13.97)
+          (stroke
+            (width 0.254)
+            (type default))
+          (fill
+            (type background)))
+        (pin power_in line
+          (at -2.54 17.78 270)
+          (length 3.81)
+          (name "VPP_FAST"
+            (effects
+              (font
+                (size 1.27 1.27))))
+          (number "B10"
+            (effects
+              (font
+                (size 1.27 1.27)))))
+        (pin power_in line
+          (at 15.24 -10.16 180)
+          (length 3.81)
+          (name "GNDPLL1"
+            (effects
+              (font
+                (size 1.27 1.27))))
+          (number "C5"
+            (effects
+              (font
+                (size 1.27 1.27)))))
+        (pin power_in line
+          (at 15.24 -2.54 180)
+          (length 3.81)
+          (name "VCCPLL1"
+            (effects
+              (font
+                (size 1.27 1.27))))
+          (number "C6"
+            (effects
+              (font
+                (size 1.27 1.27)))))
+        (pin power_in line
+          (at 0 17.78 270)
+          (length 3.81)
+          (name "VPP_2V5"
+            (effects
+              (font
+                (size 1.27 1.27))))
+          (number "C10"
+            (effects
+              (font
+                (size 1.27 1.27)))))
+        (pin passive line
+          (at 2.54 17.78 270)
+          (length 3.81)
+          (hide yes)
+          (name "VCC"
+            (effects
+              (font
+                (size 1.27 1.27))))
+          (number "D4"
+            (effects
+              (font
+                (size 1.27 1.27)))))
+        (pin power_in line
+          (at 2.54 17.78 270)
+          (length 3.81)
+          (name "VCC"
+            (effects
+              (font
+                (size 1.27 1.27))))
+          (number "D8"
+            (effects
+              (font
+                (size 1.27 1.27)))))
+        (pin power_in line
+          (at -7.62 -17.78 90)
+          (length 3.81)
+          (name "GND"
+            (effects
+              (font
+                (size 1.27 1.27))))
+          (number "E5"
+            (effects
+              (font
+                (size 1.27 1.27)))))
+        (pin passive line
+          (at -7.62 -17.78 90)
+          (length 3.81)
+          (hide yes)
+          (name "GND"
+            (effects
+              (font
+                (size 1.27 1.27))))
+          (number "E6"
+            (effects
+              (font
+                (size 1.27 1.27)))))
+        (pin passive line
+          (at -7.62 -17.78 90)
+          (length 3.81)
+          (hide yes)
+          (name "GND"
+            (effects
+              (font
+                (size 1.27 1.27))))
+          (number "E7"
+            (effects
+              (font
+                (size 1.27 1.27)))))
+        (pin passive line
+          (at -7.62 -17.78 90)
+          (length 3.81)
+          (hide yes)
+          (name "GND"
+            (effects
+              (font
+                (size 1.27 1.27))))
+          (number "F5"
+            (effects
+              (font
+                (size 1.27 1.27)))))
+        (pin passive line
+          (at -7.62 -17.78 90)
+          (length 3.81)
+          (hide yes)
+          (name "GND"
+            (effects
+              (font
+                (size 1.27 1.27))))
+          (number "F6"
+            (effects
+              (font
+                (size 1.27 1.27)))))
+        (pin passive line
+          (at -7.62 -17.78 90)
+          (length 3.81)
+          (hide yes)
+          (name "GND"
+            (effects
+              (font
+                (size 1.27 1.27))))
+          (number "F7"
+            (effects
+              (font
+                (size 1.27 1.27)))))
+        (pin passive line
+          (at -7.62 -17.78 90)
+          (length 3.81)
+          (hide yes)
+          (name "GND"
+            (effects
+              (font
+                (size 1.27 1.27))))
+          (number "G5"
+            (effects
+              (font
+                (size 1.27 1.27)))))
+        (pin passive line
+          (at -7.62 -17.78 90)
+          (length 3.81)
+          (hide yes)
+          (name "GND"
+            (effects
+              (font
+                (size 1.27 1.27))))
+          (number "G6"
+            (effects
+              (font
+                (size 1.27 1.27)))))
+        (pin passive line
+          (at -7.62 -17.78 90)
+          (length 3.81)
+          (hide yes)
+          (name "GND"
+            (effects
+              (font
+                (size 1.27 1.27))))
+          (number "G7"
+            (effects
+              (font
+                (size 1.27 1.27)))))
+        (pin passive line
+          (at 2.54 17.78 270)
+          (length 3.81)
+          (hide yes)
+          (name "VCC"
+            (effects
+              (font
+                (size 1.27 1.27))))
+          (number "H4"
+            (effects
+              (font
+                (size 1.27 1.27)))))
+        (pin passive line
+          (at -7.62 -17.78 90)
+          (length 3.81)
+          (hide yes)
+          (name "GND"
+            (effects
+              (font
+                (size 1.27 1.27))))
+          (number "H5"
+            (effects
+              (font
+                (size 1.27 1.27)))))
+        (pin passive line
+          (at 2.54 17.78 270)
+          (length 3.81)
+          (hide yes)
+          (name "VCC"
+            (effects
+              (font
+                (size 1.27 1.27))))
+          (number "H8"
+            (effects
+              (font
+                (size 1.27 1.27)))))
+        (pin power_in line
+          (at 15.24 7.62 180)
+          (length 3.81)
+          (name "VCCPLL0"
+            (effects
+              (font
+                (size 1.27 1.27))))
+          (number "J6"
+            (effects
+              (font
+                (size 1.27 1.27)))))
+        (pin bidirectional line
+          (at -15.24 0 0)
+          (length 3.81)
+          (name "IOB_106_SDI"
+            (effects
+              (font
+                (size 1.27 1.27))))
+          (number "J9"
+            (effects
+              (font
+                (size 1.27 1.27)))))
+        (pin bidirectional line
+          (at -15.24 2.54 0)
+          (length 3.81)
+          (name "IOB_105_SDO"
+            (effects
+              (font
+                (size 1.27 1.27))))
+          (number "K9"
+            (effects
+              (font
+                (size 1.27 1.27)))))
+        (pin bidirectional line
+          (at -15.24 -5.08 0)
+          (length 3.81)
+          (name "IOB_108_SS"
+            (effects
+              (font
+                (size 1.27 1.27))))
+          (number "K10"
+            (effects
+              (font
+                (size 1.27 1.27)))))
+        (pin power_in line
+          (at 15.24 0 180)
+          (length 3.81)
+          (name "GNDPLL0"
+            (effects
+              (font
+                (size 1.27 1.27))))
+          (number "L6"
+            (effects
+              (font
+                (size 1.27 1.27)))))
+        (pin bidirectional line
+          (at -15.24 -2.54 0)
+          (length 3.81)
+          (name "IOB_107_SCK"
+            (effects
+              (font
+                (size 1.27 1.27))))
+          (number "L10"
+            (effects
+              (font
+                (size 1.27 1.27)))))
+        (pin power_in line
+          (at -7.62 17.78 270)
+          (length 3.81)
+          (name "VCC_SPI"
+            (effects
+              (font
+                (size 1.27 1.27))))
+          (number "L11"
+            (effects
+              (font
+                (size 1.27 1.27))))))
+      (embedded_fonts no)))
+  (symbol
+    (lib_id "FPGA_Lattice:ICE40HX8K-BG121")
+    (at 73.66 69.85 270)
+    (unit 1)
+    (exclude_from_sim no)
+    (in_bom yes)
+    (on_board yes)
+    (dnp no)
+    (fields_autoplaced yes)
+    (uuid 3ca3f487-a8a1-5a1d-94a6-eedc69d83344)
+    (property "Reference" "U1.uA"
+      (at 73.66 67.30999999999999 270)
+      (effects
+        (font
+          (size 1.27 1.27))
+        (justify left)))
+    (property "Value" "ICE40HX8K-BG121"
+      (at 73.66 72.39 270)
+      (effects
+        (font
+          (size 1.27 1.27))
+        (justify left)))
+    (property "Footprint" "Package_BGA:BGA-121_9.0x9.0mm_Layout11x11_P0.8mm_Ball0.4mm_Pad0.35mm_NSMD"
+      (at 73.66 69.85 270)
+      (effects
+        (font
+          (size 1.27 1.27))
+        (hide yes)))
+    (property "Datasheet" "http://www.latticesemi.com/Products/FPGAandCPLD/iCE40"
+      (at 73.66 69.85 270)
+      (effects
+        (font
+          (size 1.27 1.27))
+        (hide yes)))
+    (property "Description" "iCE40 HX FPGA, 7680 LUTs, 1.2V, BGA-121"
+      (at 73.66 69.85 270)
+      (effects
+        (font
+          (size 1.27 1.27))
+        (hide yes)))
+    (pin "A3"
+      (uuid bb445aba-bb36-51e6-97d9-fe2db0f28cdd))
+    (pin "C7"
+      (uuid b7beadf4-4884-5f4e-943e-268b61627315))
+    (pin "B5"
+      (uuid f0756354-4cfc-5986-a12a-e3193f0d71a1))
+    (pin "A2"
+      (uuid ce1a11a3-7e8a-5b59-ad51-9a5e0eb1b7eb))
+    (pin "A9"
+      (uuid 770ec01a-3449-52c3-a577-3440a0d08621))
+    (pin "A4"
+      (uuid ac637f24-5c59-5869-9cd7-4826a1d276d8))
+    (pin "C8"
+      (uuid f1f5a402-484e-515d-b6df-590ad44afa16))
+    (pin "A10"
+      (uuid 78fb4dbc-02e4-5c42-883f-872b6c85b907))
+    (pin "B6"
+      (uuid d23f4342-3d3b-5b21-b38b-84c255c29918))
+    (pin "A1"
+      (uuid e422c67c-c5c2-54b5-aaed-45a787a0803f))
+    (pin "A5"
+      (uuid 59ba45e6-cc1a-5c40-8d2d-19363be09228))
+    (pin "C9"
+      (uuid 7e1adbf9-ac93-5a9b-8cb8-98463e1ce42a))
+    (pin "B7"
+      (uuid 35ed408a-509d-57bd-a5cd-61a5fa049199))
+    (pin "A11"
+      (uuid f0ee8b42-fbb2-5d63-8d92-657d6bc5c68b))
+    (pin "D5"
+      (uuid f02c18ec-6f85-5813-a372-08d7e575c069))
+    (pin "A6"
+      (uuid 26a9870b-70ca-5b7b-8784-e49bff5bbb41))
+    (pin "B8"
+      (uuid 9c1fe5ba-05d4-5711-85dd-c7ea462671c8))
+    (pin "B3"
+      (uuid 05400c44-8fa8-56b7-ba60-0fb7f6c074a6))
+    (pin "D6"
+      (uuid 573ef106-56c8-5348-a2a5-6d23c7ae31f8))
+    (pin "A7"
+      (uuid 5393c5fb-bde8-5699-86f4-5542aaad749a))
+    (pin "B9"
+      (uuid d0a3aa08-6376-5f44-856c-685177be99d7))
+    (pin "B4"
+      (uuid a8b4eb6f-400c-5e80-b8c8-c71db7d43c77))
+    (pin "D7"
+      (uuid 0ea77883-3502-5642-8156-822187e801b2))
+    (pin "A8"
+      (uuid c754c6b4-31bb-5e85-9ae9-acb7dd240665))
+    (instances
+      (project "SKiDL-Generated"
+        (path "/218b5f90-a139-55d3-a988-331ecbe7ee0c"
+          (reference "U1.uA")
+          (unit 1)))))
+  (symbol
+    (lib_id "FPGA_Lattice:ICE40HX8K-BG121")
+    (at 170.18 106.68 0)
+    (unit 2)
+    (exclude_from_sim no)
+    (in_bom yes)
+    (on_board yes)
+    (dnp no)
+    (fields_autoplaced yes)
+    (uuid 7a10cdab-8847-5df2-912f-87d9a829add5)
+    (property "Reference" "U1.uB"
+      (at 170.18 104.14 0)
+      (effects
+        (font
+          (size 1.27 1.27))
+        (justify left)))
+    (property "Value" "ICE40HX8K-BG121"
+      (at 170.18 109.22000000000001 0)
+      (effects
+        (font
+          (size 1.27 1.27))
+        (justify left)))
+    (property "Footprint" "Package_BGA:BGA-121_9.0x9.0mm_Layout11x11_P0.8mm_Ball0.4mm_Pad0.35mm_NSMD"
+      (at 170.18 106.68 0)
+      (effects
+        (font
+          (size 1.27 1.27))
+        (hide yes)))
+    (property "Datasheet" "http://www.latticesemi.com/Products/FPGAandCPLD/iCE40"
+      (at 170.18 106.68 0)
+      (effects
+        (font
+          (size 1.27 1.27))
+        (hide yes)))
+    (property "Description" "iCE40 HX FPGA, 7680 LUTs, 1.2V, BGA-121"
+      (at 170.18 106.68 0)
+      (effects
+        (font
+          (size 1.27 1.27))
+        (hide yes)))
+    (pin "F9"
+      (uuid ebb1802b-27e9-5505-b1ab-22ee355df71c))
+    (pin "E8"
+      (uuid d96bf8d3-301e-52b2-a913-d20a39dfd1d8))
+    (pin "K11"
+      (uuid 6a1817aa-9070-5c1a-9f05-e04cd76a24d8))
+    (pin "G11"
+      (uuid ea0e856a-ff0b-5443-9a7b-d6d86953b20f))
+    (pin "B11"
+      (uuid 40cc48c8-e52e-5f72-b8a5-f670ef0f9ff5))
+    (pin "F10"
+      (uuid 86cfcaf9-b0e9-5229-a114-164c7c9cd2ce))
+    (pin "E9"
+      (uuid c9276e50-c6d2-58b5-b0da-5e7059457a1f))
+    (pin "H10"
+      (uuid 213777ef-a1be-57f6-8603-c1a4b263e250))
+    (pin "C11"
+      (uuid 9acf7bcd-e84e-5ac0-bde8-7d4af9e1ea2e))
+    (pin "F11"
+      (uuid d4314ecc-8915-569e-b591-400b0b119891))
+    (pin "E10"
+      (uuid 60643081-2041-5c8e-af07-bbc77b2f2489))
+    (pin "D9"
+      (uuid 1117605c-8e01-5bd4-8302-c0077e43e2b1))
+    (pin "H11"
+      (uuid 192ac7c9-750e-54c3-ac60-c74a7f7518c9))
+    (pin "G8"
+      (uuid 286bc404-09f6-5ecc-8c58-e77ef5c60a7f))
+    (pin "E11"
+      (uuid fd25f4e4-081a-5aad-8993-f673749b774f))
+    (pin "D10"
+      (uuid 39d229dc-a4b7-5e2c-a9b1-5522e881db78))
+    (pin "J10"
+      (uuid 6e794c34-1d77-5523-b69a-3c0b638c559b))
+    (pin "G9"
+      (uuid 925d451e-6de7-5a06-a79d-553427dc6a5b))
+    (pin "F8"
+      (uuid 40078b1f-7c98-531d-b3d0-6d5dd65fa396))
+    (pin "D11"
+      (uuid ac241a41-6412-55c3-9852-9947c54c96ce))
+    (pin "J11"
+      (uuid 60a5e8f9-79f0-5d85-9732-f1a3ae2cb28a))
+    (pin "G10"
+      (uuid edcc379f-b5eb-5119-be2c-c558e5ce3d04))
+    (instances
+      (project "SKiDL-Generated"
+        (path "/218b5f90-a139-55d3-a988-331ecbe7ee0c"
+          (reference "U1.uB")
+          (unit 2)))))
+  (symbol
+    (lib_id "FPGA_Lattice:ICE40HX8K-BG121")
+    (at 135.89 104.14 0)
+    (unit 3)
+    (exclude_from_sim no)
+    (in_bom yes)
+    (on_board yes)
+    (dnp no)
+    (fields_autoplaced yes)
+    (uuid f6958461-10d2-57e0-ad83-1c4517629bf3)
+    (property "Reference" "U1.uC"
+      (at 135.89 101.6 0)
+      (effects
+        (font
+          (size 1.27 1.27))
+        (justify left)))
+    (property "Value" "ICE40HX8K-BG121"
+      (at 135.89 106.68 0)
+      (effects
+        (font
+          (size 1.27 1.27))
+        (justify left)))
+    (property "Footprint" "Package_BGA:BGA-121_9.0x9.0mm_Layout11x11_P0.8mm_Ball0.4mm_Pad0.35mm_NSMD"
+      (at 135.89 104.14 0)
+      (effects
+        (font
+          (size 1.27 1.27))
+        (hide yes)))
+    (property "Datasheet" "http://www.latticesemi.com/Products/FPGAandCPLD/iCE40"
+      (at 135.89 104.14 0)
+      (effects
+        (font
+          (size 1.27 1.27))
+        (hide yes)))
+    (property "Description" "iCE40 HX FPGA, 7680 LUTs, 1.2V, BGA-121"
+      (at 135.89 104.14 0)
+      (effects
+        (font
+          (size 1.27 1.27))
+        (hide yes)))
+    (pin "J4"
+      (uuid 664b2135-ae20-522c-8bc6-68d44d809763))
+    (pin "L8"
+      (uuid 8722cbe1-4561-534e-a8d5-b2787627f1dd))
+    (pin "L2"
+      (uuid e24954ae-4f6a-5973-af9a-42351fafeacd))
+    (pin "K5"
+      (uuid 5d25bee8-0ef1-520c-a350-bf9490d7f1cf))
+    (pin "J5"
+      (uuid adc4d487-339d-55dc-9631-760e20c1576d))
+    (pin "L9"
+      (uuid 76eafb89-0db5-518b-9329-7b15b21bac90))
+    (pin "H6"
+      (uuid 53edc4aa-ee94-5a6a-b1e4-dca2dc7ca61a))
+    (pin "L3"
+      (uuid 8ee4210c-4cec-51e4-8464-2eeffb439b17))
+    (pin "K6"
+      (uuid f6679b8e-61ca-5824-a79d-d97cfb66458a))
+    (pin "J7"
+      (uuid c174ea39-ba7b-5e86-80b4-490512eafe41))
+    (pin "H7"
+      (uuid 269d8c7c-ca3e-57bd-8523-9e71e200927b))
+    (pin "L4"
+      (uuid 3304b92a-b5a5-5a8b-b80f-54568a1f7df7))
+    (pin "K7"
+      (uuid 318eb634-07ea-5b01-b871-0d1ac68fdd18))
+    (pin "J8"
+      (uuid a01f43ca-191d-5761-9540-dd877e77cc1b))
+    (pin "H9"
+      (uuid 43d05d1c-92e6-5592-b56b-42cc4284aad7))
+    (pin "L5"
+      (uuid e5d1c5fe-7988-517b-9811-5370464d148f))
+    (pin "K8"
+      (uuid c7ec773b-5203-5578-be32-354660e42043))
+    (pin "K3"
+      (uuid d56b79a1-776d-5ac4-aeb0-9c54ee0aed7f))
+    (pin "J3"
+      (uuid ec332116-b16d-5f4b-b75e-52d64070c8fd))
+    (pin "L7"
+      (uuid bf5c9a25-29e1-5d77-85ee-4374fda232fa))
+    (pin "L1"
+      (uuid fb4f6b0f-1410-52ec-b86c-6ce8f7e59876))
+    (pin "K4"
+      (uuid ff015c23-526e-5cf4-9a3a-aed48892d232))
+    (instances
+      (project "SKiDL-Generated"
+        (path "/218b5f90-a139-55d3-a988-331ecbe7ee0c"
+          (reference "U1.uC")
+          (unit 3)))))
+  (symbol
+    (lib_id "FPGA_Lattice:ICE40HX8K-BG121")
+    (at 204.47 114.3 0)
+    (unit 4)
+    (exclude_from_sim no)
+    (in_bom yes)
+    (on_board yes)
+    (dnp no)
+    (fields_autoplaced yes)
+    (uuid af2504de-5b8e-5f52-b812-e5ac0d369270)
+    (property "Reference" "U1.uD"
+      (at 204.47 111.75999999999999 0)
+      (effects
+        (font
+          (size 1.27 1.27))
+        (justify left)))
+    (property "Value" "ICE40HX8K-BG121"
+      (at 204.47 116.84 0)
+      (effects
+        (font
+          (size 1.27 1.27))
+        (justify left)))
+    (property "Footprint" "Package_BGA:BGA-121_9.0x9.0mm_Layout11x11_P0.8mm_Ball0.4mm_Pad0.35mm_NSMD"
+      (at 204.47 114.3 0)
+      (effects
+        (font
+          (size 1.27 1.27))
+        (hide yes)))
+    (property "Datasheet" "http://www.latticesemi.com/Products/FPGAandCPLD/iCE40"
+      (at 204.47 114.3 0)
+      (effects
+        (font
+          (size 1.27 1.27))
+        (hide yes)))
+    (property "Description" "iCE40 HX FPGA, 7680 LUTs, 1.2V, BGA-121"
+      (at 204.47 114.3 0)
+      (effects
+        (font
+          (size 1.27 1.27))
+        (hide yes)))
+    (pin "F2"
+      (uuid ad1aa32c-dc66-5a8e-82b7-67c1dcef3ac0))
+    (pin "E1"
+      (uuid d5830d16-5ceb-574c-8534-acf9f36767d4))
+    (pin "J2"
+      (uuid 499d3dc6-c7bf-56af-870a-72f385a7ab40))
+    (pin "C3"
+      (uuid 68860733-748a-5602-8fe0-b2708b9dc69e))
+    (pin "G4"
+      (uuid 4e1bff40-f228-5df3-9776-f710a4473a23))
+    (pin "F3"
+      (uuid d0474558-1bd2-5490-8651-baba8883847e))
+    (pin "E2"
+      (uuid 5b10005b-eca2-51c5-9105-63cc5248e4fb))
+    (pin "K1"
+      (uuid aa26bd6d-e280-58e2-80cf-eda0ae2fcab9))
+    (pin "H1"
+      (uuid 73ecaf02-9cb4-5493-80de-93616be235f9))
+    (pin "C4"
+      (uuid 6f9df84e-69f3-585b-ae4c-8e9128f24d1c))
+    (pin "F4"
+      (uuid e962f228-4ca5-5154-8ab6-fc524c9d71aa))
+    (pin "B1"
+      (uuid 69fe18df-eadf-50a2-b36d-5ebb16e548f8))
+    (pin "E3"
+      (uuid 388a0e03-d267-5a99-ab29-7a3f99d753d3))
+    (pin "K2"
+      (uuid 2f20afcd-9622-52b7-8036-3d5189eeaad8))
+    (pin "H2"
+      (uuid cb6749c3-5e0a-5d23-b884-71722a8f2c69))
+    (pin "D1"
+      (uuid 6f19211b-f119-51b1-a7fa-5f2e19ff9b20))
+    (pin "G3"
+      (uuid 0e4ecf0b-5e35-52d7-ae73-4bb3a67d8802))
+    (pin "G1"
+      (uuid 13a531ea-8f4a-5f53-b59d-ba32c8570dbd))
+    (pin "B2"
+      (uuid 2e2c8928-28c0-5f8b-91ee-74ee8b17cb14))
+    (pin "E4"
+      (uuid 3c9707c5-f724-5128-9e3d-3f1ec5cb8288))
+    (pin "D2"
+      (uuid 7f03468b-6081-5959-ba63-235f66a041c5))
+    (pin "H3"
+      (uuid e3a32a53-bf05-5ad0-9ce4-a3e92ec29970))
+    (pin "C1"
+      (uuid 6816de56-5f8a-5657-a641-f85d67a4ca46))
+    (pin "G2"
+      (uuid 032e5868-c622-51e7-9f96-a69eced94089))
+    (pin "F1"
+      (uuid 9bbf3bbe-be0f-53ec-ac5d-a77109a1203e))
+    (pin "D3"
+      (uuid 007debbc-ce61-56f3-a5e5-3e29b9c5bc68))
+    (pin "J1"
+      (uuid a060becf-9a13-50e1-b696-df50763d30dd))
+    (pin "C2"
+      (uuid 99159353-9986-51f1-843a-74ab1b9d2539))
+    (instances
+      (project "SKiDL-Generated"
+        (path "/218b5f90-a139-55d3-a988-331ecbe7ee0c"
+          (reference "U1.uD")
+          (unit 4)))))
+  (symbol
+    (lib_id "FPGA_Lattice:ICE40HX8K-BG121")
+    (at 241.3 88.9 0)
+    (unit 5)
+    (exclude_from_sim no)
+    (in_bom yes)
+    (on_board yes)
+    (dnp no)
+    (fields_autoplaced yes)
+    (uuid 082e7ab1-c87c-5944-8cec-94f959793b8b)
+    (property "Reference" "U1.uE"
+      (at 241.3 86.36 0)
+      (effects
+        (font
+          (size 1.27 1.27))
+        (justify left)))
+    (property "Value" "ICE40HX8K-BG121"
+      (at 241.3 91.44000000000001 0)
+      (effects
+        (font
+          (size 1.27 1.27))
+        (justify left)))
+    (property "Footprint" "Package_BGA:BGA-121_9.0x9.0mm_Layout11x11_P0.8mm_Ball0.4mm_Pad0.35mm_NSMD"
+      (at 241.3 88.9 0)
+      (effects
+        (font
+          (size 1.27 1.27))
+        (hide yes)))
+    (property "Datasheet" "http://www.latticesemi.com/Products/FPGAandCPLD/iCE40"
+      (at 241.3 88.9 0)
+      (effects
+        (font
+          (size 1.27 1.27))
+        (hide yes)))
+    (property "Description" "iCE40 HX FPGA, 7680 LUTs, 1.2V, BGA-121"
+      (at 241.3 88.9 0)
+      (effects
+        (font
+          (size 1.27 1.27))
+        (hide yes)))
+    (pin "E6"
+      (uuid 1536c817-6e25-51ef-80d6-20ae80e3f437))
+    (pin "L10"
+      (uuid 343056a4-a04c-5d40-9f97-966218a3bd17))
+    (pin "J6"
+      (uuid 833d1c74-6a92-5057-a484-07b26e7a08b9))
+    (pin "C6"
+      (uuid a51eb2c1-c362-5291-9ad6-571a45a9587a))
+    (pin "G6"
+      (uuid 96d38741-925f-568e-ad66-436cd02fd2ba))
+    (pin "E7"
+      (uuid c7f1a08a-bd45-5244-b66b-148320fee25f))
+    (pin "L11"
+      (uuid 9d960fac-ae7c-5457-9e81-cc49a95bcdf3))
+    (pin "J9"
+      (uuid 41b6a99b-b7be-50b8-97dc-9bc3c6ef7f9c))
+    (pin "C10"
+      (uuid 37a5d83b-d354-5a37-9a27-bf2d8865234b))
+    (pin "G7"
+      (uuid 80ce022c-85e0-5683-b57c-2a9dd7b555e0))
+    (pin "F5"
+      (uuid f80716b9-2342-5f4f-aa06-b779339d9c2f))
+    (pin "K9"
+      (uuid a21464d8-00ce-59d5-8a26-3d1a99513760))
+    (pin "D4"
+      (uuid 26e5528d-3b60-5435-94f6-c07cea47bcfd))
+    (pin "H4"
+      (uuid fae64d95-3e97-5d32-872b-fb6efb57e70b))
+    (pin "F6"
+      (uuid 0a30449f-932b-5d9e-b23e-ae33a9eb1b04))
+    (pin "K10"
+      (uuid f445916f-65ba-5bac-a30c-98cd525ec2a7))
+    (pin "D8"
+      (uuid 7561be85-cd96-51f7-85fd-aeaa7e72b1cf))
+    (pin "B10"
+      (uuid 3aba1769-4dce-5366-ad5a-954aecbef89e))
+    (pin "H5"
+      (uuid a7ce98e8-b159-57da-80d7-f152136dd492))
+    (pin "F7"
+      (uuid a3a514ef-ed7a-50c2-aaaf-b25d25c245c9))
+    (pin "L6"
+      (uuid 31cfdc62-a973-5a08-9e5b-ac4a7e7807d3))
+    (pin "E5"
+      (uuid 5d8c2deb-a1e1-5cfe-8dc3-2e722eeb2210))
+    (pin "C5"
+      (uuid c706e56c-87b9-5e8d-b67c-352e37be79f0))
+    (pin "H8"
+      (uuid 3b57de71-20d3-5a18-935a-7ffb9e1da434))
+    (pin "G5"
+      (uuid 3ebeb3b8-1df2-5270-903f-0e941ebe9a58))
+    (instances
+      (project "SKiDL-Generated"
+        (path "/218b5f90-a139-55d3-a988-331ecbe7ee0c"
+          (reference "U1.uE")
+          (unit 5))))))

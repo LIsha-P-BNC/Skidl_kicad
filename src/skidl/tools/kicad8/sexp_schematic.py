@@ -18,9 +18,10 @@ Sources:
 
 import copy
 import datetime
+import math
 import os
 import uuid
-from collections import OrderedDict
+from collections import OrderedDict, defaultdict
 
 from simp_sexp import Sexp
 
@@ -44,6 +45,28 @@ _power_lib_text_cache = None
 _used_power_symbols = set()
 # Counter for #PWR references.
 _pwr_counter = [0]
+# Anchor points (mm) already used by any power-symbol label placed so
+# far in the current schematic (across all nets) -- placement can put two
+# unrelated pins (or several pins of one fanout net) at nearly the same
+# spot, and each pin's independently-computed label doesn't otherwise
+# know about the others.
+_placed_power_points = []
+
+# Stub wire length (mm) between a pin and the power symbol stamped on it.
+# KiCad power symbols position their Value-text label a fixed distance
+# from their own origin (e.g. GND places it 3.81mm out) on the assumption
+# there's normally some wire between a part and its ground/power flag.
+# Stamping the symbol with zero offset (right on the pin) makes that
+# label land back on the part itself in tightly-packed layouts. Using
+# the same 3.81mm here keeps the label's final position pinned at the
+# pin's original point, clear of the part regardless of its own pin
+# length.
+POWER_SYMBOL_STUB_LEN_MM = 7.62
+
+# Minimum center-to-center distance (mm) kept between two power-symbol
+# labels on the same net, so a fanout net stubbed at several nearby pins
+# doesn't get two overlapping "+3.3V"/"GND" texts.
+MIN_POWER_LABEL_SEPARATION_MM = 6.35
 
 
 def _get_power_lib_text():
@@ -99,6 +122,46 @@ def _get_power_symbol_names():
     return _power_symbol_names_cache
 
 
+# Built-in copies of the standard KiCad power-symbol graphics (extracted from
+# KiCad's own power.kicad_sym, with a few names aliased from the nearest real
+# symbol -- e.g. AVCC/AVDD/DVCC/DVDD/VBAT reuse VCC/VDD's graphic, AGND/DGND/PGND
+# reuse GND's -- since KiCad doesn't ship separate symbols for them but they're
+# still common net names). Used as a last-resort fallback when the real
+# library file can't be located on disk (e.g. no KiCad install / env var on the
+# machine running the generator), so lib_symbols is never left without a
+# definition for a name that _get_power_symbol_names() advertises as available.
+# Without this, KiCad renders an unresolved-symbol placeholder box in its place.
+_POWER_SYMBOL_FALLBACK_TEXT = {
+    '+12V': '(symbol "+12V"\n\t\t\t(power global)\n\t\t\t(pin_numbers\n\t\t\t\t(hide yes)\n\t\t\t)\n\t\t\t(pin_names\n\t\t\t\t(offset 0)\n\t\t\t\t(hide yes)\n\t\t\t)\n\t\t\t(exclude_from_sim no)\n\t\t\t(in_bom yes)\n\t\t\t(on_board yes)\n\t\t\t(in_pos_files yes)\n\t\t\t(duplicate_pin_numbers_are_jumpers no)\n\t\t\t(property "Reference" "#PWR"\n\t\t\t\t(at 0 -3.81 0)\n\t\t\t\t(show_name no)\n\t\t\t\t(do_not_autoplace no)\n\t\t\t\t(hide yes)\n\t\t\t\t(effects\n\t\t\t\t\t(font\n\t\t\t\t\t\t(size 1.27 1.27)\n\t\t\t\t\t)\n\t\t\t\t)\n\t\t\t)\n\t\t\t(property "Value" "+12V"\n\t\t\t\t(at 0 3.556 0)\n\t\t\t\t(show_name no)\n\t\t\t\t(do_not_autoplace no)\n\t\t\t\t(effects\n\t\t\t\t\t(font\n\t\t\t\t\t\t(size 1.27 1.27)\n\t\t\t\t\t)\n\t\t\t\t)\n\t\t\t)\n\t\t\t(property "Footprint" ""\n\t\t\t\t(at 0 0 0)\n\t\t\t\t(show_name no)\n\t\t\t\t(do_not_autoplace no)\n\t\t\t\t(hide yes)\n\t\t\t\t(effects\n\t\t\t\t\t(font\n\t\t\t\t\t\t(size 1.27 1.27)\n\t\t\t\t\t)\n\t\t\t\t)\n\t\t\t)\n\t\t\t(property "Datasheet" ""\n\t\t\t\t(at 0 0 0)\n\t\t\t\t(show_name no)\n\t\t\t\t(do_not_autoplace no)\n\t\t\t\t(hide yes)\n\t\t\t\t(effects\n\t\t\t\t\t(font\n\t\t\t\t\t\t(size 1.27 1.27)\n\t\t\t\t\t)\n\t\t\t\t)\n\t\t\t)\n\t\t\t(property "Description" "Power symbol creates a global label with name \\"+12V\\""\n\t\t\t\t(at 0 0 0)\n\t\t\t\t(show_name no)\n\t\t\t\t(do_not_autoplace no)\n\t\t\t\t(hide yes)\n\t\t\t\t(effects\n\t\t\t\t\t(font\n\t\t\t\t\t\t(size 1.27 1.27)\n\t\t\t\t\t)\n\t\t\t\t)\n\t\t\t)\n\t\t\t(property "ki_keywords" "global power"\n\t\t\t\t(at 0 0 0)\n\t\t\t\t(show_name no)\n\t\t\t\t(do_not_autoplace no)\n\t\t\t\t(hide yes)\n\t\t\t\t(effects\n\t\t\t\t\t(font\n\t\t\t\t\t\t(size 1.27 1.27)\n\t\t\t\t\t)\n\t\t\t\t)\n\t\t\t)\n\t\t\t(symbol "+12V_0_1"\n\t\t\t\t(polyline\n\t\t\t\t\t(pts\n\t\t\t\t\t\t(xy -0.762 1.27) (xy 0 2.54)\n\t\t\t\t\t)\n\t\t\t\t\t(stroke\n\t\t\t\t\t\t(width 0)\n\t\t\t\t\t\t(type default)\n\t\t\t\t\t)\n\t\t\t\t\t(fill\n\t\t\t\t\t\t(type none)\n\t\t\t\t\t)\n\t\t\t\t)\n\t\t\t\t(polyline\n\t\t\t\t\t(pts\n\t\t\t\t\t\t(xy 0 2.54) (xy 0.762 1.27)\n\t\t\t\t\t)\n\t\t\t\t\t(stroke\n\t\t\t\t\t\t(width 0)\n\t\t\t\t\t\t(type default)\n\t\t\t\t\t)\n\t\t\t\t\t(fill\n\t\t\t\t\t\t(type none)\n\t\t\t\t\t)\n\t\t\t\t)\n\t\t\t\t(polyline\n\t\t\t\t\t(pts\n\t\t\t\t\t\t(xy 0 0) (xy 0 2.54)\n\t\t\t\t\t)\n\t\t\t\t\t(stroke\n\t\t\t\t\t\t(width 0)\n\t\t\t\t\t\t(type default)\n\t\t\t\t\t)\n\t\t\t\t\t(fill\n\t\t\t\t\t\t(type none)\n\t\t\t\t\t)\n\t\t\t\t)\n\t\t\t)\n\t\t\t(symbol "+12V_1_1"\n\t\t\t\t(pin power_in line\n\t\t\t\t\t(at 0 0 90)\n\t\t\t\t\t(length 0)\n\t\t\t\t\t(name ""\n\t\t\t\t\t\t(effects\n\t\t\t\t\t\t\t(font\n\t\t\t\t\t\t\t\t(size 1.27 1.27)\n\t\t\t\t\t\t\t)\n\t\t\t\t\t\t)\n\t\t\t\t\t)\n\t\t\t\t\t(number "1"\n\t\t\t\t\t\t(effects\n\t\t\t\t\t\t\t(font\n\t\t\t\t\t\t\t\t(size 1.27 1.27)\n\t\t\t\t\t\t\t)\n\t\t\t\t\t\t)\n\t\t\t\t\t)\n\t\t\t\t)\n\t\t\t)\n\t\t\t(embedded_fonts no)\n\t\t)',
+    '+1V5': '(symbol "+1V5"\n\t\t\t(power global)\n\t\t\t(pin_numbers\n\t\t\t\t(hide yes)\n\t\t\t)\n\t\t\t(pin_names\n\t\t\t\t(offset 0)\n\t\t\t\t(hide yes)\n\t\t\t)\n\t\t\t(exclude_from_sim no)\n\t\t\t(in_bom yes)\n\t\t\t(on_board yes)\n\t\t\t(in_pos_files yes)\n\t\t\t(duplicate_pin_numbers_are_jumpers no)\n\t\t\t(property "Reference" "#PWR"\n\t\t\t\t(at 0 -3.81 0)\n\t\t\t\t(show_name no)\n\t\t\t\t(do_not_autoplace no)\n\t\t\t\t(hide yes)\n\t\t\t\t(effects\n\t\t\t\t\t(font\n\t\t\t\t\t\t(size 1.27 1.27)\n\t\t\t\t\t)\n\t\t\t\t)\n\t\t\t)\n\t\t\t(property "Value" "+1V5"\n\t\t\t\t(at 0 3.556 0)\n\t\t\t\t(show_name no)\n\t\t\t\t(do_not_autoplace no)\n\t\t\t\t(effects\n\t\t\t\t\t(font\n\t\t\t\t\t\t(size 1.27 1.27)\n\t\t\t\t\t)\n\t\t\t\t)\n\t\t\t)\n\t\t\t(property "Footprint" ""\n\t\t\t\t(at 0 0 0)\n\t\t\t\t(show_name no)\n\t\t\t\t(do_not_autoplace no)\n\t\t\t\t(hide yes)\n\t\t\t\t(effects\n\t\t\t\t\t(font\n\t\t\t\t\t\t(size 1.27 1.27)\n\t\t\t\t\t)\n\t\t\t\t)\n\t\t\t)\n\t\t\t(property "Datasheet" ""\n\t\t\t\t(at 0 0 0)\n\t\t\t\t(show_name no)\n\t\t\t\t(do_not_autoplace no)\n\t\t\t\t(hide yes)\n\t\t\t\t(effects\n\t\t\t\t\t(font\n\t\t\t\t\t\t(size 1.27 1.27)\n\t\t\t\t\t)\n\t\t\t\t)\n\t\t\t)\n\t\t\t(property "Description" "Power symbol creates a global label with name \\"+1V5\\""\n\t\t\t\t(at 0 0 0)\n\t\t\t\t(show_name no)\n\t\t\t\t(do_not_autoplace no)\n\t\t\t\t(hide yes)\n\t\t\t\t(effects\n\t\t\t\t\t(font\n\t\t\t\t\t\t(size 1.27 1.27)\n\t\t\t\t\t)\n\t\t\t\t)\n\t\t\t)\n\t\t\t(property "ki_keywords" "global power"\n\t\t\t\t(at 0 0 0)\n\t\t\t\t(show_name no)\n\t\t\t\t(do_not_autoplace no)\n\t\t\t\t(hide yes)\n\t\t\t\t(effects\n\t\t\t\t\t(font\n\t\t\t\t\t\t(size 1.27 1.27)\n\t\t\t\t\t)\n\t\t\t\t)\n\t\t\t)\n\t\t\t(symbol "+1V5_0_1"\n\t\t\t\t(polyline\n\t\t\t\t\t(pts\n\t\t\t\t\t\t(xy -0.762 1.27) (xy 0 2.54)\n\t\t\t\t\t)\n\t\t\t\t\t(stroke\n\t\t\t\t\t\t(width 0)\n\t\t\t\t\t\t(type default)\n\t\t\t\t\t)\n\t\t\t\t\t(fill\n\t\t\t\t\t\t(type none)\n\t\t\t\t\t)\n\t\t\t\t)\n\t\t\t\t(polyline\n\t\t\t\t\t(pts\n\t\t\t\t\t\t(xy 0 2.54) (xy 0.762 1.27)\n\t\t\t\t\t)\n\t\t\t\t\t(stroke\n\t\t\t\t\t\t(width 0)\n\t\t\t\t\t\t(type default)\n\t\t\t\t\t)\n\t\t\t\t\t(fill\n\t\t\t\t\t\t(type none)\n\t\t\t\t\t)\n\t\t\t\t)\n\t\t\t\t(polyline\n\t\t\t\t\t(pts\n\t\t\t\t\t\t(xy 0 0) (xy 0 2.54)\n\t\t\t\t\t)\n\t\t\t\t\t(stroke\n\t\t\t\t\t\t(width 0)\n\t\t\t\t\t\t(type default)\n\t\t\t\t\t)\n\t\t\t\t\t(fill\n\t\t\t\t\t\t(type none)\n\t\t\t\t\t)\n\t\t\t\t)\n\t\t\t)\n\t\t\t(symbol "+1V5_1_1"\n\t\t\t\t(pin power_in line\n\t\t\t\t\t(at 0 0 90)\n\t\t\t\t\t(length 0)\n\t\t\t\t\t(name ""\n\t\t\t\t\t\t(effects\n\t\t\t\t\t\t\t(font\n\t\t\t\t\t\t\t\t(size 1.27 1.27)\n\t\t\t\t\t\t\t)\n\t\t\t\t\t\t)\n\t\t\t\t\t)\n\t\t\t\t\t(number "1"\n\t\t\t\t\t\t(effects\n\t\t\t\t\t\t\t(font\n\t\t\t\t\t\t\t\t(size 1.27 1.27)\n\t\t\t\t\t\t\t)\n\t\t\t\t\t\t)\n\t\t\t\t\t)\n\t\t\t\t)\n\t\t\t)\n\t\t\t(embedded_fonts no)\n\t\t)',
+    '+1V8': '(symbol "+1V8"\n\t\t\t(power global)\n\t\t\t(pin_numbers\n\t\t\t\t(hide yes)\n\t\t\t)\n\t\t\t(pin_names\n\t\t\t\t(offset 0)\n\t\t\t\t(hide yes)\n\t\t\t)\n\t\t\t(exclude_from_sim no)\n\t\t\t(in_bom yes)\n\t\t\t(on_board yes)\n\t\t\t(in_pos_files yes)\n\t\t\t(duplicate_pin_numbers_are_jumpers no)\n\t\t\t(property "Reference" "#PWR"\n\t\t\t\t(at 0 -3.81 0)\n\t\t\t\t(show_name no)\n\t\t\t\t(do_not_autoplace no)\n\t\t\t\t(hide yes)\n\t\t\t\t(effects\n\t\t\t\t\t(font\n\t\t\t\t\t\t(size 1.27 1.27)\n\t\t\t\t\t)\n\t\t\t\t)\n\t\t\t)\n\t\t\t(property "Value" "+1V8"\n\t\t\t\t(at 0 3.556 0)\n\t\t\t\t(show_name no)\n\t\t\t\t(do_not_autoplace no)\n\t\t\t\t(effects\n\t\t\t\t\t(font\n\t\t\t\t\t\t(size 1.27 1.27)\n\t\t\t\t\t)\n\t\t\t\t)\n\t\t\t)\n\t\t\t(property "Footprint" ""\n\t\t\t\t(at 0 0 0)\n\t\t\t\t(show_name no)\n\t\t\t\t(do_not_autoplace no)\n\t\t\t\t(hide yes)\n\t\t\t\t(effects\n\t\t\t\t\t(font\n\t\t\t\t\t\t(size 1.27 1.27)\n\t\t\t\t\t)\n\t\t\t\t)\n\t\t\t)\n\t\t\t(property "Datasheet" ""\n\t\t\t\t(at 0 0 0)\n\t\t\t\t(show_name no)\n\t\t\t\t(do_not_autoplace no)\n\t\t\t\t(hide yes)\n\t\t\t\t(effects\n\t\t\t\t\t(font\n\t\t\t\t\t\t(size 1.27 1.27)\n\t\t\t\t\t)\n\t\t\t\t)\n\t\t\t)\n\t\t\t(property "Description" "Power symbol creates a global label with name \\"+1V8\\""\n\t\t\t\t(at 0 0 0)\n\t\t\t\t(show_name no)\n\t\t\t\t(do_not_autoplace no)\n\t\t\t\t(hide yes)\n\t\t\t\t(effects\n\t\t\t\t\t(font\n\t\t\t\t\t\t(size 1.27 1.27)\n\t\t\t\t\t)\n\t\t\t\t)\n\t\t\t)\n\t\t\t(property "ki_keywords" "global power"\n\t\t\t\t(at 0 0 0)\n\t\t\t\t(show_name no)\n\t\t\t\t(do_not_autoplace no)\n\t\t\t\t(hide yes)\n\t\t\t\t(effects\n\t\t\t\t\t(font\n\t\t\t\t\t\t(size 1.27 1.27)\n\t\t\t\t\t)\n\t\t\t\t)\n\t\t\t)\n\t\t\t(symbol "+1V8_0_1"\n\t\t\t\t(polyline\n\t\t\t\t\t(pts\n\t\t\t\t\t\t(xy -0.762 1.27) (xy 0 2.54)\n\t\t\t\t\t)\n\t\t\t\t\t(stroke\n\t\t\t\t\t\t(width 0)\n\t\t\t\t\t\t(type default)\n\t\t\t\t\t)\n\t\t\t\t\t(fill\n\t\t\t\t\t\t(type none)\n\t\t\t\t\t)\n\t\t\t\t)\n\t\t\t\t(polyline\n\t\t\t\t\t(pts\n\t\t\t\t\t\t(xy 0 2.54) (xy 0.762 1.27)\n\t\t\t\t\t)\n\t\t\t\t\t(stroke\n\t\t\t\t\t\t(width 0)\n\t\t\t\t\t\t(type default)\n\t\t\t\t\t)\n\t\t\t\t\t(fill\n\t\t\t\t\t\t(type none)\n\t\t\t\t\t)\n\t\t\t\t)\n\t\t\t\t(polyline\n\t\t\t\t\t(pts\n\t\t\t\t\t\t(xy 0 0) (xy 0 2.54)\n\t\t\t\t\t)\n\t\t\t\t\t(stroke\n\t\t\t\t\t\t(width 0)\n\t\t\t\t\t\t(type default)\n\t\t\t\t\t)\n\t\t\t\t\t(fill\n\t\t\t\t\t\t(type none)\n\t\t\t\t\t)\n\t\t\t\t)\n\t\t\t)\n\t\t\t(symbol "+1V8_1_1"\n\t\t\t\t(pin power_in line\n\t\t\t\t\t(at 0 0 90)\n\t\t\t\t\t(length 0)\n\t\t\t\t\t(name ""\n\t\t\t\t\t\t(effects\n\t\t\t\t\t\t\t(font\n\t\t\t\t\t\t\t\t(size 1.27 1.27)\n\t\t\t\t\t\t\t)\n\t\t\t\t\t\t)\n\t\t\t\t\t)\n\t\t\t\t\t(number "1"\n\t\t\t\t\t\t(effects\n\t\t\t\t\t\t\t(font\n\t\t\t\t\t\t\t\t(size 1.27 1.27)\n\t\t\t\t\t\t\t)\n\t\t\t\t\t\t)\n\t\t\t\t\t)\n\t\t\t\t)\n\t\t\t)\n\t\t\t(embedded_fonts no)\n\t\t)',
+    '+2V5': '(symbol "+2V5"\n\t\t\t(power global)\n\t\t\t(pin_numbers\n\t\t\t\t(hide yes)\n\t\t\t)\n\t\t\t(pin_names\n\t\t\t\t(offset 0)\n\t\t\t\t(hide yes)\n\t\t\t)\n\t\t\t(exclude_from_sim no)\n\t\t\t(in_bom yes)\n\t\t\t(on_board yes)\n\t\t\t(in_pos_files yes)\n\t\t\t(duplicate_pin_numbers_are_jumpers no)\n\t\t\t(property "Reference" "#PWR"\n\t\t\t\t(at 0 -3.81 0)\n\t\t\t\t(show_name no)\n\t\t\t\t(do_not_autoplace no)\n\t\t\t\t(hide yes)\n\t\t\t\t(effects\n\t\t\t\t\t(font\n\t\t\t\t\t\t(size 1.27 1.27)\n\t\t\t\t\t)\n\t\t\t\t)\n\t\t\t)\n\t\t\t(property "Value" "+2V5"\n\t\t\t\t(at 0 3.556 0)\n\t\t\t\t(show_name no)\n\t\t\t\t(do_not_autoplace no)\n\t\t\t\t(effects\n\t\t\t\t\t(font\n\t\t\t\t\t\t(size 1.27 1.27)\n\t\t\t\t\t)\n\t\t\t\t)\n\t\t\t)\n\t\t\t(property "Footprint" ""\n\t\t\t\t(at 0 0 0)\n\t\t\t\t(show_name no)\n\t\t\t\t(do_not_autoplace no)\n\t\t\t\t(hide yes)\n\t\t\t\t(effects\n\t\t\t\t\t(font\n\t\t\t\t\t\t(size 1.27 1.27)\n\t\t\t\t\t)\n\t\t\t\t)\n\t\t\t)\n\t\t\t(property "Datasheet" ""\n\t\t\t\t(at 0 0 0)\n\t\t\t\t(show_name no)\n\t\t\t\t(do_not_autoplace no)\n\t\t\t\t(hide yes)\n\t\t\t\t(effects\n\t\t\t\t\t(font\n\t\t\t\t\t\t(size 1.27 1.27)\n\t\t\t\t\t)\n\t\t\t\t)\n\t\t\t)\n\t\t\t(property "Description" "Power symbol creates a global label with name \\"+2V5\\""\n\t\t\t\t(at 0 0 0)\n\t\t\t\t(show_name no)\n\t\t\t\t(do_not_autoplace no)\n\t\t\t\t(hide yes)\n\t\t\t\t(effects\n\t\t\t\t\t(font\n\t\t\t\t\t\t(size 1.27 1.27)\n\t\t\t\t\t)\n\t\t\t\t)\n\t\t\t)\n\t\t\t(property "ki_keywords" "global power"\n\t\t\t\t(at 0 0 0)\n\t\t\t\t(show_name no)\n\t\t\t\t(do_not_autoplace no)\n\t\t\t\t(hide yes)\n\t\t\t\t(effects\n\t\t\t\t\t(font\n\t\t\t\t\t\t(size 1.27 1.27)\n\t\t\t\t\t)\n\t\t\t\t)\n\t\t\t)\n\t\t\t(symbol "+2V5_0_1"\n\t\t\t\t(polyline\n\t\t\t\t\t(pts\n\t\t\t\t\t\t(xy -0.762 1.27) (xy 0 2.54)\n\t\t\t\t\t)\n\t\t\t\t\t(stroke\n\t\t\t\t\t\t(width 0)\n\t\t\t\t\t\t(type default)\n\t\t\t\t\t)\n\t\t\t\t\t(fill\n\t\t\t\t\t\t(type none)\n\t\t\t\t\t)\n\t\t\t\t)\n\t\t\t\t(polyline\n\t\t\t\t\t(pts\n\t\t\t\t\t\t(xy 0 2.54) (xy 0.762 1.27)\n\t\t\t\t\t)\n\t\t\t\t\t(stroke\n\t\t\t\t\t\t(width 0)\n\t\t\t\t\t\t(type default)\n\t\t\t\t\t)\n\t\t\t\t\t(fill\n\t\t\t\t\t\t(type none)\n\t\t\t\t\t)\n\t\t\t\t)\n\t\t\t\t(polyline\n\t\t\t\t\t(pts\n\t\t\t\t\t\t(xy 0 0) (xy 0 2.54)\n\t\t\t\t\t)\n\t\t\t\t\t(stroke\n\t\t\t\t\t\t(width 0)\n\t\t\t\t\t\t(type default)\n\t\t\t\t\t)\n\t\t\t\t\t(fill\n\t\t\t\t\t\t(type none)\n\t\t\t\t\t)\n\t\t\t\t)\n\t\t\t)\n\t\t\t(symbol "+2V5_1_1"\n\t\t\t\t(pin power_in line\n\t\t\t\t\t(at 0 0 90)\n\t\t\t\t\t(length 0)\n\t\t\t\t\t(name ""\n\t\t\t\t\t\t(effects\n\t\t\t\t\t\t\t(font\n\t\t\t\t\t\t\t\t(size 1.27 1.27)\n\t\t\t\t\t\t\t)\n\t\t\t\t\t\t)\n\t\t\t\t\t)\n\t\t\t\t\t(number "1"\n\t\t\t\t\t\t(effects\n\t\t\t\t\t\t\t(font\n\t\t\t\t\t\t\t\t(size 1.27 1.27)\n\t\t\t\t\t\t\t)\n\t\t\t\t\t\t)\n\t\t\t\t\t)\n\t\t\t\t)\n\t\t\t)\n\t\t\t(embedded_fonts no)\n\t\t)',
+    '+3.3V': '(symbol "+3.3V"\n\t\t\t(power global)\n\t\t\t(pin_numbers\n\t\t\t\t(hide yes)\n\t\t\t)\n\t\t\t(pin_names\n\t\t\t\t(offset 0)\n\t\t\t\t(hide yes)\n\t\t\t)\n\t\t\t(exclude_from_sim no)\n\t\t\t(in_bom yes)\n\t\t\t(on_board yes)\n\t\t\t(in_pos_files yes)\n\t\t\t(duplicate_pin_numbers_are_jumpers no)\n\t\t\t(property "Reference" "#PWR"\n\t\t\t\t(at 0 -3.81 0)\n\t\t\t\t(show_name no)\n\t\t\t\t(do_not_autoplace no)\n\t\t\t\t(hide yes)\n\t\t\t\t(effects\n\t\t\t\t\t(font\n\t\t\t\t\t\t(size 1.27 1.27)\n\t\t\t\t\t)\n\t\t\t\t)\n\t\t\t)\n\t\t\t(property "Value" "+3.3V"\n\t\t\t\t(at 0 3.556 0)\n\t\t\t\t(show_name no)\n\t\t\t\t(do_not_autoplace no)\n\t\t\t\t(effects\n\t\t\t\t\t(font\n\t\t\t\t\t\t(size 1.27 1.27)\n\t\t\t\t\t)\n\t\t\t\t)\n\t\t\t)\n\t\t\t(property "Footprint" ""\n\t\t\t\t(at 0 0 0)\n\t\t\t\t(show_name no)\n\t\t\t\t(do_not_autoplace no)\n\t\t\t\t(hide yes)\n\t\t\t\t(effects\n\t\t\t\t\t(font\n\t\t\t\t\t\t(size 1.27 1.27)\n\t\t\t\t\t)\n\t\t\t\t)\n\t\t\t)\n\t\t\t(property "Datasheet" ""\n\t\t\t\t(at 0 0 0)\n\t\t\t\t(show_name no)\n\t\t\t\t(do_not_autoplace no)\n\t\t\t\t(hide yes)\n\t\t\t\t(effects\n\t\t\t\t\t(font\n\t\t\t\t\t\t(size 1.27 1.27)\n\t\t\t\t\t)\n\t\t\t\t)\n\t\t\t)\n\t\t\t(property "Description" "Power symbol creates a global label with name \\"+3.3V\\""\n\t\t\t\t(at 0 0 0)\n\t\t\t\t(show_name no)\n\t\t\t\t(do_not_autoplace no)\n\t\t\t\t(hide yes)\n\t\t\t\t(effects\n\t\t\t\t\t(font\n\t\t\t\t\t\t(size 1.27 1.27)\n\t\t\t\t\t)\n\t\t\t\t)\n\t\t\t)\n\t\t\t(property "ki_keywords" "global power"\n\t\t\t\t(at 0 0 0)\n\t\t\t\t(show_name no)\n\t\t\t\t(do_not_autoplace no)\n\t\t\t\t(hide yes)\n\t\t\t\t(effects\n\t\t\t\t\t(font\n\t\t\t\t\t\t(size 1.27 1.27)\n\t\t\t\t\t)\n\t\t\t\t)\n\t\t\t)\n\t\t\t(symbol "+3.3V_0_1"\n\t\t\t\t(polyline\n\t\t\t\t\t(pts\n\t\t\t\t\t\t(xy -0.762 1.27) (xy 0 2.54)\n\t\t\t\t\t)\n\t\t\t\t\t(stroke\n\t\t\t\t\t\t(width 0)\n\t\t\t\t\t\t(type default)\n\t\t\t\t\t)\n\t\t\t\t\t(fill\n\t\t\t\t\t\t(type none)\n\t\t\t\t\t)\n\t\t\t\t)\n\t\t\t\t(polyline\n\t\t\t\t\t(pts\n\t\t\t\t\t\t(xy 0 2.54) (xy 0.762 1.27)\n\t\t\t\t\t)\n\t\t\t\t\t(stroke\n\t\t\t\t\t\t(width 0)\n\t\t\t\t\t\t(type default)\n\t\t\t\t\t)\n\t\t\t\t\t(fill\n\t\t\t\t\t\t(type none)\n\t\t\t\t\t)\n\t\t\t\t)\n\t\t\t\t(polyline\n\t\t\t\t\t(pts\n\t\t\t\t\t\t(xy 0 0) (xy 0 2.54)\n\t\t\t\t\t)\n\t\t\t\t\t(stroke\n\t\t\t\t\t\t(width 0)\n\t\t\t\t\t\t(type default)\n\t\t\t\t\t)\n\t\t\t\t\t(fill\n\t\t\t\t\t\t(type none)\n\t\t\t\t\t)\n\t\t\t\t)\n\t\t\t)\n\t\t\t(symbol "+3.3V_1_1"\n\t\t\t\t(pin power_in line\n\t\t\t\t\t(at 0 0 90)\n\t\t\t\t\t(length 0)\n\t\t\t\t\t(name ""\n\t\t\t\t\t\t(effects\n\t\t\t\t\t\t\t(font\n\t\t\t\t\t\t\t\t(size 1.27 1.27)\n\t\t\t\t\t\t\t)\n\t\t\t\t\t\t)\n\t\t\t\t\t)\n\t\t\t\t\t(number "1"\n\t\t\t\t\t\t(effects\n\t\t\t\t\t\t\t(font\n\t\t\t\t\t\t\t\t(size 1.27 1.27)\n\t\t\t\t\t\t\t)\n\t\t\t\t\t\t)\n\t\t\t\t\t)\n\t\t\t\t)\n\t\t\t)\n\t\t\t(embedded_fonts no)\n\t\t)',
+    '+3.3VA': '(symbol "+3.3VA"\n\t\t\t(power global)\n\t\t\t(pin_numbers\n\t\t\t\t(hide yes)\n\t\t\t)\n\t\t\t(pin_names\n\t\t\t\t(offset 0)\n\t\t\t\t(hide yes)\n\t\t\t)\n\t\t\t(exclude_from_sim no)\n\t\t\t(in_bom yes)\n\t\t\t(on_board yes)\n\t\t\t(in_pos_files yes)\n\t\t\t(duplicate_pin_numbers_are_jumpers no)\n\t\t\t(property "Reference" "#PWR"\n\t\t\t\t(at 0 -3.81 0)\n\t\t\t\t(show_name no)\n\t\t\t\t(do_not_autoplace no)\n\t\t\t\t(hide yes)\n\t\t\t\t(effects\n\t\t\t\t\t(font\n\t\t\t\t\t\t(size 1.27 1.27)\n\t\t\t\t\t)\n\t\t\t\t)\n\t\t\t)\n\t\t\t(property "Value" "+3.3VA"\n\t\t\t\t(at 0 3.556 0)\n\t\t\t\t(show_name no)\n\t\t\t\t(do_not_autoplace no)\n\t\t\t\t(effects\n\t\t\t\t\t(font\n\t\t\t\t\t\t(size 1.27 1.27)\n\t\t\t\t\t)\n\t\t\t\t)\n\t\t\t)\n\t\t\t(property "Footprint" ""\n\t\t\t\t(at 0 0 0)\n\t\t\t\t(show_name no)\n\t\t\t\t(do_not_autoplace no)\n\t\t\t\t(hide yes)\n\t\t\t\t(effects\n\t\t\t\t\t(font\n\t\t\t\t\t\t(size 1.27 1.27)\n\t\t\t\t\t)\n\t\t\t\t)\n\t\t\t)\n\t\t\t(property "Datasheet" ""\n\t\t\t\t(at 0 0 0)\n\t\t\t\t(show_name no)\n\t\t\t\t(do_not_autoplace no)\n\t\t\t\t(hide yes)\n\t\t\t\t(effects\n\t\t\t\t\t(font\n\t\t\t\t\t\t(size 1.27 1.27)\n\t\t\t\t\t)\n\t\t\t\t)\n\t\t\t)\n\t\t\t(property "Description" "Power symbol creates a global label with name \\"+3.3VA\\""\n\t\t\t\t(at 0 0 0)\n\t\t\t\t(show_name no)\n\t\t\t\t(do_not_autoplace no)\n\t\t\t\t(hide yes)\n\t\t\t\t(effects\n\t\t\t\t\t(font\n\t\t\t\t\t\t(size 1.27 1.27)\n\t\t\t\t\t)\n\t\t\t\t)\n\t\t\t)\n\t\t\t(property "ki_keywords" "global power"\n\t\t\t\t(at 0 0 0)\n\t\t\t\t(show_name no)\n\t\t\t\t(do_not_autoplace no)\n\t\t\t\t(hide yes)\n\t\t\t\t(effects\n\t\t\t\t\t(font\n\t\t\t\t\t\t(size 1.27 1.27)\n\t\t\t\t\t)\n\t\t\t\t)\n\t\t\t)\n\t\t\t(symbol "+3.3VA_0_1"\n\t\t\t\t(polyline\n\t\t\t\t\t(pts\n\t\t\t\t\t\t(xy -0.762 1.27) (xy 0 2.54)\n\t\t\t\t\t)\n\t\t\t\t\t(stroke\n\t\t\t\t\t\t(width 0)\n\t\t\t\t\t\t(type default)\n\t\t\t\t\t)\n\t\t\t\t\t(fill\n\t\t\t\t\t\t(type none)\n\t\t\t\t\t)\n\t\t\t\t)\n\t\t\t\t(polyline\n\t\t\t\t\t(pts\n\t\t\t\t\t\t(xy 0 2.54) (xy 0.762 1.27)\n\t\t\t\t\t)\n\t\t\t\t\t(stroke\n\t\t\t\t\t\t(width 0)\n\t\t\t\t\t\t(type default)\n\t\t\t\t\t)\n\t\t\t\t\t(fill\n\t\t\t\t\t\t(type none)\n\t\t\t\t\t)\n\t\t\t\t)\n\t\t\t\t(polyline\n\t\t\t\t\t(pts\n\t\t\t\t\t\t(xy 0 0) (xy 0 2.54)\n\t\t\t\t\t)\n\t\t\t\t\t(stroke\n\t\t\t\t\t\t(width 0)\n\t\t\t\t\t\t(type default)\n\t\t\t\t\t)\n\t\t\t\t\t(fill\n\t\t\t\t\t\t(type none)\n\t\t\t\t\t)\n\t\t\t\t)\n\t\t\t)\n\t\t\t(symbol "+3.3VA_1_1"\n\t\t\t\t(pin power_in line\n\t\t\t\t\t(at 0 0 90)\n\t\t\t\t\t(length 0)\n\t\t\t\t\t(name ""\n\t\t\t\t\t\t(effects\n\t\t\t\t\t\t\t(font\n\t\t\t\t\t\t\t\t(size 1.27 1.27)\n\t\t\t\t\t\t\t)\n\t\t\t\t\t\t)\n\t\t\t\t\t)\n\t\t\t\t\t(number "1"\n\t\t\t\t\t\t(effects\n\t\t\t\t\t\t\t(font\n\t\t\t\t\t\t\t\t(size 1.27 1.27)\n\t\t\t\t\t\t\t)\n\t\t\t\t\t\t)\n\t\t\t\t\t)\n\t\t\t\t)\n\t\t\t)\n\t\t\t(embedded_fonts no)\n\t\t)',
+    '+3.3VADC': '(symbol "+3.3VADC"\n\t\t\t(power global)\n\t\t\t(pin_numbers\n\t\t\t\t(hide yes)\n\t\t\t)\n\t\t\t(pin_names\n\t\t\t\t(offset 0)\n\t\t\t\t(hide yes)\n\t\t\t)\n\t\t\t(exclude_from_sim no)\n\t\t\t(in_bom yes)\n\t\t\t(on_board yes)\n\t\t\t(in_pos_files yes)\n\t\t\t(duplicate_pin_numbers_are_jumpers no)\n\t\t\t(property "Reference" "#PWR"\n\t\t\t\t(at 3.81 -1.27 0)\n\t\t\t\t(show_name no)\n\t\t\t\t(do_not_autoplace no)\n\t\t\t\t(hide yes)\n\t\t\t\t(effects\n\t\t\t\t\t(font\n\t\t\t\t\t\t(size 1.27 1.27)\n\t\t\t\t\t)\n\t\t\t\t)\n\t\t\t)\n\t\t\t(property "Value" "+3.3VADC"\n\t\t\t\t(at 0 3.556 0)\n\t\t\t\t(show_name no)\n\t\t\t\t(do_not_autoplace no)\n\t\t\t\t(effects\n\t\t\t\t\t(font\n\t\t\t\t\t\t(size 1.27 1.27)\n\t\t\t\t\t)\n\t\t\t\t)\n\t\t\t)\n\t\t\t(property "Footprint" ""\n\t\t\t\t(at 0 0 0)\n\t\t\t\t(show_name no)\n\t\t\t\t(do_not_autoplace no)\n\t\t\t\t(hide yes)\n\t\t\t\t(effects\n\t\t\t\t\t(font\n\t\t\t\t\t\t(size 1.27 1.27)\n\t\t\t\t\t)\n\t\t\t\t)\n\t\t\t)\n\t\t\t(property "Datasheet" ""\n\t\t\t\t(at 0 0 0)\n\t\t\t\t(show_name no)\n\t\t\t\t(do_not_autoplace no)\n\t\t\t\t(hide yes)\n\t\t\t\t(effects\n\t\t\t\t\t(font\n\t\t\t\t\t\t(size 1.27 1.27)\n\t\t\t\t\t)\n\t\t\t\t)\n\t\t\t)\n\t\t\t(property "Description" "Power symbol creates a global label with name \\"+3.3VADC\\""\n\t\t\t\t(at 0 0 0)\n\t\t\t\t(show_name no)\n\t\t\t\t(do_not_autoplace no)\n\t\t\t\t(hide yes)\n\t\t\t\t(effects\n\t\t\t\t\t(font\n\t\t\t\t\t\t(size 1.27 1.27)\n\t\t\t\t\t)\n\t\t\t\t)\n\t\t\t)\n\t\t\t(property "ki_keywords" "global power"\n\t\t\t\t(at 0 0 0)\n\t\t\t\t(show_name no)\n\t\t\t\t(do_not_autoplace no)\n\t\t\t\t(hide yes)\n\t\t\t\t(effects\n\t\t\t\t\t(font\n\t\t\t\t\t\t(size 1.27 1.27)\n\t\t\t\t\t)\n\t\t\t\t)\n\t\t\t)\n\t\t\t(symbol "+3.3VADC_0_0"\n\t\t\t\t(pin power_in line\n\t\t\t\t\t(at 0 0 90)\n\t\t\t\t\t(length 0)\n\t\t\t\t\t(name ""\n\t\t\t\t\t\t(effects\n\t\t\t\t\t\t\t(font\n\t\t\t\t\t\t\t\t(size 1.27 1.27)\n\t\t\t\t\t\t\t)\n\t\t\t\t\t\t)\n\t\t\t\t\t)\n\t\t\t\t\t(number "1"\n\t\t\t\t\t\t(effects\n\t\t\t\t\t\t\t(font\n\t\t\t\t\t\t\t\t(size 1.27 1.27)\n\t\t\t\t\t\t\t)\n\t\t\t\t\t\t)\n\t\t\t\t\t)\n\t\t\t\t)\n\t\t\t)\n\t\t\t(symbol "+3.3VADC_0_1"\n\t\t\t\t(polyline\n\t\t\t\t\t(pts\n\t\t\t\t\t\t(xy -0.762 1.27) (xy 0 2.54)\n\t\t\t\t\t)\n\t\t\t\t\t(stroke\n\t\t\t\t\t\t(width 0)\n\t\t\t\t\t\t(type default)\n\t\t\t\t\t)\n\t\t\t\t\t(fill\n\t\t\t\t\t\t(type none)\n\t\t\t\t\t)\n\t\t\t\t)\n\t\t\t\t(polyline\n\t\t\t\t\t(pts\n\t\t\t\t\t\t(xy 0 2.54) (xy 0.762 1.27)\n\t\t\t\t\t)\n\t\t\t\t\t(stroke\n\t\t\t\t\t\t(width 0)\n\t\t\t\t\t\t(type default)\n\t\t\t\t\t)\n\t\t\t\t\t(fill\n\t\t\t\t\t\t(type none)\n\t\t\t\t\t)\n\t\t\t\t)\n\t\t\t\t(polyline\n\t\t\t\t\t(pts\n\t\t\t\t\t\t(xy 0 0) (xy 0 2.54)\n\t\t\t\t\t)\n\t\t\t\t\t(stroke\n\t\t\t\t\t\t(width 0)\n\t\t\t\t\t\t(type default)\n\t\t\t\t\t)\n\t\t\t\t\t(fill\n\t\t\t\t\t\t(type none)\n\t\t\t\t\t)\n\t\t\t\t)\n\t\t\t)\n\t\t\t(embedded_fonts no)\n\t\t)',
+    '+3.3VDAC': '(symbol "+3.3VDAC"\n\t\t\t(power global)\n\t\t\t(pin_numbers\n\t\t\t\t(hide yes)\n\t\t\t)\n\t\t\t(pin_names\n\t\t\t\t(offset 0)\n\t\t\t\t(hide yes)\n\t\t\t)\n\t\t\t(exclude_from_sim no)\n\t\t\t(in_bom yes)\n\t\t\t(on_board yes)\n\t\t\t(in_pos_files yes)\n\t\t\t(duplicate_pin_numbers_are_jumpers no)\n\t\t\t(property "Reference" "#PWR"\n\t\t\t\t(at 3.81 -1.27 0)\n\t\t\t\t(show_name no)\n\t\t\t\t(do_not_autoplace no)\n\t\t\t\t(hide yes)\n\t\t\t\t(effects\n\t\t\t\t\t(font\n\t\t\t\t\t\t(size 1.27 1.27)\n\t\t\t\t\t)\n\t\t\t\t)\n\t\t\t)\n\t\t\t(property "Value" "+3.3VDAC"\n\t\t\t\t(at 0 3.556 0)\n\t\t\t\t(show_name no)\n\t\t\t\t(do_not_autoplace no)\n\t\t\t\t(effects\n\t\t\t\t\t(font\n\t\t\t\t\t\t(size 1.27 1.27)\n\t\t\t\t\t)\n\t\t\t\t)\n\t\t\t)\n\t\t\t(property "Footprint" ""\n\t\t\t\t(at 0 0 0)\n\t\t\t\t(show_name no)\n\t\t\t\t(do_not_autoplace no)\n\t\t\t\t(hide yes)\n\t\t\t\t(effects\n\t\t\t\t\t(font\n\t\t\t\t\t\t(size 1.27 1.27)\n\t\t\t\t\t)\n\t\t\t\t)\n\t\t\t)\n\t\t\t(property "Datasheet" ""\n\t\t\t\t(at 0 0 0)\n\t\t\t\t(show_name no)\n\t\t\t\t(do_not_autoplace no)\n\t\t\t\t(hide yes)\n\t\t\t\t(effects\n\t\t\t\t\t(font\n\t\t\t\t\t\t(size 1.27 1.27)\n\t\t\t\t\t)\n\t\t\t\t)\n\t\t\t)\n\t\t\t(property "Description" "Power symbol creates a global label with name \\"+3.3VDAC\\""\n\t\t\t\t(at 0 0 0)\n\t\t\t\t(show_name no)\n\t\t\t\t(do_not_autoplace no)\n\t\t\t\t(hide yes)\n\t\t\t\t(effects\n\t\t\t\t\t(font\n\t\t\t\t\t\t(size 1.27 1.27)\n\t\t\t\t\t)\n\t\t\t\t)\n\t\t\t)\n\t\t\t(property "ki_keywords" "global power"\n\t\t\t\t(at 0 0 0)\n\t\t\t\t(show_name no)\n\t\t\t\t(do_not_autoplace no)\n\t\t\t\t(hide yes)\n\t\t\t\t(effects\n\t\t\t\t\t(font\n\t\t\t\t\t\t(size 1.27 1.27)\n\t\t\t\t\t)\n\t\t\t\t)\n\t\t\t)\n\t\t\t(symbol "+3.3VDAC_0_0"\n\t\t\t\t(pin power_in line\n\t\t\t\t\t(at 0 0 90)\n\t\t\t\t\t(length 0)\n\t\t\t\t\t(name ""\n\t\t\t\t\t\t(effects\n\t\t\t\t\t\t\t(font\n\t\t\t\t\t\t\t\t(size 1.27 1.27)\n\t\t\t\t\t\t\t)\n\t\t\t\t\t\t)\n\t\t\t\t\t)\n\t\t\t\t\t(number "1"\n\t\t\t\t\t\t(effects\n\t\t\t\t\t\t\t(font\n\t\t\t\t\t\t\t\t(size 1.27 1.27)\n\t\t\t\t\t\t\t)\n\t\t\t\t\t\t)\n\t\t\t\t\t)\n\t\t\t\t)\n\t\t\t)\n\t\t\t(symbol "+3.3VDAC_0_1"\n\t\t\t\t(polyline\n\t\t\t\t\t(pts\n\t\t\t\t\t\t(xy -0.762 1.27) (xy 0 2.54)\n\t\t\t\t\t)\n\t\t\t\t\t(stroke\n\t\t\t\t\t\t(width 0)\n\t\t\t\t\t\t(type default)\n\t\t\t\t\t)\n\t\t\t\t\t(fill\n\t\t\t\t\t\t(type none)\n\t\t\t\t\t)\n\t\t\t\t)\n\t\t\t\t(polyline\n\t\t\t\t\t(pts\n\t\t\t\t\t\t(xy 0 2.54) (xy 0.762 1.27)\n\t\t\t\t\t)\n\t\t\t\t\t(stroke\n\t\t\t\t\t\t(width 0)\n\t\t\t\t\t\t(type default)\n\t\t\t\t\t)\n\t\t\t\t\t(fill\n\t\t\t\t\t\t(type none)\n\t\t\t\t\t)\n\t\t\t\t)\n\t\t\t\t(polyline\n\t\t\t\t\t(pts\n\t\t\t\t\t\t(xy 0 0) (xy 0 2.54)\n\t\t\t\t\t)\n\t\t\t\t\t(stroke\n\t\t\t\t\t\t(width 0)\n\t\t\t\t\t\t(type default)\n\t\t\t\t\t)\n\t\t\t\t\t(fill\n\t\t\t\t\t\t(type none)\n\t\t\t\t\t)\n\t\t\t\t)\n\t\t\t)\n\t\t\t(embedded_fonts no)\n\t\t)',
+    '+3V3': '(symbol "+3V3"\n\t\t\t(power global)\n\t\t\t(pin_numbers\n\t\t\t\t(hide yes)\n\t\t\t)\n\t\t\t(pin_names\n\t\t\t\t(offset 0)\n\t\t\t\t(hide yes)\n\t\t\t)\n\t\t\t(exclude_from_sim no)\n\t\t\t(in_bom yes)\n\t\t\t(on_board yes)\n\t\t\t(in_pos_files yes)\n\t\t\t(duplicate_pin_numbers_are_jumpers no)\n\t\t\t(property "Reference" "#PWR"\n\t\t\t\t(at 0 -3.81 0)\n\t\t\t\t(show_name no)\n\t\t\t\t(do_not_autoplace no)\n\t\t\t\t(hide yes)\n\t\t\t\t(effects\n\t\t\t\t\t(font\n\t\t\t\t\t\t(size 1.27 1.27)\n\t\t\t\t\t)\n\t\t\t\t)\n\t\t\t)\n\t\t\t(property "Value" "+3V3"\n\t\t\t\t(at 0 3.556 0)\n\t\t\t\t(show_name no)\n\t\t\t\t(do_not_autoplace no)\n\t\t\t\t(effects\n\t\t\t\t\t(font\n\t\t\t\t\t\t(size 1.27 1.27)\n\t\t\t\t\t)\n\t\t\t\t)\n\t\t\t)\n\t\t\t(property "Footprint" ""\n\t\t\t\t(at 0 0 0)\n\t\t\t\t(show_name no)\n\t\t\t\t(do_not_autoplace no)\n\t\t\t\t(hide yes)\n\t\t\t\t(effects\n\t\t\t\t\t(font\n\t\t\t\t\t\t(size 1.27 1.27)\n\t\t\t\t\t)\n\t\t\t\t)\n\t\t\t)\n\t\t\t(property "Datasheet" ""\n\t\t\t\t(at 0 0 0)\n\t\t\t\t(show_name no)\n\t\t\t\t(do_not_autoplace no)\n\t\t\t\t(hide yes)\n\t\t\t\t(effects\n\t\t\t\t\t(font\n\t\t\t\t\t\t(size 1.27 1.27)\n\t\t\t\t\t)\n\t\t\t\t)\n\t\t\t)\n\t\t\t(property "Description" "Power symbol creates a global label with name \\"+3V3\\""\n\t\t\t\t(at 0 0 0)\n\t\t\t\t(show_name no)\n\t\t\t\t(do_not_autoplace no)\n\t\t\t\t(hide yes)\n\t\t\t\t(effects\n\t\t\t\t\t(font\n\t\t\t\t\t\t(size 1.27 1.27)\n\t\t\t\t\t)\n\t\t\t\t)\n\t\t\t)\n\t\t\t(property "ki_keywords" "global power"\n\t\t\t\t(at 0 0 0)\n\t\t\t\t(show_name no)\n\t\t\t\t(do_not_autoplace no)\n\t\t\t\t(hide yes)\n\t\t\t\t(effects\n\t\t\t\t\t(font\n\t\t\t\t\t\t(size 1.27 1.27)\n\t\t\t\t\t)\n\t\t\t\t)\n\t\t\t)\n\t\t\t(symbol "+3V3_0_1"\n\t\t\t\t(polyline\n\t\t\t\t\t(pts\n\t\t\t\t\t\t(xy -0.762 1.27) (xy 0 2.54)\n\t\t\t\t\t)\n\t\t\t\t\t(stroke\n\t\t\t\t\t\t(width 0)\n\t\t\t\t\t\t(type default)\n\t\t\t\t\t)\n\t\t\t\t\t(fill\n\t\t\t\t\t\t(type none)\n\t\t\t\t\t)\n\t\t\t\t)\n\t\t\t\t(polyline\n\t\t\t\t\t(pts\n\t\t\t\t\t\t(xy 0 2.54) (xy 0.762 1.27)\n\t\t\t\t\t)\n\t\t\t\t\t(stroke\n\t\t\t\t\t\t(width 0)\n\t\t\t\t\t\t(type default)\n\t\t\t\t\t)\n\t\t\t\t\t(fill\n\t\t\t\t\t\t(type none)\n\t\t\t\t\t)\n\t\t\t\t)\n\t\t\t\t(polyline\n\t\t\t\t\t(pts\n\t\t\t\t\t\t(xy 0 0) (xy 0 2.54)\n\t\t\t\t\t)\n\t\t\t\t\t(stroke\n\t\t\t\t\t\t(width 0)\n\t\t\t\t\t\t(type default)\n\t\t\t\t\t)\n\t\t\t\t\t(fill\n\t\t\t\t\t\t(type none)\n\t\t\t\t\t)\n\t\t\t\t)\n\t\t\t)\n\t\t\t(symbol "+3V3_1_1"\n\t\t\t\t(pin power_in line\n\t\t\t\t\t(at 0 0 90)\n\t\t\t\t\t(length 0)\n\t\t\t\t\t(name ""\n\t\t\t\t\t\t(effects\n\t\t\t\t\t\t\t(font\n\t\t\t\t\t\t\t\t(size 1.27 1.27)\n\t\t\t\t\t\t\t)\n\t\t\t\t\t\t)\n\t\t\t\t\t)\n\t\t\t\t\t(number "1"\n\t\t\t\t\t\t(effects\n\t\t\t\t\t\t\t(font\n\t\t\t\t\t\t\t\t(size 1.27 1.27)\n\t\t\t\t\t\t\t)\n\t\t\t\t\t\t)\n\t\t\t\t\t)\n\t\t\t\t)\n\t\t\t)\n\t\t\t(embedded_fonts no)\n\t\t)',
+    '+5V': '(symbol "+5V"\n\t\t\t(power global)\n\t\t\t(pin_numbers\n\t\t\t\t(hide yes)\n\t\t\t)\n\t\t\t(pin_names\n\t\t\t\t(offset 0)\n\t\t\t\t(hide yes)\n\t\t\t)\n\t\t\t(exclude_from_sim no)\n\t\t\t(in_bom yes)\n\t\t\t(on_board yes)\n\t\t\t(in_pos_files yes)\n\t\t\t(duplicate_pin_numbers_are_jumpers no)\n\t\t\t(property "Reference" "#PWR"\n\t\t\t\t(at 0 -3.81 0)\n\t\t\t\t(show_name no)\n\t\t\t\t(do_not_autoplace no)\n\t\t\t\t(hide yes)\n\t\t\t\t(effects\n\t\t\t\t\t(font\n\t\t\t\t\t\t(size 1.27 1.27)\n\t\t\t\t\t)\n\t\t\t\t)\n\t\t\t)\n\t\t\t(property "Value" "+5V"\n\t\t\t\t(at 0 3.556 0)\n\t\t\t\t(show_name no)\n\t\t\t\t(do_not_autoplace no)\n\t\t\t\t(effects\n\t\t\t\t\t(font\n\t\t\t\t\t\t(size 1.27 1.27)\n\t\t\t\t\t)\n\t\t\t\t)\n\t\t\t)\n\t\t\t(property "Footprint" ""\n\t\t\t\t(at 0 0 0)\n\t\t\t\t(show_name no)\n\t\t\t\t(do_not_autoplace no)\n\t\t\t\t(hide yes)\n\t\t\t\t(effects\n\t\t\t\t\t(font\n\t\t\t\t\t\t(size 1.27 1.27)\n\t\t\t\t\t)\n\t\t\t\t)\n\t\t\t)\n\t\t\t(property "Datasheet" ""\n\t\t\t\t(at 0 0 0)\n\t\t\t\t(show_name no)\n\t\t\t\t(do_not_autoplace no)\n\t\t\t\t(hide yes)\n\t\t\t\t(effects\n\t\t\t\t\t(font\n\t\t\t\t\t\t(size 1.27 1.27)\n\t\t\t\t\t)\n\t\t\t\t)\n\t\t\t)\n\t\t\t(property "Description" "Power symbol creates a global label with name \\"+5V\\""\n\t\t\t\t(at 0 0 0)\n\t\t\t\t(show_name no)\n\t\t\t\t(do_not_autoplace no)\n\t\t\t\t(hide yes)\n\t\t\t\t(effects\n\t\t\t\t\t(font\n\t\t\t\t\t\t(size 1.27 1.27)\n\t\t\t\t\t)\n\t\t\t\t)\n\t\t\t)\n\t\t\t(property "ki_keywords" "global power"\n\t\t\t\t(at 0 0 0)\n\t\t\t\t(show_name no)\n\t\t\t\t(do_not_autoplace no)\n\t\t\t\t(hide yes)\n\t\t\t\t(effects\n\t\t\t\t\t(font\n\t\t\t\t\t\t(size 1.27 1.27)\n\t\t\t\t\t)\n\t\t\t\t)\n\t\t\t)\n\t\t\t(symbol "+5V_0_1"\n\t\t\t\t(polyline\n\t\t\t\t\t(pts\n\t\t\t\t\t\t(xy -0.762 1.27) (xy 0 2.54)\n\t\t\t\t\t)\n\t\t\t\t\t(stroke\n\t\t\t\t\t\t(width 0)\n\t\t\t\t\t\t(type default)\n\t\t\t\t\t)\n\t\t\t\t\t(fill\n\t\t\t\t\t\t(type none)\n\t\t\t\t\t)\n\t\t\t\t)\n\t\t\t\t(polyline\n\t\t\t\t\t(pts\n\t\t\t\t\t\t(xy 0 2.54) (xy 0.762 1.27)\n\t\t\t\t\t)\n\t\t\t\t\t(stroke\n\t\t\t\t\t\t(width 0)\n\t\t\t\t\t\t(type default)\n\t\t\t\t\t)\n\t\t\t\t\t(fill\n\t\t\t\t\t\t(type none)\n\t\t\t\t\t)\n\t\t\t\t)\n\t\t\t\t(polyline\n\t\t\t\t\t(pts\n\t\t\t\t\t\t(xy 0 0) (xy 0 2.54)\n\t\t\t\t\t)\n\t\t\t\t\t(stroke\n\t\t\t\t\t\t(width 0)\n\t\t\t\t\t\t(type default)\n\t\t\t\t\t)\n\t\t\t\t\t(fill\n\t\t\t\t\t\t(type none)\n\t\t\t\t\t)\n\t\t\t\t)\n\t\t\t)\n\t\t\t(symbol "+5V_1_1"\n\t\t\t\t(pin power_in line\n\t\t\t\t\t(at 0 0 90)\n\t\t\t\t\t(length 0)\n\t\t\t\t\t(name ""\n\t\t\t\t\t\t(effects\n\t\t\t\t\t\t\t(font\n\t\t\t\t\t\t\t\t(size 1.27 1.27)\n\t\t\t\t\t\t\t)\n\t\t\t\t\t\t)\n\t\t\t\t\t)\n\t\t\t\t\t(number "1"\n\t\t\t\t\t\t(effects\n\t\t\t\t\t\t\t(font\n\t\t\t\t\t\t\t\t(size 1.27 1.27)\n\t\t\t\t\t\t\t)\n\t\t\t\t\t\t)\n\t\t\t\t\t)\n\t\t\t\t)\n\t\t\t)\n\t\t\t(embedded_fonts no)\n\t\t)',
+    'AGND': '(symbol "AGND"\n\t\t\t(power global)\n\t\t\t(pin_numbers\n\t\t\t\t(hide yes)\n\t\t\t)\n\t\t\t(pin_names\n\t\t\t\t(offset 0)\n\t\t\t\t(hide yes)\n\t\t\t)\n\t\t\t(exclude_from_sim no)\n\t\t\t(in_bom yes)\n\t\t\t(on_board yes)\n\t\t\t(in_pos_files yes)\n\t\t\t(duplicate_pin_numbers_are_jumpers no)\n\t\t\t(property "Reference" "#PWR"\n\t\t\t\t(at 0 -6.35 0)\n\t\t\t\t(show_name no)\n\t\t\t\t(do_not_autoplace no)\n\t\t\t\t(hide yes)\n\t\t\t\t(effects\n\t\t\t\t\t(font\n\t\t\t\t\t\t(size 1.27 1.27)\n\t\t\t\t\t)\n\t\t\t\t)\n\t\t\t)\n\t\t\t(property "Value" "AGND"\n\t\t\t\t(at 0 -3.81 0)\n\t\t\t\t(show_name no)\n\t\t\t\t(do_not_autoplace no)\n\t\t\t\t(effects\n\t\t\t\t\t(font\n\t\t\t\t\t\t(size 1.27 1.27)\n\t\t\t\t\t)\n\t\t\t\t)\n\t\t\t)\n\t\t\t(property "Footprint" ""\n\t\t\t\t(at 0 0 0)\n\t\t\t\t(show_name no)\n\t\t\t\t(do_not_autoplace no)\n\t\t\t\t(hide yes)\n\t\t\t\t(effects\n\t\t\t\t\t(font\n\t\t\t\t\t\t(size 1.27 1.27)\n\t\t\t\t\t)\n\t\t\t\t)\n\t\t\t)\n\t\t\t(property "Datasheet" ""\n\t\t\t\t(at 0 0 0)\n\t\t\t\t(show_name no)\n\t\t\t\t(do_not_autoplace no)\n\t\t\t\t(hide yes)\n\t\t\t\t(effects\n\t\t\t\t\t(font\n\t\t\t\t\t\t(size 1.27 1.27)\n\t\t\t\t\t)\n\t\t\t\t)\n\t\t\t)\n\t\t\t(property "Description" "Power symbol creates a global label with name \\"AGND\\" , ground"\n\t\t\t\t(at 0 0 0)\n\t\t\t\t(show_name no)\n\t\t\t\t(do_not_autoplace no)\n\t\t\t\t(hide yes)\n\t\t\t\t(effects\n\t\t\t\t\t(font\n\t\t\t\t\t\t(size 1.27 1.27)\n\t\t\t\t\t)\n\t\t\t\t)\n\t\t\t)\n\t\t\t(property "ki_keywords" "global power"\n\t\t\t\t(at 0 0 0)\n\t\t\t\t(show_name no)\n\t\t\t\t(do_not_autoplace no)\n\t\t\t\t(hide yes)\n\t\t\t\t(effects\n\t\t\t\t\t(font\n\t\t\t\t\t\t(size 1.27 1.27)\n\t\t\t\t\t)\n\t\t\t\t)\n\t\t\t)\n\t\t\t(symbol "AGND_0_1"\n\t\t\t\t(polyline\n\t\t\t\t\t(pts\n\t\t\t\t\t\t(xy 0 0) (xy 0 -1.27) (xy 1.27 -1.27) (xy 0 -2.54) (xy -1.27 -1.27) (xy 0 -1.27)\n\t\t\t\t\t)\n\t\t\t\t\t(stroke\n\t\t\t\t\t\t(width 0)\n\t\t\t\t\t\t(type default)\n\t\t\t\t\t)\n\t\t\t\t\t(fill\n\t\t\t\t\t\t(type none)\n\t\t\t\t\t)\n\t\t\t\t)\n\t\t\t)\n\t\t\t(symbol "AGND_1_1"\n\t\t\t\t(pin power_in line\n\t\t\t\t\t(at 0 0 270)\n\t\t\t\t\t(length 0)\n\t\t\t\t\t(name ""\n\t\t\t\t\t\t(effects\n\t\t\t\t\t\t\t(font\n\t\t\t\t\t\t\t\t(size 1.27 1.27)\n\t\t\t\t\t\t\t)\n\t\t\t\t\t\t)\n\t\t\t\t\t)\n\t\t\t\t\t(number "1"\n\t\t\t\t\t\t(effects\n\t\t\t\t\t\t\t(font\n\t\t\t\t\t\t\t\t(size 1.27 1.27)\n\t\t\t\t\t\t\t)\n\t\t\t\t\t\t)\n\t\t\t\t\t)\n\t\t\t\t)\n\t\t\t)\n\t\t\t(embedded_fonts no)\n\t\t)',
+    'AVCC': '(symbol "AVCC"\n\t\t\t(power global)\n\t\t\t(pin_numbers\n\t\t\t\t(hide yes)\n\t\t\t)\n\t\t\t(pin_names\n\t\t\t\t(offset 0)\n\t\t\t\t(hide yes)\n\t\t\t)\n\t\t\t(exclude_from_sim no)\n\t\t\t(in_bom yes)\n\t\t\t(on_board yes)\n\t\t\t(in_pos_files yes)\n\t\t\t(duplicate_pin_numbers_are_jumpers no)\n\t\t\t(property "Reference" "#PWR"\n\t\t\t\t(at 0 -3.81 0)\n\t\t\t\t(show_name no)\n\t\t\t\t(do_not_autoplace no)\n\t\t\t\t(hide yes)\n\t\t\t\t(effects\n\t\t\t\t\t(font\n\t\t\t\t\t\t(size 1.27 1.27)\n\t\t\t\t\t)\n\t\t\t\t)\n\t\t\t)\n\t\t\t(property "Value" "AVCC"\n\t\t\t\t(at 0 3.556 0)\n\t\t\t\t(show_name no)\n\t\t\t\t(do_not_autoplace no)\n\t\t\t\t(effects\n\t\t\t\t\t(font\n\t\t\t\t\t\t(size 1.27 1.27)\n\t\t\t\t\t)\n\t\t\t\t)\n\t\t\t)\n\t\t\t(property "Footprint" ""\n\t\t\t\t(at 0 0 0)\n\t\t\t\t(show_name no)\n\t\t\t\t(do_not_autoplace no)\n\t\t\t\t(hide yes)\n\t\t\t\t(effects\n\t\t\t\t\t(font\n\t\t\t\t\t\t(size 1.27 1.27)\n\t\t\t\t\t)\n\t\t\t\t)\n\t\t\t)\n\t\t\t(property "Datasheet" ""\n\t\t\t\t(at 0 0 0)\n\t\t\t\t(show_name no)\n\t\t\t\t(do_not_autoplace no)\n\t\t\t\t(hide yes)\n\t\t\t\t(effects\n\t\t\t\t\t(font\n\t\t\t\t\t\t(size 1.27 1.27)\n\t\t\t\t\t)\n\t\t\t\t)\n\t\t\t)\n\t\t\t(property "Description" "Power symbol creates a global label with name \\"AVCC\\""\n\t\t\t\t(at 0 0 0)\n\t\t\t\t(show_name no)\n\t\t\t\t(do_not_autoplace no)\n\t\t\t\t(hide yes)\n\t\t\t\t(effects\n\t\t\t\t\t(font\n\t\t\t\t\t\t(size 1.27 1.27)\n\t\t\t\t\t)\n\t\t\t\t)\n\t\t\t)\n\t\t\t(property "ki_keywords" "global power"\n\t\t\t\t(at 0 0 0)\n\t\t\t\t(show_name no)\n\t\t\t\t(do_not_autoplace no)\n\t\t\t\t(hide yes)\n\t\t\t\t(effects\n\t\t\t\t\t(font\n\t\t\t\t\t\t(size 1.27 1.27)\n\t\t\t\t\t)\n\t\t\t\t)\n\t\t\t)\n\t\t\t(symbol "AVCC_0_1"\n\t\t\t\t(polyline\n\t\t\t\t\t(pts\n\t\t\t\t\t\t(xy -0.762 1.27) (xy 0 2.54)\n\t\t\t\t\t)\n\t\t\t\t\t(stroke\n\t\t\t\t\t\t(width 0)\n\t\t\t\t\t\t(type default)\n\t\t\t\t\t)\n\t\t\t\t\t(fill\n\t\t\t\t\t\t(type none)\n\t\t\t\t\t)\n\t\t\t\t)\n\t\t\t\t(polyline\n\t\t\t\t\t(pts\n\t\t\t\t\t\t(xy 0 2.54) (xy 0.762 1.27)\n\t\t\t\t\t)\n\t\t\t\t\t(stroke\n\t\t\t\t\t\t(width 0)\n\t\t\t\t\t\t(type default)\n\t\t\t\t\t)\n\t\t\t\t\t(fill\n\t\t\t\t\t\t(type none)\n\t\t\t\t\t)\n\t\t\t\t)\n\t\t\t\t(polyline\n\t\t\t\t\t(pts\n\t\t\t\t\t\t(xy 0 0) (xy 0 2.54)\n\t\t\t\t\t)\n\t\t\t\t\t(stroke\n\t\t\t\t\t\t(width 0)\n\t\t\t\t\t\t(type default)\n\t\t\t\t\t)\n\t\t\t\t\t(fill\n\t\t\t\t\t\t(type none)\n\t\t\t\t\t)\n\t\t\t\t)\n\t\t\t)\n\t\t\t(symbol "AVCC_1_1"\n\t\t\t\t(pin power_in line\n\t\t\t\t\t(at 0 0 90)\n\t\t\t\t\t(length 0)\n\t\t\t\t\t(name ""\n\t\t\t\t\t\t(effects\n\t\t\t\t\t\t\t(font\n\t\t\t\t\t\t\t\t(size 1.27 1.27)\n\t\t\t\t\t\t\t)\n\t\t\t\t\t\t)\n\t\t\t\t\t)\n\t\t\t\t\t(number "1"\n\t\t\t\t\t\t(effects\n\t\t\t\t\t\t\t(font\n\t\t\t\t\t\t\t\t(size 1.27 1.27)\n\t\t\t\t\t\t\t)\n\t\t\t\t\t\t)\n\t\t\t\t\t)\n\t\t\t\t)\n\t\t\t)\n\t\t\t(embedded_fonts no)\n\t\t)',
+    'AVDD': '(symbol "AVDD"\n\t\t\t(power global)\n\t\t\t(pin_numbers\n\t\t\t\t(hide yes)\n\t\t\t)\n\t\t\t(pin_names\n\t\t\t\t(offset 0)\n\t\t\t\t(hide yes)\n\t\t\t)\n\t\t\t(exclude_from_sim no)\n\t\t\t(in_bom yes)\n\t\t\t(on_board yes)\n\t\t\t(in_pos_files yes)\n\t\t\t(duplicate_pin_numbers_are_jumpers no)\n\t\t\t(property "Reference" "#PWR"\n\t\t\t\t(at 0 -3.81 0)\n\t\t\t\t(show_name no)\n\t\t\t\t(do_not_autoplace no)\n\t\t\t\t(hide yes)\n\t\t\t\t(effects\n\t\t\t\t\t(font\n\t\t\t\t\t\t(size 1.27 1.27)\n\t\t\t\t\t)\n\t\t\t\t)\n\t\t\t)\n\t\t\t(property "Value" "AVDD"\n\t\t\t\t(at 0 3.556 0)\n\t\t\t\t(show_name no)\n\t\t\t\t(do_not_autoplace no)\n\t\t\t\t(effects\n\t\t\t\t\t(font\n\t\t\t\t\t\t(size 1.27 1.27)\n\t\t\t\t\t)\n\t\t\t\t)\n\t\t\t)\n\t\t\t(property "Footprint" ""\n\t\t\t\t(at 0 0 0)\n\t\t\t\t(show_name no)\n\t\t\t\t(do_not_autoplace no)\n\t\t\t\t(hide yes)\n\t\t\t\t(effects\n\t\t\t\t\t(font\n\t\t\t\t\t\t(size 1.27 1.27)\n\t\t\t\t\t)\n\t\t\t\t)\n\t\t\t)\n\t\t\t(property "Datasheet" ""\n\t\t\t\t(at 0 0 0)\n\t\t\t\t(show_name no)\n\t\t\t\t(do_not_autoplace no)\n\t\t\t\t(hide yes)\n\t\t\t\t(effects\n\t\t\t\t\t(font\n\t\t\t\t\t\t(size 1.27 1.27)\n\t\t\t\t\t)\n\t\t\t\t)\n\t\t\t)\n\t\t\t(property "Description" "Power symbol creates a global label with name \\"AVDD\\""\n\t\t\t\t(at 0 0 0)\n\t\t\t\t(show_name no)\n\t\t\t\t(do_not_autoplace no)\n\t\t\t\t(hide yes)\n\t\t\t\t(effects\n\t\t\t\t\t(font\n\t\t\t\t\t\t(size 1.27 1.27)\n\t\t\t\t\t)\n\t\t\t\t)\n\t\t\t)\n\t\t\t(property "ki_keywords" "global power"\n\t\t\t\t(at 0 0 0)\n\t\t\t\t(show_name no)\n\t\t\t\t(do_not_autoplace no)\n\t\t\t\t(hide yes)\n\t\t\t\t(effects\n\t\t\t\t\t(font\n\t\t\t\t\t\t(size 1.27 1.27)\n\t\t\t\t\t)\n\t\t\t\t)\n\t\t\t)\n\t\t\t(symbol "AVDD_0_1"\n\t\t\t\t(polyline\n\t\t\t\t\t(pts\n\t\t\t\t\t\t(xy -0.762 1.27) (xy 0 2.54)\n\t\t\t\t\t)\n\t\t\t\t\t(stroke\n\t\t\t\t\t\t(width 0)\n\t\t\t\t\t\t(type default)\n\t\t\t\t\t)\n\t\t\t\t\t(fill\n\t\t\t\t\t\t(type none)\n\t\t\t\t\t)\n\t\t\t\t)\n\t\t\t\t(polyline\n\t\t\t\t\t(pts\n\t\t\t\t\t\t(xy 0 2.54) (xy 0.762 1.27)\n\t\t\t\t\t)\n\t\t\t\t\t(stroke\n\t\t\t\t\t\t(width 0)\n\t\t\t\t\t\t(type default)\n\t\t\t\t\t)\n\t\t\t\t\t(fill\n\t\t\t\t\t\t(type none)\n\t\t\t\t\t)\n\t\t\t\t)\n\t\t\t\t(polyline\n\t\t\t\t\t(pts\n\t\t\t\t\t\t(xy 0 0) (xy 0 2.54)\n\t\t\t\t\t)\n\t\t\t\t\t(stroke\n\t\t\t\t\t\t(width 0)\n\t\t\t\t\t\t(type default)\n\t\t\t\t\t)\n\t\t\t\t\t(fill\n\t\t\t\t\t\t(type none)\n\t\t\t\t\t)\n\t\t\t\t)\n\t\t\t)\n\t\t\t(symbol "AVDD_1_1"\n\t\t\t\t(pin power_in line\n\t\t\t\t\t(at 0 0 90)\n\t\t\t\t\t(length 0)\n\t\t\t\t\t(name ""\n\t\t\t\t\t\t(effects\n\t\t\t\t\t\t\t(font\n\t\t\t\t\t\t\t\t(size 1.27 1.27)\n\t\t\t\t\t\t\t)\n\t\t\t\t\t\t)\n\t\t\t\t\t)\n\t\t\t\t\t(number "1"\n\t\t\t\t\t\t(effects\n\t\t\t\t\t\t\t(font\n\t\t\t\t\t\t\t\t(size 1.27 1.27)\n\t\t\t\t\t\t\t)\n\t\t\t\t\t\t)\n\t\t\t\t\t)\n\t\t\t\t)\n\t\t\t)\n\t\t\t(embedded_fonts no)\n\t\t)',
+    'DGND': '(symbol "DGND"\n\t\t\t(power global)\n\t\t\t(pin_numbers\n\t\t\t\t(hide yes)\n\t\t\t)\n\t\t\t(pin_names\n\t\t\t\t(offset 0)\n\t\t\t\t(hide yes)\n\t\t\t)\n\t\t\t(exclude_from_sim no)\n\t\t\t(in_bom yes)\n\t\t\t(on_board yes)\n\t\t\t(in_pos_files yes)\n\t\t\t(duplicate_pin_numbers_are_jumpers no)\n\t\t\t(property "Reference" "#PWR"\n\t\t\t\t(at 0 -6.35 0)\n\t\t\t\t(show_name no)\n\t\t\t\t(do_not_autoplace no)\n\t\t\t\t(hide yes)\n\t\t\t\t(effects\n\t\t\t\t\t(font\n\t\t\t\t\t\t(size 1.27 1.27)\n\t\t\t\t\t)\n\t\t\t\t)\n\t\t\t)\n\t\t\t(property "Value" "DGND"\n\t\t\t\t(at 0 -3.81 0)\n\t\t\t\t(show_name no)\n\t\t\t\t(do_not_autoplace no)\n\t\t\t\t(effects\n\t\t\t\t\t(font\n\t\t\t\t\t\t(size 1.27 1.27)\n\t\t\t\t\t)\n\t\t\t\t)\n\t\t\t)\n\t\t\t(property "Footprint" ""\n\t\t\t\t(at 0 0 0)\n\t\t\t\t(show_name no)\n\t\t\t\t(do_not_autoplace no)\n\t\t\t\t(hide yes)\n\t\t\t\t(effects\n\t\t\t\t\t(font\n\t\t\t\t\t\t(size 1.27 1.27)\n\t\t\t\t\t)\n\t\t\t\t)\n\t\t\t)\n\t\t\t(property "Datasheet" ""\n\t\t\t\t(at 0 0 0)\n\t\t\t\t(show_name no)\n\t\t\t\t(do_not_autoplace no)\n\t\t\t\t(hide yes)\n\t\t\t\t(effects\n\t\t\t\t\t(font\n\t\t\t\t\t\t(size 1.27 1.27)\n\t\t\t\t\t)\n\t\t\t\t)\n\t\t\t)\n\t\t\t(property "Description" "Power symbol creates a global label with name \\"DGND\\" , ground"\n\t\t\t\t(at 0 0 0)\n\t\t\t\t(show_name no)\n\t\t\t\t(do_not_autoplace no)\n\t\t\t\t(hide yes)\n\t\t\t\t(effects\n\t\t\t\t\t(font\n\t\t\t\t\t\t(size 1.27 1.27)\n\t\t\t\t\t)\n\t\t\t\t)\n\t\t\t)\n\t\t\t(property "ki_keywords" "global power"\n\t\t\t\t(at 0 0 0)\n\t\t\t\t(show_name no)\n\t\t\t\t(do_not_autoplace no)\n\t\t\t\t(hide yes)\n\t\t\t\t(effects\n\t\t\t\t\t(font\n\t\t\t\t\t\t(size 1.27 1.27)\n\t\t\t\t\t)\n\t\t\t\t)\n\t\t\t)\n\t\t\t(symbol "DGND_0_1"\n\t\t\t\t(polyline\n\t\t\t\t\t(pts\n\t\t\t\t\t\t(xy 0 0) (xy 0 -1.27) (xy 1.27 -1.27) (xy 0 -2.54) (xy -1.27 -1.27) (xy 0 -1.27)\n\t\t\t\t\t)\n\t\t\t\t\t(stroke\n\t\t\t\t\t\t(width 0)\n\t\t\t\t\t\t(type default)\n\t\t\t\t\t)\n\t\t\t\t\t(fill\n\t\t\t\t\t\t(type none)\n\t\t\t\t\t)\n\t\t\t\t)\n\t\t\t)\n\t\t\t(symbol "DGND_1_1"\n\t\t\t\t(pin power_in line\n\t\t\t\t\t(at 0 0 270)\n\t\t\t\t\t(length 0)\n\t\t\t\t\t(name ""\n\t\t\t\t\t\t(effects\n\t\t\t\t\t\t\t(font\n\t\t\t\t\t\t\t\t(size 1.27 1.27)\n\t\t\t\t\t\t\t)\n\t\t\t\t\t\t)\n\t\t\t\t\t)\n\t\t\t\t\t(number "1"\n\t\t\t\t\t\t(effects\n\t\t\t\t\t\t\t(font\n\t\t\t\t\t\t\t\t(size 1.27 1.27)\n\t\t\t\t\t\t\t)\n\t\t\t\t\t\t)\n\t\t\t\t\t)\n\t\t\t\t)\n\t\t\t)\n\t\t\t(embedded_fonts no)\n\t\t)',
+    'DVCC': '(symbol "DVCC"\n\t\t\t(power global)\n\t\t\t(pin_numbers\n\t\t\t\t(hide yes)\n\t\t\t)\n\t\t\t(pin_names\n\t\t\t\t(offset 0)\n\t\t\t\t(hide yes)\n\t\t\t)\n\t\t\t(exclude_from_sim no)\n\t\t\t(in_bom yes)\n\t\t\t(on_board yes)\n\t\t\t(in_pos_files yes)\n\t\t\t(duplicate_pin_numbers_are_jumpers no)\n\t\t\t(property "Reference" "#PWR"\n\t\t\t\t(at 0 -3.81 0)\n\t\t\t\t(show_name no)\n\t\t\t\t(do_not_autoplace no)\n\t\t\t\t(hide yes)\n\t\t\t\t(effects\n\t\t\t\t\t(font\n\t\t\t\t\t\t(size 1.27 1.27)\n\t\t\t\t\t)\n\t\t\t\t)\n\t\t\t)\n\t\t\t(property "Value" "DVCC"\n\t\t\t\t(at 0 3.556 0)\n\t\t\t\t(show_name no)\n\t\t\t\t(do_not_autoplace no)\n\t\t\t\t(effects\n\t\t\t\t\t(font\n\t\t\t\t\t\t(size 1.27 1.27)\n\t\t\t\t\t)\n\t\t\t\t)\n\t\t\t)\n\t\t\t(property "Footprint" ""\n\t\t\t\t(at 0 0 0)\n\t\t\t\t(show_name no)\n\t\t\t\t(do_not_autoplace no)\n\t\t\t\t(hide yes)\n\t\t\t\t(effects\n\t\t\t\t\t(font\n\t\t\t\t\t\t(size 1.27 1.27)\n\t\t\t\t\t)\n\t\t\t\t)\n\t\t\t)\n\t\t\t(property "Datasheet" ""\n\t\t\t\t(at 0 0 0)\n\t\t\t\t(show_name no)\n\t\t\t\t(do_not_autoplace no)\n\t\t\t\t(hide yes)\n\t\t\t\t(effects\n\t\t\t\t\t(font\n\t\t\t\t\t\t(size 1.27 1.27)\n\t\t\t\t\t)\n\t\t\t\t)\n\t\t\t)\n\t\t\t(property "Description" "Power symbol creates a global label with name \\"DVCC\\""\n\t\t\t\t(at 0 0 0)\n\t\t\t\t(show_name no)\n\t\t\t\t(do_not_autoplace no)\n\t\t\t\t(hide yes)\n\t\t\t\t(effects\n\t\t\t\t\t(font\n\t\t\t\t\t\t(size 1.27 1.27)\n\t\t\t\t\t)\n\t\t\t\t)\n\t\t\t)\n\t\t\t(property "ki_keywords" "global power"\n\t\t\t\t(at 0 0 0)\n\t\t\t\t(show_name no)\n\t\t\t\t(do_not_autoplace no)\n\t\t\t\t(hide yes)\n\t\t\t\t(effects\n\t\t\t\t\t(font\n\t\t\t\t\t\t(size 1.27 1.27)\n\t\t\t\t\t)\n\t\t\t\t)\n\t\t\t)\n\t\t\t(symbol "DVCC_0_1"\n\t\t\t\t(polyline\n\t\t\t\t\t(pts\n\t\t\t\t\t\t(xy -0.762 1.27) (xy 0 2.54)\n\t\t\t\t\t)\n\t\t\t\t\t(stroke\n\t\t\t\t\t\t(width 0)\n\t\t\t\t\t\t(type default)\n\t\t\t\t\t)\n\t\t\t\t\t(fill\n\t\t\t\t\t\t(type none)\n\t\t\t\t\t)\n\t\t\t\t)\n\t\t\t\t(polyline\n\t\t\t\t\t(pts\n\t\t\t\t\t\t(xy 0 2.54) (xy 0.762 1.27)\n\t\t\t\t\t)\n\t\t\t\t\t(stroke\n\t\t\t\t\t\t(width 0)\n\t\t\t\t\t\t(type default)\n\t\t\t\t\t)\n\t\t\t\t\t(fill\n\t\t\t\t\t\t(type none)\n\t\t\t\t\t)\n\t\t\t\t)\n\t\t\t\t(polyline\n\t\t\t\t\t(pts\n\t\t\t\t\t\t(xy 0 0) (xy 0 2.54)\n\t\t\t\t\t)\n\t\t\t\t\t(stroke\n\t\t\t\t\t\t(width 0)\n\t\t\t\t\t\t(type default)\n\t\t\t\t\t)\n\t\t\t\t\t(fill\n\t\t\t\t\t\t(type none)\n\t\t\t\t\t)\n\t\t\t\t)\n\t\t\t)\n\t\t\t(symbol "DVCC_1_1"\n\t\t\t\t(pin power_in line\n\t\t\t\t\t(at 0 0 90)\n\t\t\t\t\t(length 0)\n\t\t\t\t\t(name ""\n\t\t\t\t\t\t(effects\n\t\t\t\t\t\t\t(font\n\t\t\t\t\t\t\t\t(size 1.27 1.27)\n\t\t\t\t\t\t\t)\n\t\t\t\t\t\t)\n\t\t\t\t\t)\n\t\t\t\t\t(number "1"\n\t\t\t\t\t\t(effects\n\t\t\t\t\t\t\t(font\n\t\t\t\t\t\t\t\t(size 1.27 1.27)\n\t\t\t\t\t\t\t)\n\t\t\t\t\t\t)\n\t\t\t\t\t)\n\t\t\t\t)\n\t\t\t)\n\t\t\t(embedded_fonts no)\n\t\t)',
+    'DVDD': '(symbol "DVDD"\n\t\t\t(power global)\n\t\t\t(pin_numbers\n\t\t\t\t(hide yes)\n\t\t\t)\n\t\t\t(pin_names\n\t\t\t\t(offset 0)\n\t\t\t\t(hide yes)\n\t\t\t)\n\t\t\t(exclude_from_sim no)\n\t\t\t(in_bom yes)\n\t\t\t(on_board yes)\n\t\t\t(in_pos_files yes)\n\t\t\t(duplicate_pin_numbers_are_jumpers no)\n\t\t\t(property "Reference" "#PWR"\n\t\t\t\t(at 0 -3.81 0)\n\t\t\t\t(show_name no)\n\t\t\t\t(do_not_autoplace no)\n\t\t\t\t(hide yes)\n\t\t\t\t(effects\n\t\t\t\t\t(font\n\t\t\t\t\t\t(size 1.27 1.27)\n\t\t\t\t\t)\n\t\t\t\t)\n\t\t\t)\n\t\t\t(property "Value" "DVDD"\n\t\t\t\t(at 0 3.556 0)\n\t\t\t\t(show_name no)\n\t\t\t\t(do_not_autoplace no)\n\t\t\t\t(effects\n\t\t\t\t\t(font\n\t\t\t\t\t\t(size 1.27 1.27)\n\t\t\t\t\t)\n\t\t\t\t)\n\t\t\t)\n\t\t\t(property "Footprint" ""\n\t\t\t\t(at 0 0 0)\n\t\t\t\t(show_name no)\n\t\t\t\t(do_not_autoplace no)\n\t\t\t\t(hide yes)\n\t\t\t\t(effects\n\t\t\t\t\t(font\n\t\t\t\t\t\t(size 1.27 1.27)\n\t\t\t\t\t)\n\t\t\t\t)\n\t\t\t)\n\t\t\t(property "Datasheet" ""\n\t\t\t\t(at 0 0 0)\n\t\t\t\t(show_name no)\n\t\t\t\t(do_not_autoplace no)\n\t\t\t\t(hide yes)\n\t\t\t\t(effects\n\t\t\t\t\t(font\n\t\t\t\t\t\t(size 1.27 1.27)\n\t\t\t\t\t)\n\t\t\t\t)\n\t\t\t)\n\t\t\t(property "Description" "Power symbol creates a global label with name \\"DVDD\\""\n\t\t\t\t(at 0 0 0)\n\t\t\t\t(show_name no)\n\t\t\t\t(do_not_autoplace no)\n\t\t\t\t(hide yes)\n\t\t\t\t(effects\n\t\t\t\t\t(font\n\t\t\t\t\t\t(size 1.27 1.27)\n\t\t\t\t\t)\n\t\t\t\t)\n\t\t\t)\n\t\t\t(property "ki_keywords" "global power"\n\t\t\t\t(at 0 0 0)\n\t\t\t\t(show_name no)\n\t\t\t\t(do_not_autoplace no)\n\t\t\t\t(hide yes)\n\t\t\t\t(effects\n\t\t\t\t\t(font\n\t\t\t\t\t\t(size 1.27 1.27)\n\t\t\t\t\t)\n\t\t\t\t)\n\t\t\t)\n\t\t\t(symbol "DVDD_0_1"\n\t\t\t\t(polyline\n\t\t\t\t\t(pts\n\t\t\t\t\t\t(xy -0.762 1.27) (xy 0 2.54)\n\t\t\t\t\t)\n\t\t\t\t\t(stroke\n\t\t\t\t\t\t(width 0)\n\t\t\t\t\t\t(type default)\n\t\t\t\t\t)\n\t\t\t\t\t(fill\n\t\t\t\t\t\t(type none)\n\t\t\t\t\t)\n\t\t\t\t)\n\t\t\t\t(polyline\n\t\t\t\t\t(pts\n\t\t\t\t\t\t(xy 0 2.54) (xy 0.762 1.27)\n\t\t\t\t\t)\n\t\t\t\t\t(stroke\n\t\t\t\t\t\t(width 0)\n\t\t\t\t\t\t(type default)\n\t\t\t\t\t)\n\t\t\t\t\t(fill\n\t\t\t\t\t\t(type none)\n\t\t\t\t\t)\n\t\t\t\t)\n\t\t\t\t(polyline\n\t\t\t\t\t(pts\n\t\t\t\t\t\t(xy 0 0) (xy 0 2.54)\n\t\t\t\t\t)\n\t\t\t\t\t(stroke\n\t\t\t\t\t\t(width 0)\n\t\t\t\t\t\t(type default)\n\t\t\t\t\t)\n\t\t\t\t\t(fill\n\t\t\t\t\t\t(type none)\n\t\t\t\t\t)\n\t\t\t\t)\n\t\t\t)\n\t\t\t(symbol "DVDD_1_1"\n\t\t\t\t(pin power_in line\n\t\t\t\t\t(at 0 0 90)\n\t\t\t\t\t(length 0)\n\t\t\t\t\t(name ""\n\t\t\t\t\t\t(effects\n\t\t\t\t\t\t\t(font\n\t\t\t\t\t\t\t\t(size 1.27 1.27)\n\t\t\t\t\t\t\t)\n\t\t\t\t\t\t)\n\t\t\t\t\t)\n\t\t\t\t\t(number "1"\n\t\t\t\t\t\t(effects\n\t\t\t\t\t\t\t(font\n\t\t\t\t\t\t\t\t(size 1.27 1.27)\n\t\t\t\t\t\t\t)\n\t\t\t\t\t\t)\n\t\t\t\t\t)\n\t\t\t\t)\n\t\t\t)\n\t\t\t(embedded_fonts no)\n\t\t)',
+    'GND': '(symbol "GND"\n\t\t\t(power global)\n\t\t\t(pin_numbers\n\t\t\t\t(hide yes)\n\t\t\t)\n\t\t\t(pin_names\n\t\t\t\t(offset 0)\n\t\t\t\t(hide yes)\n\t\t\t)\n\t\t\t(exclude_from_sim no)\n\t\t\t(in_bom yes)\n\t\t\t(on_board yes)\n\t\t\t(in_pos_files yes)\n\t\t\t(duplicate_pin_numbers_are_jumpers no)\n\t\t\t(property "Reference" "#PWR"\n\t\t\t\t(at 0 -6.35 0)\n\t\t\t\t(show_name no)\n\t\t\t\t(do_not_autoplace no)\n\t\t\t\t(hide yes)\n\t\t\t\t(effects\n\t\t\t\t\t(font\n\t\t\t\t\t\t(size 1.27 1.27)\n\t\t\t\t\t)\n\t\t\t\t)\n\t\t\t)\n\t\t\t(property "Value" "GND"\n\t\t\t\t(at 0 -3.81 0)\n\t\t\t\t(show_name no)\n\t\t\t\t(do_not_autoplace no)\n\t\t\t\t(effects\n\t\t\t\t\t(font\n\t\t\t\t\t\t(size 1.27 1.27)\n\t\t\t\t\t)\n\t\t\t\t)\n\t\t\t)\n\t\t\t(property "Footprint" ""\n\t\t\t\t(at 0 0 0)\n\t\t\t\t(show_name no)\n\t\t\t\t(do_not_autoplace no)\n\t\t\t\t(hide yes)\n\t\t\t\t(effects\n\t\t\t\t\t(font\n\t\t\t\t\t\t(size 1.27 1.27)\n\t\t\t\t\t)\n\t\t\t\t)\n\t\t\t)\n\t\t\t(property "Datasheet" ""\n\t\t\t\t(at 0 0 0)\n\t\t\t\t(show_name no)\n\t\t\t\t(do_not_autoplace no)\n\t\t\t\t(hide yes)\n\t\t\t\t(effects\n\t\t\t\t\t(font\n\t\t\t\t\t\t(size 1.27 1.27)\n\t\t\t\t\t)\n\t\t\t\t)\n\t\t\t)\n\t\t\t(property "Description" "Power symbol creates a global label with name \\"GND\\" , ground"\n\t\t\t\t(at 0 0 0)\n\t\t\t\t(show_name no)\n\t\t\t\t(do_not_autoplace no)\n\t\t\t\t(hide yes)\n\t\t\t\t(effects\n\t\t\t\t\t(font\n\t\t\t\t\t\t(size 1.27 1.27)\n\t\t\t\t\t)\n\t\t\t\t)\n\t\t\t)\n\t\t\t(property "ki_keywords" "global power"\n\t\t\t\t(at 0 0 0)\n\t\t\t\t(show_name no)\n\t\t\t\t(do_not_autoplace no)\n\t\t\t\t(hide yes)\n\t\t\t\t(effects\n\t\t\t\t\t(font\n\t\t\t\t\t\t(size 1.27 1.27)\n\t\t\t\t\t)\n\t\t\t\t)\n\t\t\t)\n\t\t\t(symbol "GND_0_1"\n\t\t\t\t(polyline\n\t\t\t\t\t(pts\n\t\t\t\t\t\t(xy 0 0) (xy 0 -1.27) (xy 1.27 -1.27) (xy 0 -2.54) (xy -1.27 -1.27) (xy 0 -1.27)\n\t\t\t\t\t)\n\t\t\t\t\t(stroke\n\t\t\t\t\t\t(width 0)\n\t\t\t\t\t\t(type default)\n\t\t\t\t\t)\n\t\t\t\t\t(fill\n\t\t\t\t\t\t(type none)\n\t\t\t\t\t)\n\t\t\t\t)\n\t\t\t)\n\t\t\t(symbol "GND_1_1"\n\t\t\t\t(pin power_in line\n\t\t\t\t\t(at 0 0 270)\n\t\t\t\t\t(length 0)\n\t\t\t\t\t(name ""\n\t\t\t\t\t\t(effects\n\t\t\t\t\t\t\t(font\n\t\t\t\t\t\t\t\t(size 1.27 1.27)\n\t\t\t\t\t\t\t)\n\t\t\t\t\t\t)\n\t\t\t\t\t)\n\t\t\t\t\t(number "1"\n\t\t\t\t\t\t(effects\n\t\t\t\t\t\t\t(font\n\t\t\t\t\t\t\t\t(size 1.27 1.27)\n\t\t\t\t\t\t\t)\n\t\t\t\t\t\t)\n\t\t\t\t\t)\n\t\t\t\t)\n\t\t\t)\n\t\t\t(embedded_fonts no)\n\t\t)',
+    'GNDA': '(symbol "GNDA"\n\t\t\t(power global)\n\t\t\t(pin_numbers\n\t\t\t\t(hide yes)\n\t\t\t)\n\t\t\t(pin_names\n\t\t\t\t(offset 0)\n\t\t\t\t(hide yes)\n\t\t\t)\n\t\t\t(exclude_from_sim no)\n\t\t\t(in_bom yes)\n\t\t\t(on_board yes)\n\t\t\t(in_pos_files yes)\n\t\t\t(duplicate_pin_numbers_are_jumpers no)\n\t\t\t(property "Reference" "#PWR"\n\t\t\t\t(at 0 -6.35 0)\n\t\t\t\t(show_name no)\n\t\t\t\t(do_not_autoplace no)\n\t\t\t\t(hide yes)\n\t\t\t\t(effects\n\t\t\t\t\t(font\n\t\t\t\t\t\t(size 1.27 1.27)\n\t\t\t\t\t)\n\t\t\t\t)\n\t\t\t)\n\t\t\t(property "Value" "GNDA"\n\t\t\t\t(at 0 -3.81 0)\n\t\t\t\t(show_name no)\n\t\t\t\t(do_not_autoplace no)\n\t\t\t\t(effects\n\t\t\t\t\t(font\n\t\t\t\t\t\t(size 1.27 1.27)\n\t\t\t\t\t)\n\t\t\t\t)\n\t\t\t)\n\t\t\t(property "Footprint" ""\n\t\t\t\t(at 0 0 0)\n\t\t\t\t(show_name no)\n\t\t\t\t(do_not_autoplace no)\n\t\t\t\t(hide yes)\n\t\t\t\t(effects\n\t\t\t\t\t(font\n\t\t\t\t\t\t(size 1.27 1.27)\n\t\t\t\t\t)\n\t\t\t\t)\n\t\t\t)\n\t\t\t(property "Datasheet" ""\n\t\t\t\t(at 0 0 0)\n\t\t\t\t(show_name no)\n\t\t\t\t(do_not_autoplace no)\n\t\t\t\t(hide yes)\n\t\t\t\t(effects\n\t\t\t\t\t(font\n\t\t\t\t\t\t(size 1.27 1.27)\n\t\t\t\t\t)\n\t\t\t\t)\n\t\t\t)\n\t\t\t(property "Description" "Power symbol creates a global label with name \\"GNDA\\" , analog ground"\n\t\t\t\t(at 0 0 0)\n\t\t\t\t(show_name no)\n\t\t\t\t(do_not_autoplace no)\n\t\t\t\t(hide yes)\n\t\t\t\t(effects\n\t\t\t\t\t(font\n\t\t\t\t\t\t(size 1.27 1.27)\n\t\t\t\t\t)\n\t\t\t\t)\n\t\t\t)\n\t\t\t(property "ki_keywords" "global power"\n\t\t\t\t(at 0 0 0)\n\t\t\t\t(show_name no)\n\t\t\t\t(do_not_autoplace no)\n\t\t\t\t(hide yes)\n\t\t\t\t(effects\n\t\t\t\t\t(font\n\t\t\t\t\t\t(size 1.27 1.27)\n\t\t\t\t\t)\n\t\t\t\t)\n\t\t\t)\n\t\t\t(symbol "GNDA_0_1"\n\t\t\t\t(polyline\n\t\t\t\t\t(pts\n\t\t\t\t\t\t(xy 0 0) (xy 0 -1.27) (xy 1.27 -1.27) (xy 0 -2.54) (xy -1.27 -1.27) (xy 0 -1.27)\n\t\t\t\t\t)\n\t\t\t\t\t(stroke\n\t\t\t\t\t\t(width 0)\n\t\t\t\t\t\t(type default)\n\t\t\t\t\t)\n\t\t\t\t\t(fill\n\t\t\t\t\t\t(type none)\n\t\t\t\t\t)\n\t\t\t\t)\n\t\t\t)\n\t\t\t(symbol "GNDA_1_1"\n\t\t\t\t(pin power_in line\n\t\t\t\t\t(at 0 0 270)\n\t\t\t\t\t(length 0)\n\t\t\t\t\t(name ""\n\t\t\t\t\t\t(effects\n\t\t\t\t\t\t\t(font\n\t\t\t\t\t\t\t\t(size 1.27 1.27)\n\t\t\t\t\t\t\t)\n\t\t\t\t\t\t)\n\t\t\t\t\t)\n\t\t\t\t\t(number "1"\n\t\t\t\t\t\t(effects\n\t\t\t\t\t\t\t(font\n\t\t\t\t\t\t\t\t(size 1.27 1.27)\n\t\t\t\t\t\t\t)\n\t\t\t\t\t\t)\n\t\t\t\t\t)\n\t\t\t\t)\n\t\t\t)\n\t\t\t(embedded_fonts no)\n\t\t)',
+    'GNDD': '(symbol "GNDD"\n\t\t\t(power global)\n\t\t\t(pin_numbers\n\t\t\t\t(hide yes)\n\t\t\t)\n\t\t\t(pin_names\n\t\t\t\t(offset 0)\n\t\t\t\t(hide yes)\n\t\t\t)\n\t\t\t(exclude_from_sim no)\n\t\t\t(in_bom yes)\n\t\t\t(on_board yes)\n\t\t\t(in_pos_files yes)\n\t\t\t(duplicate_pin_numbers_are_jumpers no)\n\t\t\t(property "Reference" "#PWR"\n\t\t\t\t(at 0 -6.35 0)\n\t\t\t\t(show_name no)\n\t\t\t\t(do_not_autoplace no)\n\t\t\t\t(hide yes)\n\t\t\t\t(effects\n\t\t\t\t\t(font\n\t\t\t\t\t\t(size 1.27 1.27)\n\t\t\t\t\t)\n\t\t\t\t)\n\t\t\t)\n\t\t\t(property "Value" "GNDD"\n\t\t\t\t(at 0 -3.175 0)\n\t\t\t\t(show_name no)\n\t\t\t\t(do_not_autoplace no)\n\t\t\t\t(effects\n\t\t\t\t\t(font\n\t\t\t\t\t\t(size 1.27 1.27)\n\t\t\t\t\t)\n\t\t\t\t)\n\t\t\t)\n\t\t\t(property "Footprint" ""\n\t\t\t\t(at 0 0 0)\n\t\t\t\t(show_name no)\n\t\t\t\t(do_not_autoplace no)\n\t\t\t\t(hide yes)\n\t\t\t\t(effects\n\t\t\t\t\t(font\n\t\t\t\t\t\t(size 1.27 1.27)\n\t\t\t\t\t)\n\t\t\t\t)\n\t\t\t)\n\t\t\t(property "Datasheet" ""\n\t\t\t\t(at 0 0 0)\n\t\t\t\t(show_name no)\n\t\t\t\t(do_not_autoplace no)\n\t\t\t\t(hide yes)\n\t\t\t\t(effects\n\t\t\t\t\t(font\n\t\t\t\t\t\t(size 1.27 1.27)\n\t\t\t\t\t)\n\t\t\t\t)\n\t\t\t)\n\t\t\t(property "Description" "Power symbol creates a global label with name \\"GNDD\\" , digital ground"\n\t\t\t\t(at 0 0 0)\n\t\t\t\t(show_name no)\n\t\t\t\t(do_not_autoplace no)\n\t\t\t\t(hide yes)\n\t\t\t\t(effects\n\t\t\t\t\t(font\n\t\t\t\t\t\t(size 1.27 1.27)\n\t\t\t\t\t)\n\t\t\t\t)\n\t\t\t)\n\t\t\t(property "ki_keywords" "global power"\n\t\t\t\t(at 0 0 0)\n\t\t\t\t(show_name no)\n\t\t\t\t(do_not_autoplace no)\n\t\t\t\t(hide yes)\n\t\t\t\t(effects\n\t\t\t\t\t(font\n\t\t\t\t\t\t(size 1.27 1.27)\n\t\t\t\t\t)\n\t\t\t\t)\n\t\t\t)\n\t\t\t(symbol "GNDD_0_1"\n\t\t\t\t(rectangle\n\t\t\t\t\t(start -1.27 -1.524)\n\t\t\t\t\t(end 1.27 -2.032)\n\t\t\t\t\t(stroke\n\t\t\t\t\t\t(width 0.254)\n\t\t\t\t\t\t(type default)\n\t\t\t\t\t)\n\t\t\t\t\t(fill\n\t\t\t\t\t\t(type outline)\n\t\t\t\t\t)\n\t\t\t\t)\n\t\t\t\t(polyline\n\t\t\t\t\t(pts\n\t\t\t\t\t\t(xy 0 0) (xy 0 -1.524)\n\t\t\t\t\t)\n\t\t\t\t\t(stroke\n\t\t\t\t\t\t(width 0)\n\t\t\t\t\t\t(type default)\n\t\t\t\t\t)\n\t\t\t\t\t(fill\n\t\t\t\t\t\t(type none)\n\t\t\t\t\t)\n\t\t\t\t)\n\t\t\t)\n\t\t\t(symbol "GNDD_1_1"\n\t\t\t\t(pin power_in line\n\t\t\t\t\t(at 0 0 270)\n\t\t\t\t\t(length 0)\n\t\t\t\t\t(name ""\n\t\t\t\t\t\t(effects\n\t\t\t\t\t\t\t(font\n\t\t\t\t\t\t\t\t(size 1.27 1.27)\n\t\t\t\t\t\t\t)\n\t\t\t\t\t\t)\n\t\t\t\t\t)\n\t\t\t\t\t(number "1"\n\t\t\t\t\t\t(effects\n\t\t\t\t\t\t\t(font\n\t\t\t\t\t\t\t\t(size 1.27 1.27)\n\t\t\t\t\t\t\t)\n\t\t\t\t\t\t)\n\t\t\t\t\t)\n\t\t\t\t)\n\t\t\t)\n\t\t\t(embedded_fonts no)\n\t\t)',
+    'GNDREF': '(symbol "GNDREF"\n\t\t\t(power global)\n\t\t\t(pin_numbers\n\t\t\t\t(hide yes)\n\t\t\t)\n\t\t\t(pin_names\n\t\t\t\t(offset 0)\n\t\t\t\t(hide yes)\n\t\t\t)\n\t\t\t(exclude_from_sim no)\n\t\t\t(in_bom yes)\n\t\t\t(on_board yes)\n\t\t\t(in_pos_files yes)\n\t\t\t(duplicate_pin_numbers_are_jumpers no)\n\t\t\t(property "Reference" "#PWR"\n\t\t\t\t(at 0 -6.35 0)\n\t\t\t\t(show_name no)\n\t\t\t\t(do_not_autoplace no)\n\t\t\t\t(hide yes)\n\t\t\t\t(effects\n\t\t\t\t\t(font\n\t\t\t\t\t\t(size 1.27 1.27)\n\t\t\t\t\t)\n\t\t\t\t)\n\t\t\t)\n\t\t\t(property "Value" "GNDREF"\n\t\t\t\t(at 0 -3.81 0)\n\t\t\t\t(show_name no)\n\t\t\t\t(do_not_autoplace no)\n\t\t\t\t(effects\n\t\t\t\t\t(font\n\t\t\t\t\t\t(size 1.27 1.27)\n\t\t\t\t\t)\n\t\t\t\t)\n\t\t\t)\n\t\t\t(property "Footprint" ""\n\t\t\t\t(at 0 0 0)\n\t\t\t\t(show_name no)\n\t\t\t\t(do_not_autoplace no)\n\t\t\t\t(hide yes)\n\t\t\t\t(effects\n\t\t\t\t\t(font\n\t\t\t\t\t\t(size 1.27 1.27)\n\t\t\t\t\t)\n\t\t\t\t)\n\t\t\t)\n\t\t\t(property "Datasheet" ""\n\t\t\t\t(at 0 0 0)\n\t\t\t\t(show_name no)\n\t\t\t\t(do_not_autoplace no)\n\t\t\t\t(hide yes)\n\t\t\t\t(effects\n\t\t\t\t\t(font\n\t\t\t\t\t\t(size 1.27 1.27)\n\t\t\t\t\t)\n\t\t\t\t)\n\t\t\t)\n\t\t\t(property "Description" "Power symbol creates a global label with name \\"GNDREF\\" , reference supply ground"\n\t\t\t\t(at 0 0 0)\n\t\t\t\t(show_name no)\n\t\t\t\t(do_not_autoplace no)\n\t\t\t\t(hide yes)\n\t\t\t\t(effects\n\t\t\t\t\t(font\n\t\t\t\t\t\t(size 1.27 1.27)\n\t\t\t\t\t)\n\t\t\t\t)\n\t\t\t)\n\t\t\t(property "ki_keywords" "global power"\n\t\t\t\t(at 0 0 0)\n\t\t\t\t(show_name no)\n\t\t\t\t(do_not_autoplace no)\n\t\t\t\t(hide yes)\n\t\t\t\t(effects\n\t\t\t\t\t(font\n\t\t\t\t\t\t(size 1.27 1.27)\n\t\t\t\t\t)\n\t\t\t\t)\n\t\t\t)\n\t\t\t(symbol "GNDREF_0_1"\n\t\t\t\t(polyline\n\t\t\t\t\t(pts\n\t\t\t\t\t\t(xy -0.635 -1.905) (xy 0.635 -1.905)\n\t\t\t\t\t)\n\t\t\t\t\t(stroke\n\t\t\t\t\t\t(width 0)\n\t\t\t\t\t\t(type default)\n\t\t\t\t\t)\n\t\t\t\t\t(fill\n\t\t\t\t\t\t(type none)\n\t\t\t\t\t)\n\t\t\t\t)\n\t\t\t\t(polyline\n\t\t\t\t\t(pts\n\t\t\t\t\t\t(xy -0.127 -2.54) (xy 0.127 -2.54)\n\t\t\t\t\t)\n\t\t\t\t\t(stroke\n\t\t\t\t\t\t(width 0)\n\t\t\t\t\t\t(type default)\n\t\t\t\t\t)\n\t\t\t\t\t(fill\n\t\t\t\t\t\t(type none)\n\t\t\t\t\t)\n\t\t\t\t)\n\t\t\t\t(polyline\n\t\t\t\t\t(pts\n\t\t\t\t\t\t(xy 0 -1.27) (xy 0 0)\n\t\t\t\t\t)\n\t\t\t\t\t(stroke\n\t\t\t\t\t\t(width 0)\n\t\t\t\t\t\t(type default)\n\t\t\t\t\t)\n\t\t\t\t\t(fill\n\t\t\t\t\t\t(type none)\n\t\t\t\t\t)\n\t\t\t\t)\n\t\t\t\t(polyline\n\t\t\t\t\t(pts\n\t\t\t\t\t\t(xy 1.27 -1.27) (xy -1.27 -1.27)\n\t\t\t\t\t)\n\t\t\t\t\t(stroke\n\t\t\t\t\t\t(width 0)\n\t\t\t\t\t\t(type default)\n\t\t\t\t\t)\n\t\t\t\t\t(fill\n\t\t\t\t\t\t(type none)\n\t\t\t\t\t)\n\t\t\t\t)\n\t\t\t)\n\t\t\t(symbol "GNDREF_1_1"\n\t\t\t\t(pin power_in line\n\t\t\t\t\t(at 0 0 270)\n\t\t\t\t\t(length 0)\n\t\t\t\t\t(name ""\n\t\t\t\t\t\t(effects\n\t\t\t\t\t\t\t(font\n\t\t\t\t\t\t\t\t(size 1.27 1.27)\n\t\t\t\t\t\t\t)\n\t\t\t\t\t\t)\n\t\t\t\t\t)\n\t\t\t\t\t(number "1"\n\t\t\t\t\t\t(effects\n\t\t\t\t\t\t\t(font\n\t\t\t\t\t\t\t\t(size 1.27 1.27)\n\t\t\t\t\t\t\t)\n\t\t\t\t\t\t)\n\t\t\t\t\t)\n\t\t\t\t)\n\t\t\t)\n\t\t\t(embedded_fonts no)\n\t\t)',
+    'PGND': '(symbol "PGND"\n\t\t\t(power global)\n\t\t\t(pin_numbers\n\t\t\t\t(hide yes)\n\t\t\t)\n\t\t\t(pin_names\n\t\t\t\t(offset 0)\n\t\t\t\t(hide yes)\n\t\t\t)\n\t\t\t(exclude_from_sim no)\n\t\t\t(in_bom yes)\n\t\t\t(on_board yes)\n\t\t\t(in_pos_files yes)\n\t\t\t(duplicate_pin_numbers_are_jumpers no)\n\t\t\t(property "Reference" "#PWR"\n\t\t\t\t(at 0 -6.35 0)\n\t\t\t\t(show_name no)\n\t\t\t\t(do_not_autoplace no)\n\t\t\t\t(hide yes)\n\t\t\t\t(effects\n\t\t\t\t\t(font\n\t\t\t\t\t\t(size 1.27 1.27)\n\t\t\t\t\t)\n\t\t\t\t)\n\t\t\t)\n\t\t\t(property "Value" "PGND"\n\t\t\t\t(at 0 -3.81 0)\n\t\t\t\t(show_name no)\n\t\t\t\t(do_not_autoplace no)\n\t\t\t\t(effects\n\t\t\t\t\t(font\n\t\t\t\t\t\t(size 1.27 1.27)\n\t\t\t\t\t)\n\t\t\t\t)\n\t\t\t)\n\t\t\t(property "Footprint" ""\n\t\t\t\t(at 0 0 0)\n\t\t\t\t(show_name no)\n\t\t\t\t(do_not_autoplace no)\n\t\t\t\t(hide yes)\n\t\t\t\t(effects\n\t\t\t\t\t(font\n\t\t\t\t\t\t(size 1.27 1.27)\n\t\t\t\t\t)\n\t\t\t\t)\n\t\t\t)\n\t\t\t(property "Datasheet" ""\n\t\t\t\t(at 0 0 0)\n\t\t\t\t(show_name no)\n\t\t\t\t(do_not_autoplace no)\n\t\t\t\t(hide yes)\n\t\t\t\t(effects\n\t\t\t\t\t(font\n\t\t\t\t\t\t(size 1.27 1.27)\n\t\t\t\t\t)\n\t\t\t\t)\n\t\t\t)\n\t\t\t(property "Description" "Power symbol creates a global label with name \\"PGND\\" , ground"\n\t\t\t\t(at 0 0 0)\n\t\t\t\t(show_name no)\n\t\t\t\t(do_not_autoplace no)\n\t\t\t\t(hide yes)\n\t\t\t\t(effects\n\t\t\t\t\t(font\n\t\t\t\t\t\t(size 1.27 1.27)\n\t\t\t\t\t)\n\t\t\t\t)\n\t\t\t)\n\t\t\t(property "ki_keywords" "global power"\n\t\t\t\t(at 0 0 0)\n\t\t\t\t(show_name no)\n\t\t\t\t(do_not_autoplace no)\n\t\t\t\t(hide yes)\n\t\t\t\t(effects\n\t\t\t\t\t(font\n\t\t\t\t\t\t(size 1.27 1.27)\n\t\t\t\t\t)\n\t\t\t\t)\n\t\t\t)\n\t\t\t(symbol "PGND_0_1"\n\t\t\t\t(polyline\n\t\t\t\t\t(pts\n\t\t\t\t\t\t(xy 0 0) (xy 0 -1.27) (xy 1.27 -1.27) (xy 0 -2.54) (xy -1.27 -1.27) (xy 0 -1.27)\n\t\t\t\t\t)\n\t\t\t\t\t(stroke\n\t\t\t\t\t\t(width 0)\n\t\t\t\t\t\t(type default)\n\t\t\t\t\t)\n\t\t\t\t\t(fill\n\t\t\t\t\t\t(type none)\n\t\t\t\t\t)\n\t\t\t\t)\n\t\t\t)\n\t\t\t(symbol "PGND_1_1"\n\t\t\t\t(pin power_in line\n\t\t\t\t\t(at 0 0 270)\n\t\t\t\t\t(length 0)\n\t\t\t\t\t(name ""\n\t\t\t\t\t\t(effects\n\t\t\t\t\t\t\t(font\n\t\t\t\t\t\t\t\t(size 1.27 1.27)\n\t\t\t\t\t\t\t)\n\t\t\t\t\t\t)\n\t\t\t\t\t)\n\t\t\t\t\t(number "1"\n\t\t\t\t\t\t(effects\n\t\t\t\t\t\t\t(font\n\t\t\t\t\t\t\t\t(size 1.27 1.27)\n\t\t\t\t\t\t\t)\n\t\t\t\t\t\t)\n\t\t\t\t\t)\n\t\t\t\t)\n\t\t\t)\n\t\t\t(embedded_fonts no)\n\t\t)',
+    'VBAT': '(symbol "VBAT"\n\t\t\t(power global)\n\t\t\t(pin_numbers\n\t\t\t\t(hide yes)\n\t\t\t)\n\t\t\t(pin_names\n\t\t\t\t(offset 0)\n\t\t\t\t(hide yes)\n\t\t\t)\n\t\t\t(exclude_from_sim no)\n\t\t\t(in_bom yes)\n\t\t\t(on_board yes)\n\t\t\t(in_pos_files yes)\n\t\t\t(duplicate_pin_numbers_are_jumpers no)\n\t\t\t(property "Reference" "#PWR"\n\t\t\t\t(at 0 -3.81 0)\n\t\t\t\t(show_name no)\n\t\t\t\t(do_not_autoplace no)\n\t\t\t\t(hide yes)\n\t\t\t\t(effects\n\t\t\t\t\t(font\n\t\t\t\t\t\t(size 1.27 1.27)\n\t\t\t\t\t)\n\t\t\t\t)\n\t\t\t)\n\t\t\t(property "Value" "VBAT"\n\t\t\t\t(at 0 3.556 0)\n\t\t\t\t(show_name no)\n\t\t\t\t(do_not_autoplace no)\n\t\t\t\t(effects\n\t\t\t\t\t(font\n\t\t\t\t\t\t(size 1.27 1.27)\n\t\t\t\t\t)\n\t\t\t\t)\n\t\t\t)\n\t\t\t(property "Footprint" ""\n\t\t\t\t(at 0 0 0)\n\t\t\t\t(show_name no)\n\t\t\t\t(do_not_autoplace no)\n\t\t\t\t(hide yes)\n\t\t\t\t(effects\n\t\t\t\t\t(font\n\t\t\t\t\t\t(size 1.27 1.27)\n\t\t\t\t\t)\n\t\t\t\t)\n\t\t\t)\n\t\t\t(property "Datasheet" ""\n\t\t\t\t(at 0 0 0)\n\t\t\t\t(show_name no)\n\t\t\t\t(do_not_autoplace no)\n\t\t\t\t(hide yes)\n\t\t\t\t(effects\n\t\t\t\t\t(font\n\t\t\t\t\t\t(size 1.27 1.27)\n\t\t\t\t\t)\n\t\t\t\t)\n\t\t\t)\n\t\t\t(property "Description" "Power symbol creates a global label with name \\"VBAT\\""\n\t\t\t\t(at 0 0 0)\n\t\t\t\t(show_name no)\n\t\t\t\t(do_not_autoplace no)\n\t\t\t\t(hide yes)\n\t\t\t\t(effects\n\t\t\t\t\t(font\n\t\t\t\t\t\t(size 1.27 1.27)\n\t\t\t\t\t)\n\t\t\t\t)\n\t\t\t)\n\t\t\t(property "ki_keywords" "global power"\n\t\t\t\t(at 0 0 0)\n\t\t\t\t(show_name no)\n\t\t\t\t(do_not_autoplace no)\n\t\t\t\t(hide yes)\n\t\t\t\t(effects\n\t\t\t\t\t(font\n\t\t\t\t\t\t(size 1.27 1.27)\n\t\t\t\t\t)\n\t\t\t\t)\n\t\t\t)\n\t\t\t(symbol "VBAT_0_1"\n\t\t\t\t(polyline\n\t\t\t\t\t(pts\n\t\t\t\t\t\t(xy -0.762 1.27) (xy 0 2.54)\n\t\t\t\t\t)\n\t\t\t\t\t(stroke\n\t\t\t\t\t\t(width 0)\n\t\t\t\t\t\t(type default)\n\t\t\t\t\t)\n\t\t\t\t\t(fill\n\t\t\t\t\t\t(type none)\n\t\t\t\t\t)\n\t\t\t\t)\n\t\t\t\t(polyline\n\t\t\t\t\t(pts\n\t\t\t\t\t\t(xy 0 2.54) (xy 0.762 1.27)\n\t\t\t\t\t)\n\t\t\t\t\t(stroke\n\t\t\t\t\t\t(width 0)\n\t\t\t\t\t\t(type default)\n\t\t\t\t\t)\n\t\t\t\t\t(fill\n\t\t\t\t\t\t(type none)\n\t\t\t\t\t)\n\t\t\t\t)\n\t\t\t\t(polyline\n\t\t\t\t\t(pts\n\t\t\t\t\t\t(xy 0 0) (xy 0 2.54)\n\t\t\t\t\t)\n\t\t\t\t\t(stroke\n\t\t\t\t\t\t(width 0)\n\t\t\t\t\t\t(type default)\n\t\t\t\t\t)\n\t\t\t\t\t(fill\n\t\t\t\t\t\t(type none)\n\t\t\t\t\t)\n\t\t\t\t)\n\t\t\t)\n\t\t\t(symbol "VBAT_1_1"\n\t\t\t\t(pin power_in line\n\t\t\t\t\t(at 0 0 90)\n\t\t\t\t\t(length 0)\n\t\t\t\t\t(name ""\n\t\t\t\t\t\t(effects\n\t\t\t\t\t\t\t(font\n\t\t\t\t\t\t\t\t(size 1.27 1.27)\n\t\t\t\t\t\t\t)\n\t\t\t\t\t\t)\n\t\t\t\t\t)\n\t\t\t\t\t(number "1"\n\t\t\t\t\t\t(effects\n\t\t\t\t\t\t\t(font\n\t\t\t\t\t\t\t\t(size 1.27 1.27)\n\t\t\t\t\t\t\t)\n\t\t\t\t\t\t)\n\t\t\t\t\t)\n\t\t\t\t)\n\t\t\t)\n\t\t\t(embedded_fonts no)\n\t\t)',
+    'VBUS': '(symbol "VBUS"\n\t\t\t(power global)\n\t\t\t(pin_numbers\n\t\t\t\t(hide yes)\n\t\t\t)\n\t\t\t(pin_names\n\t\t\t\t(offset 0)\n\t\t\t\t(hide yes)\n\t\t\t)\n\t\t\t(exclude_from_sim no)\n\t\t\t(in_bom yes)\n\t\t\t(on_board yes)\n\t\t\t(in_pos_files yes)\n\t\t\t(duplicate_pin_numbers_are_jumpers no)\n\t\t\t(property "Reference" "#PWR"\n\t\t\t\t(at 0 -3.81 0)\n\t\t\t\t(show_name no)\n\t\t\t\t(do_not_autoplace no)\n\t\t\t\t(hide yes)\n\t\t\t\t(effects\n\t\t\t\t\t(font\n\t\t\t\t\t\t(size 1.27 1.27)\n\t\t\t\t\t)\n\t\t\t\t)\n\t\t\t)\n\t\t\t(property "Value" "VBUS"\n\t\t\t\t(at 0 3.556 0)\n\t\t\t\t(show_name no)\n\t\t\t\t(do_not_autoplace no)\n\t\t\t\t(effects\n\t\t\t\t\t(font\n\t\t\t\t\t\t(size 1.27 1.27)\n\t\t\t\t\t)\n\t\t\t\t)\n\t\t\t)\n\t\t\t(property "Footprint" ""\n\t\t\t\t(at 0 0 0)\n\t\t\t\t(show_name no)\n\t\t\t\t(do_not_autoplace no)\n\t\t\t\t(hide yes)\n\t\t\t\t(effects\n\t\t\t\t\t(font\n\t\t\t\t\t\t(size 1.27 1.27)\n\t\t\t\t\t)\n\t\t\t\t)\n\t\t\t)\n\t\t\t(property "Datasheet" ""\n\t\t\t\t(at 0 0 0)\n\t\t\t\t(show_name no)\n\t\t\t\t(do_not_autoplace no)\n\t\t\t\t(hide yes)\n\t\t\t\t(effects\n\t\t\t\t\t(font\n\t\t\t\t\t\t(size 1.27 1.27)\n\t\t\t\t\t)\n\t\t\t\t)\n\t\t\t)\n\t\t\t(property "Description" "Power symbol creates a global label with name \\"VBUS\\""\n\t\t\t\t(at 0 0 0)\n\t\t\t\t(show_name no)\n\t\t\t\t(do_not_autoplace no)\n\t\t\t\t(hide yes)\n\t\t\t\t(effects\n\t\t\t\t\t(font\n\t\t\t\t\t\t(size 1.27 1.27)\n\t\t\t\t\t)\n\t\t\t\t)\n\t\t\t)\n\t\t\t(property "ki_keywords" "global power"\n\t\t\t\t(at 0 0 0)\n\t\t\t\t(show_name no)\n\t\t\t\t(do_not_autoplace no)\n\t\t\t\t(hide yes)\n\t\t\t\t(effects\n\t\t\t\t\t(font\n\t\t\t\t\t\t(size 1.27 1.27)\n\t\t\t\t\t)\n\t\t\t\t)\n\t\t\t)\n\t\t\t(symbol "VBUS_0_1"\n\t\t\t\t(polyline\n\t\t\t\t\t(pts\n\t\t\t\t\t\t(xy -0.762 1.27) (xy 0 2.54)\n\t\t\t\t\t)\n\t\t\t\t\t(stroke\n\t\t\t\t\t\t(width 0)\n\t\t\t\t\t\t(type default)\n\t\t\t\t\t)\n\t\t\t\t\t(fill\n\t\t\t\t\t\t(type none)\n\t\t\t\t\t)\n\t\t\t\t)\n\t\t\t\t(polyline\n\t\t\t\t\t(pts\n\t\t\t\t\t\t(xy 0 2.54) (xy 0.762 1.27)\n\t\t\t\t\t)\n\t\t\t\t\t(stroke\n\t\t\t\t\t\t(width 0)\n\t\t\t\t\t\t(type default)\n\t\t\t\t\t)\n\t\t\t\t\t(fill\n\t\t\t\t\t\t(type none)\n\t\t\t\t\t)\n\t\t\t\t)\n\t\t\t\t(polyline\n\t\t\t\t\t(pts\n\t\t\t\t\t\t(xy 0 0) (xy 0 2.54)\n\t\t\t\t\t)\n\t\t\t\t\t(stroke\n\t\t\t\t\t\t(width 0)\n\t\t\t\t\t\t(type default)\n\t\t\t\t\t)\n\t\t\t\t\t(fill\n\t\t\t\t\t\t(type none)\n\t\t\t\t\t)\n\t\t\t\t)\n\t\t\t)\n\t\t\t(symbol "VBUS_1_1"\n\t\t\t\t(pin power_in line\n\t\t\t\t\t(at 0 0 90)\n\t\t\t\t\t(length 0)\n\t\t\t\t\t(name ""\n\t\t\t\t\t\t(effects\n\t\t\t\t\t\t\t(font\n\t\t\t\t\t\t\t\t(size 1.27 1.27)\n\t\t\t\t\t\t\t)\n\t\t\t\t\t\t)\n\t\t\t\t\t)\n\t\t\t\t\t(number "1"\n\t\t\t\t\t\t(effects\n\t\t\t\t\t\t\t(font\n\t\t\t\t\t\t\t\t(size 1.27 1.27)\n\t\t\t\t\t\t\t)\n\t\t\t\t\t\t)\n\t\t\t\t\t)\n\t\t\t\t)\n\t\t\t)\n\t\t\t(embedded_fonts no)\n\t\t)',
+    'VCC': '(symbol "VCC"\n\t\t\t(power global)\n\t\t\t(pin_numbers\n\t\t\t\t(hide yes)\n\t\t\t)\n\t\t\t(pin_names\n\t\t\t\t(offset 0)\n\t\t\t\t(hide yes)\n\t\t\t)\n\t\t\t(exclude_from_sim no)\n\t\t\t(in_bom yes)\n\t\t\t(on_board yes)\n\t\t\t(in_pos_files yes)\n\t\t\t(duplicate_pin_numbers_are_jumpers no)\n\t\t\t(property "Reference" "#PWR"\n\t\t\t\t(at 0 -3.81 0)\n\t\t\t\t(show_name no)\n\t\t\t\t(do_not_autoplace no)\n\t\t\t\t(hide yes)\n\t\t\t\t(effects\n\t\t\t\t\t(font\n\t\t\t\t\t\t(size 1.27 1.27)\n\t\t\t\t\t)\n\t\t\t\t)\n\t\t\t)\n\t\t\t(property "Value" "VCC"\n\t\t\t\t(at 0 3.556 0)\n\t\t\t\t(show_name no)\n\t\t\t\t(do_not_autoplace no)\n\t\t\t\t(effects\n\t\t\t\t\t(font\n\t\t\t\t\t\t(size 1.27 1.27)\n\t\t\t\t\t)\n\t\t\t\t)\n\t\t\t)\n\t\t\t(property "Footprint" ""\n\t\t\t\t(at 0 0 0)\n\t\t\t\t(show_name no)\n\t\t\t\t(do_not_autoplace no)\n\t\t\t\t(hide yes)\n\t\t\t\t(effects\n\t\t\t\t\t(font\n\t\t\t\t\t\t(size 1.27 1.27)\n\t\t\t\t\t)\n\t\t\t\t)\n\t\t\t)\n\t\t\t(property "Datasheet" ""\n\t\t\t\t(at 0 0 0)\n\t\t\t\t(show_name no)\n\t\t\t\t(do_not_autoplace no)\n\t\t\t\t(hide yes)\n\t\t\t\t(effects\n\t\t\t\t\t(font\n\t\t\t\t\t\t(size 1.27 1.27)\n\t\t\t\t\t)\n\t\t\t\t)\n\t\t\t)\n\t\t\t(property "Description" "Power symbol creates a global label with name \\"VCC\\""\n\t\t\t\t(at 0 0 0)\n\t\t\t\t(show_name no)\n\t\t\t\t(do_not_autoplace no)\n\t\t\t\t(hide yes)\n\t\t\t\t(effects\n\t\t\t\t\t(font\n\t\t\t\t\t\t(size 1.27 1.27)\n\t\t\t\t\t)\n\t\t\t\t)\n\t\t\t)\n\t\t\t(property "ki_keywords" "global power"\n\t\t\t\t(at 0 0 0)\n\t\t\t\t(show_name no)\n\t\t\t\t(do_not_autoplace no)\n\t\t\t\t(hide yes)\n\t\t\t\t(effects\n\t\t\t\t\t(font\n\t\t\t\t\t\t(size 1.27 1.27)\n\t\t\t\t\t)\n\t\t\t\t)\n\t\t\t)\n\t\t\t(symbol "VCC_0_1"\n\t\t\t\t(polyline\n\t\t\t\t\t(pts\n\t\t\t\t\t\t(xy -0.762 1.27) (xy 0 2.54)\n\t\t\t\t\t)\n\t\t\t\t\t(stroke\n\t\t\t\t\t\t(width 0)\n\t\t\t\t\t\t(type default)\n\t\t\t\t\t)\n\t\t\t\t\t(fill\n\t\t\t\t\t\t(type none)\n\t\t\t\t\t)\n\t\t\t\t)\n\t\t\t\t(polyline\n\t\t\t\t\t(pts\n\t\t\t\t\t\t(xy 0 2.54) (xy 0.762 1.27)\n\t\t\t\t\t)\n\t\t\t\t\t(stroke\n\t\t\t\t\t\t(width 0)\n\t\t\t\t\t\t(type default)\n\t\t\t\t\t)\n\t\t\t\t\t(fill\n\t\t\t\t\t\t(type none)\n\t\t\t\t\t)\n\t\t\t\t)\n\t\t\t\t(polyline\n\t\t\t\t\t(pts\n\t\t\t\t\t\t(xy 0 0) (xy 0 2.54)\n\t\t\t\t\t)\n\t\t\t\t\t(stroke\n\t\t\t\t\t\t(width 0)\n\t\t\t\t\t\t(type default)\n\t\t\t\t\t)\n\t\t\t\t\t(fill\n\t\t\t\t\t\t(type none)\n\t\t\t\t\t)\n\t\t\t\t)\n\t\t\t)\n\t\t\t(symbol "VCC_1_1"\n\t\t\t\t(pin power_in line\n\t\t\t\t\t(at 0 0 90)\n\t\t\t\t\t(length 0)\n\t\t\t\t\t(name ""\n\t\t\t\t\t\t(effects\n\t\t\t\t\t\t\t(font\n\t\t\t\t\t\t\t\t(size 1.27 1.27)\n\t\t\t\t\t\t\t)\n\t\t\t\t\t\t)\n\t\t\t\t\t)\n\t\t\t\t\t(number "1"\n\t\t\t\t\t\t(effects\n\t\t\t\t\t\t\t(font\n\t\t\t\t\t\t\t\t(size 1.27 1.27)\n\t\t\t\t\t\t\t)\n\t\t\t\t\t\t)\n\t\t\t\t\t)\n\t\t\t\t)\n\t\t\t)\n\t\t\t(embedded_fonts no)\n\t\t)',
+    'VDD': '(symbol "VDD"\n\t\t\t(power global)\n\t\t\t(pin_numbers\n\t\t\t\t(hide yes)\n\t\t\t)\n\t\t\t(pin_names\n\t\t\t\t(offset 0)\n\t\t\t\t(hide yes)\n\t\t\t)\n\t\t\t(exclude_from_sim no)\n\t\t\t(in_bom yes)\n\t\t\t(on_board yes)\n\t\t\t(in_pos_files yes)\n\t\t\t(duplicate_pin_numbers_are_jumpers no)\n\t\t\t(property "Reference" "#PWR"\n\t\t\t\t(at 0 -3.81 0)\n\t\t\t\t(show_name no)\n\t\t\t\t(do_not_autoplace no)\n\t\t\t\t(hide yes)\n\t\t\t\t(effects\n\t\t\t\t\t(font\n\t\t\t\t\t\t(size 1.27 1.27)\n\t\t\t\t\t)\n\t\t\t\t)\n\t\t\t)\n\t\t\t(property "Value" "VDD"\n\t\t\t\t(at 0 3.556 0)\n\t\t\t\t(show_name no)\n\t\t\t\t(do_not_autoplace no)\n\t\t\t\t(effects\n\t\t\t\t\t(font\n\t\t\t\t\t\t(size 1.27 1.27)\n\t\t\t\t\t)\n\t\t\t\t)\n\t\t\t)\n\t\t\t(property "Footprint" ""\n\t\t\t\t(at 0 0 0)\n\t\t\t\t(show_name no)\n\t\t\t\t(do_not_autoplace no)\n\t\t\t\t(hide yes)\n\t\t\t\t(effects\n\t\t\t\t\t(font\n\t\t\t\t\t\t(size 1.27 1.27)\n\t\t\t\t\t)\n\t\t\t\t)\n\t\t\t)\n\t\t\t(property "Datasheet" ""\n\t\t\t\t(at 0 0 0)\n\t\t\t\t(show_name no)\n\t\t\t\t(do_not_autoplace no)\n\t\t\t\t(hide yes)\n\t\t\t\t(effects\n\t\t\t\t\t(font\n\t\t\t\t\t\t(size 1.27 1.27)\n\t\t\t\t\t)\n\t\t\t\t)\n\t\t\t)\n\t\t\t(property "Description" "Power symbol creates a global label with name \\"VDD\\""\n\t\t\t\t(at 0 0 0)\n\t\t\t\t(show_name no)\n\t\t\t\t(do_not_autoplace no)\n\t\t\t\t(hide yes)\n\t\t\t\t(effects\n\t\t\t\t\t(font\n\t\t\t\t\t\t(size 1.27 1.27)\n\t\t\t\t\t)\n\t\t\t\t)\n\t\t\t)\n\t\t\t(property "ki_keywords" "global power"\n\t\t\t\t(at 0 0 0)\n\t\t\t\t(show_name no)\n\t\t\t\t(do_not_autoplace no)\n\t\t\t\t(hide yes)\n\t\t\t\t(effects\n\t\t\t\t\t(font\n\t\t\t\t\t\t(size 1.27 1.27)\n\t\t\t\t\t)\n\t\t\t\t)\n\t\t\t)\n\t\t\t(symbol "VDD_0_1"\n\t\t\t\t(polyline\n\t\t\t\t\t(pts\n\t\t\t\t\t\t(xy -0.762 1.27) (xy 0 2.54)\n\t\t\t\t\t)\n\t\t\t\t\t(stroke\n\t\t\t\t\t\t(width 0)\n\t\t\t\t\t\t(type default)\n\t\t\t\t\t)\n\t\t\t\t\t(fill\n\t\t\t\t\t\t(type none)\n\t\t\t\t\t)\n\t\t\t\t)\n\t\t\t\t(polyline\n\t\t\t\t\t(pts\n\t\t\t\t\t\t(xy 0 2.54) (xy 0.762 1.27)\n\t\t\t\t\t)\n\t\t\t\t\t(stroke\n\t\t\t\t\t\t(width 0)\n\t\t\t\t\t\t(type default)\n\t\t\t\t\t)\n\t\t\t\t\t(fill\n\t\t\t\t\t\t(type none)\n\t\t\t\t\t)\n\t\t\t\t)\n\t\t\t\t(polyline\n\t\t\t\t\t(pts\n\t\t\t\t\t\t(xy 0 0) (xy 0 2.54)\n\t\t\t\t\t)\n\t\t\t\t\t(stroke\n\t\t\t\t\t\t(width 0)\n\t\t\t\t\t\t(type default)\n\t\t\t\t\t)\n\t\t\t\t\t(fill\n\t\t\t\t\t\t(type none)\n\t\t\t\t\t)\n\t\t\t\t)\n\t\t\t)\n\t\t\t(symbol "VDD_1_1"\n\t\t\t\t(pin power_in line\n\t\t\t\t\t(at 0 0 90)\n\t\t\t\t\t(length 0)\n\t\t\t\t\t(name ""\n\t\t\t\t\t\t(effects\n\t\t\t\t\t\t\t(font\n\t\t\t\t\t\t\t\t(size 1.27 1.27)\n\t\t\t\t\t\t\t)\n\t\t\t\t\t\t)\n\t\t\t\t\t)\n\t\t\t\t\t(number "1"\n\t\t\t\t\t\t(effects\n\t\t\t\t\t\t\t(font\n\t\t\t\t\t\t\t\t(size 1.27 1.27)\n\t\t\t\t\t\t\t)\n\t\t\t\t\t\t)\n\t\t\t\t\t)\n\t\t\t\t)\n\t\t\t)\n\t\t\t(embedded_fonts no)\n\t\t)',
+    'VEE': '(symbol "VEE"\n\t\t\t(power global)\n\t\t\t(pin_numbers\n\t\t\t\t(hide yes)\n\t\t\t)\n\t\t\t(pin_names\n\t\t\t\t(offset 0)\n\t\t\t\t(hide yes)\n\t\t\t)\n\t\t\t(exclude_from_sim no)\n\t\t\t(in_bom yes)\n\t\t\t(on_board yes)\n\t\t\t(in_pos_files yes)\n\t\t\t(duplicate_pin_numbers_are_jumpers no)\n\t\t\t(property "Reference" "#PWR"\n\t\t\t\t(at 0 -3.81 0)\n\t\t\t\t(show_name no)\n\t\t\t\t(do_not_autoplace no)\n\t\t\t\t(hide yes)\n\t\t\t\t(effects\n\t\t\t\t\t(font\n\t\t\t\t\t\t(size 1.27 1.27)\n\t\t\t\t\t)\n\t\t\t\t)\n\t\t\t)\n\t\t\t(property "Value" "VEE"\n\t\t\t\t(at 0 3.556 0)\n\t\t\t\t(show_name no)\n\t\t\t\t(do_not_autoplace no)\n\t\t\t\t(effects\n\t\t\t\t\t(font\n\t\t\t\t\t\t(size 1.27 1.27)\n\t\t\t\t\t)\n\t\t\t\t)\n\t\t\t)\n\t\t\t(property "Footprint" ""\n\t\t\t\t(at 0 0 0)\n\t\t\t\t(show_name no)\n\t\t\t\t(do_not_autoplace no)\n\t\t\t\t(hide yes)\n\t\t\t\t(effects\n\t\t\t\t\t(font\n\t\t\t\t\t\t(size 1.27 1.27)\n\t\t\t\t\t)\n\t\t\t\t)\n\t\t\t)\n\t\t\t(property "Datasheet" ""\n\t\t\t\t(at 0 0 0)\n\t\t\t\t(show_name no)\n\t\t\t\t(do_not_autoplace no)\n\t\t\t\t(hide yes)\n\t\t\t\t(effects\n\t\t\t\t\t(font\n\t\t\t\t\t\t(size 1.27 1.27)\n\t\t\t\t\t)\n\t\t\t\t)\n\t\t\t)\n\t\t\t(property "Description" "Power symbol creates a global label with name \\"VEE\\""\n\t\t\t\t(at 0 0 0)\n\t\t\t\t(show_name no)\n\t\t\t\t(do_not_autoplace no)\n\t\t\t\t(hide yes)\n\t\t\t\t(effects\n\t\t\t\t\t(font\n\t\t\t\t\t\t(size 1.27 1.27)\n\t\t\t\t\t)\n\t\t\t\t)\n\t\t\t)\n\t\t\t(property "ki_keywords" "global power"\n\t\t\t\t(at 0 0 0)\n\t\t\t\t(show_name no)\n\t\t\t\t(do_not_autoplace no)\n\t\t\t\t(hide yes)\n\t\t\t\t(effects\n\t\t\t\t\t(font\n\t\t\t\t\t\t(size 1.27 1.27)\n\t\t\t\t\t)\n\t\t\t\t)\n\t\t\t)\n\t\t\t(symbol "VEE_0_1"\n\t\t\t\t(polyline\n\t\t\t\t\t(pts\n\t\t\t\t\t\t(xy 0 0) (xy 0 2.54)\n\t\t\t\t\t)\n\t\t\t\t\t(stroke\n\t\t\t\t\t\t(width 0)\n\t\t\t\t\t\t(type default)\n\t\t\t\t\t)\n\t\t\t\t\t(fill\n\t\t\t\t\t\t(type none)\n\t\t\t\t\t)\n\t\t\t\t)\n\t\t\t\t(polyline\n\t\t\t\t\t(pts\n\t\t\t\t\t\t(xy 0.762 1.27) (xy -0.762 1.27) (xy 0 2.54) (xy 0.762 1.27)\n\t\t\t\t\t)\n\t\t\t\t\t(stroke\n\t\t\t\t\t\t(width 0)\n\t\t\t\t\t\t(type default)\n\t\t\t\t\t)\n\t\t\t\t\t(fill\n\t\t\t\t\t\t(type outline)\n\t\t\t\t\t)\n\t\t\t\t)\n\t\t\t)\n\t\t\t(symbol "VEE_1_1"\n\t\t\t\t(pin power_in line\n\t\t\t\t\t(at 0 0 90)\n\t\t\t\t\t(length 0)\n\t\t\t\t\t(name ""\n\t\t\t\t\t\t(effects\n\t\t\t\t\t\t\t(font\n\t\t\t\t\t\t\t\t(size 1.27 1.27)\n\t\t\t\t\t\t\t)\n\t\t\t\t\t\t)\n\t\t\t\t\t)\n\t\t\t\t\t(number "1"\n\t\t\t\t\t\t(effects\n\t\t\t\t\t\t\t(font\n\t\t\t\t\t\t\t\t(size 1.27 1.27)\n\t\t\t\t\t\t\t)\n\t\t\t\t\t\t)\n\t\t\t\t\t)\n\t\t\t\t)\n\t\t\t)\n\t\t\t(embedded_fonts no)\n\t\t)',
+    'VSS': '(symbol "VSS"\n\t\t\t(power global)\n\t\t\t(pin_numbers\n\t\t\t\t(hide yes)\n\t\t\t)\n\t\t\t(pin_names\n\t\t\t\t(offset 0)\n\t\t\t\t(hide yes)\n\t\t\t)\n\t\t\t(exclude_from_sim no)\n\t\t\t(in_bom yes)\n\t\t\t(on_board yes)\n\t\t\t(in_pos_files yes)\n\t\t\t(duplicate_pin_numbers_are_jumpers no)\n\t\t\t(property "Reference" "#PWR"\n\t\t\t\t(at 0 -3.81 0)\n\t\t\t\t(show_name no)\n\t\t\t\t(do_not_autoplace no)\n\t\t\t\t(hide yes)\n\t\t\t\t(effects\n\t\t\t\t\t(font\n\t\t\t\t\t\t(size 1.27 1.27)\n\t\t\t\t\t)\n\t\t\t\t)\n\t\t\t)\n\t\t\t(property "Value" "VSS"\n\t\t\t\t(at 0 3.556 0)\n\t\t\t\t(show_name no)\n\t\t\t\t(do_not_autoplace no)\n\t\t\t\t(effects\n\t\t\t\t\t(font\n\t\t\t\t\t\t(size 1.27 1.27)\n\t\t\t\t\t)\n\t\t\t\t)\n\t\t\t)\n\t\t\t(property "Footprint" ""\n\t\t\t\t(at 0 0 0)\n\t\t\t\t(show_name no)\n\t\t\t\t(do_not_autoplace no)\n\t\t\t\t(hide yes)\n\t\t\t\t(effects\n\t\t\t\t\t(font\n\t\t\t\t\t\t(size 1.27 1.27)\n\t\t\t\t\t)\n\t\t\t\t)\n\t\t\t)\n\t\t\t(property "Datasheet" ""\n\t\t\t\t(at 0 0 0)\n\t\t\t\t(show_name no)\n\t\t\t\t(do_not_autoplace no)\n\t\t\t\t(hide yes)\n\t\t\t\t(effects\n\t\t\t\t\t(font\n\t\t\t\t\t\t(size 1.27 1.27)\n\t\t\t\t\t)\n\t\t\t\t)\n\t\t\t)\n\t\t\t(property "Description" "Power symbol creates a global label with name \\"VSS\\""\n\t\t\t\t(at 0 0 0)\n\t\t\t\t(show_name no)\n\t\t\t\t(do_not_autoplace no)\n\t\t\t\t(hide yes)\n\t\t\t\t(effects\n\t\t\t\t\t(font\n\t\t\t\t\t\t(size 1.27 1.27)\n\t\t\t\t\t)\n\t\t\t\t)\n\t\t\t)\n\t\t\t(property "ki_keywords" "global power"\n\t\t\t\t(at 0 0 0)\n\t\t\t\t(show_name no)\n\t\t\t\t(do_not_autoplace no)\n\t\t\t\t(hide yes)\n\t\t\t\t(effects\n\t\t\t\t\t(font\n\t\t\t\t\t\t(size 1.27 1.27)\n\t\t\t\t\t)\n\t\t\t\t)\n\t\t\t)\n\t\t\t(symbol "VSS_0_1"\n\t\t\t\t(polyline\n\t\t\t\t\t(pts\n\t\t\t\t\t\t(xy 0 0) (xy 0 2.54)\n\t\t\t\t\t)\n\t\t\t\t\t(stroke\n\t\t\t\t\t\t(width 0)\n\t\t\t\t\t\t(type default)\n\t\t\t\t\t)\n\t\t\t\t\t(fill\n\t\t\t\t\t\t(type none)\n\t\t\t\t\t)\n\t\t\t\t)\n\t\t\t\t(polyline\n\t\t\t\t\t(pts\n\t\t\t\t\t\t(xy 0.762 1.27) (xy -0.762 1.27) (xy 0 2.54) (xy 0.762 1.27)\n\t\t\t\t\t)\n\t\t\t\t\t(stroke\n\t\t\t\t\t\t(width 0)\n\t\t\t\t\t\t(type default)\n\t\t\t\t\t)\n\t\t\t\t\t(fill\n\t\t\t\t\t\t(type outline)\n\t\t\t\t\t)\n\t\t\t\t)\n\t\t\t)\n\t\t\t(symbol "VSS_1_1"\n\t\t\t\t(pin power_in line\n\t\t\t\t\t(at 0 0 90)\n\t\t\t\t\t(length 0)\n\t\t\t\t\t(name ""\n\t\t\t\t\t\t(effects\n\t\t\t\t\t\t\t(font\n\t\t\t\t\t\t\t\t(size 1.27 1.27)\n\t\t\t\t\t\t\t)\n\t\t\t\t\t\t)\n\t\t\t\t\t)\n\t\t\t\t\t(number "1"\n\t\t\t\t\t\t(effects\n\t\t\t\t\t\t\t(font\n\t\t\t\t\t\t\t\t(size 1.27 1.27)\n\t\t\t\t\t\t\t)\n\t\t\t\t\t\t)\n\t\t\t\t\t)\n\t\t\t\t)\n\t\t\t)\n\t\t\t(embedded_fonts no)\n\t\t)',
+}
+
+
 def _extract_power_lib_symbol_raw(name):
     """Extract the raw S-expression text for a power symbol.
 
@@ -111,30 +174,31 @@ def _extract_power_lib_symbol_raw(name):
     import re
 
     text = _get_power_lib_text()
-    if not text:
-        return None
+    if text:
 
-    # Find the symbol definition start.
-    pattern = re.compile(r'^\t\(symbol "' + re.escape(name) + r'"', re.MULTILINE)
-    match = pattern.search(text)
-    if not match:
-        return None
+        # Find the symbol definition start.
+        pattern = re.compile(r'^\t\(symbol "' + re.escape(name) + r'"', re.MULTILINE)
+        match = pattern.search(text)
+        if match:
 
-    # Extract from opening paren to matching closing paren.
-    start = match.start() + 1  # Skip the leading tab.
-    depth = 0
-    i = start
-    while i < len(text):
-        if text[i] == "(":
-            depth += 1
-        elif text[i] == ")":
-            depth -= 1
-            if depth == 0:
-                return text[start:i + 1]
-        i += 1
+            # Extract from opening paren to matching closing paren.
+            start = match.start() + 1  # Skip the leading tab.
+            depth = 0
+            i = start
+            while i < len(text):
+                if text[i] == "(":
+                    depth += 1
+                elif text[i] == ")":
+                    depth -= 1
+                    if depth == 0:
+                        return text[start:i + 1]
+                i += 1
 
-    return None
 
+    # The real library couldn't be found/read, or doesn't contain this
+    # symbol (e.g. no KiCad install on this machine). Fall back to a
+    # built-in copy so the symbol still gets a lib_symbols definition.
+    return _POWER_SYMBOL_FALLBACK_TEXT.get(name)
 
 def _parse_sexp_text(text):
     """Parse an S-expression string into a nested list structure.
@@ -251,7 +315,57 @@ def _power_symbol_to_sexp(pin, net_name, tx):
     part_tx = getattr(pin.part, "tx", Tx())
     combined_tx = part_tx * tx
     pin_pt = getattr(pin, "pt", Point(pin.x, pin.y))
-    pt = pin_pt * combined_tx
+    pin_at = pin_pt * combined_tx
+
+    # Offset the symbol away from the pin by a short stub (see
+    # POWER_SYMBOL_STUB_LEN_MM) instead of stamping it directly on the
+    # pin, so its Value-text label doesn't land back on the part.
+    # A pin's local point is measured from the part's own origin, so the
+    # direction from origin to pin (in local space) is the away-from-body
+    # direction. Rotate that unit vector by combined_tx's rotation only
+    # (no translation, and re-normalized to drop any uniform scale it
+    # carries, e.g. mils-to-mm) to get the away-from-body direction in
+    # final mm coordinates, then extend pin_at by an exact mm distance.
+    pt_dist = math.hypot(pin_pt.x, pin_pt.y)
+    final_dir = Point(0, 0)
+    if pt_dist > 0:
+        local_dir = Point(pin_pt.x / pt_dist, pin_pt.y / pt_dist)
+        rot_only = Tx(a=combined_tx.a, b=combined_tx.b, c=combined_tx.c, d=combined_tx.d)
+        final_dir = local_dir * rot_only
+        final_dir_len = math.hypot(final_dir.x, final_dir.y)
+        if final_dir_len > 0:
+            final_dir = Point(final_dir.x / final_dir_len, final_dir.y / final_dir_len)
+        pt = pin_at + final_dir * POWER_SYMBOL_STUB_LEN_MM
+    else:
+        pt = pin_at
+
+    # A fanout net (auto_stub_fanout) can stub multiple pins on the same
+    # net; if two of those pins end up placed close together, each pin's
+    # independently-computed label can land on top of the other's. Push
+    # further out along the same direction until clear of every label
+    # already placed for this net.
+    extra = 0.0
+    for _ in range(6):
+        if not any(
+            math.hypot(pt.x - p.x, pt.y - p.y) < MIN_POWER_LABEL_SEPARATION_MM
+            for p in _placed_power_points
+        ):
+            break
+        if final_dir.x == 0 and final_dir.y == 0:
+            break
+        extra += POWER_SYMBOL_STUB_LEN_MM
+        pt = pin_at + final_dir * (POWER_SYMBOL_STUB_LEN_MM + extra)
+    # Keep the pin->symbol stub PERFECTLY STRAIGHT (Phase G wire beautify /
+    # IPC-2612): final_dir can carry a small off-axis component, leaving the
+    # symbol a mm or two beside the pin's axis -> a diagonal "dog-leg" stub.
+    # Snap the symbol onto the pin's dominant axis so the stub is one straight
+    # H or V segment. Only the free symbol end moves; the pin stays connected.
+    if abs(final_dir.y) >= abs(final_dir.x):
+        pt = Point(pin_at.x, pt.y)   # ~vertical pin -> share pin X -> vertical stub
+    else:
+        pt = Point(pt.x, pin_at.y)   # ~horizontal pin -> share pin Y -> horizontal stub
+
+    _placed_power_points.append(pt)
 
     x = _round_mm(pt.x)
     y = _round_mm(pt.y)
@@ -272,8 +386,8 @@ def _power_symbol_to_sexp(pin, net_name, tx):
             ["lib_id", lib_id],
             ["at", x, y, angle],
             ["unit", 1],
-            ["exclude_from_sim", "yes"],
-            ["in_bom", "no"],
+            ["exclude_from_sim", "no"],
+            ["in_bom", "yes"],
             ["on_board", "yes"],
             ["dnp", "no"],
             ["fields_autoplaced", "yes"],
@@ -356,7 +470,18 @@ def _power_symbol_to_sexp(pin, net_name, tx):
         )
     )
 
-    return symbol
+    # Stub wire connecting the part's actual pin to the (offset) symbol.
+    x0, y0 = _round_mm(pin_at.x), _round_mm(pin_at.y)
+    wire = Sexp(
+        [
+            "wire",
+            ["pts", ["xy", x0, y0], ["xy", x, y]],
+            ["stroke", ["width", 0], ["type", "default"]],
+            ["uuid", _gen_uuid(f"pwr_stub:{net_name}:{x0}:{y0}:{x}:{y}")],
+        ]
+    )
+
+    return [wire, symbol]
 
 
 def _reset_power_symbol_state():
@@ -364,6 +489,7 @@ def _reset_power_symbol_state():
     global _used_power_symbols
     _used_power_symbols = set()
     _pwr_counter[0] = 0
+    _placed_power_points.clear()
 
 
 def _gen_uuid(name=""):
@@ -445,9 +571,16 @@ def part_to_sexp(part, tx=Tx()):
     tx = part_tx * tx
     origin = Point(_round_mm(tx.origin.x), _round_mm(tx.origin.y))
     unit_num = getattr(part, "num", 1)
+    # A PartUnit must carry its PARENT's reference: all units of "U12" share
+    # Reference "U12" and differ only by (unit N). Writing the unit's own ref
+    # ("U12.uA") makes KiCad see three separate one-unit parts -> phantom
+    # "missing power unit" ERC errors, and netlist refs that can never match
+    # the intended netlist -- which fails connectivity verification for every
+    # net touching a multi-unit part and forces the scattered label fallback.
+    part_ref = getattr(getattr(part, "parent", None), "ref", None) or part.ref
 
     lib_name = (
-        os.path.splitext(part.lib.filename)[0]
+        os.path.splitext(os.path.basename(part.lib.filename))[0]
         if hasattr(part.lib, "filename") and part.lib.filename
         else "Device"
     )
@@ -477,7 +610,7 @@ def part_to_sexp(part, tx=Tx()):
             [
                 "property",
                 "Reference",
-                part.ref,
+                part_ref,
                 ["at", origin.x, origin.y - 2.54, angle],
                 ["effects", ["font", ["size", 1.27, 1.27]], ["justify", "left"]],
             ]
@@ -583,7 +716,7 @@ def part_to_sexp(part, tx=Tx()):
                     [
                         "path",
                         f"/{_gen_uuid('root_schematic')}",
-                        ["reference", part.ref],
+                        ["reference", part_ref],
                         ["unit", unit_num],
                     ],
                 ],
@@ -609,7 +742,7 @@ def part_to_lib_symbol_definition(part):
         list: Nested list for the lib_symbols section.
     """
     lib_name = (
-        os.path.splitext(part.lib.filename)[0]
+        os.path.splitext(os.path.basename(part.lib.filename))[0]
         if hasattr(part.lib, "filename") and part.lib.filename
         else "Device"
     )
@@ -619,8 +752,8 @@ def part_to_lib_symbol_definition(part):
     symbol_def = [
         "symbol",
         lib_id,
-        ["pin_numbers", ["hide", "yes"]],
-        ["pin_names", ["offset", 0]],
+        ["pin_numbers", ["hide", "no"]],
+        ["pin_names", ["offset", 0.508]],
         ["exclude_from_sim", "no"],
         ["in_bom", "yes"],
         ["on_board", "yes"],
@@ -692,7 +825,11 @@ def part_to_lib_symbol_definition(part):
                 if cmd[0] not in ("pin", "property")
             ]
             if pin_cmds or graphics:
-                unit_sym = ["symbol", f"{part_name}_{unit_num}_{unit_num}"]
+                # KiCad sub-symbol naming is NAME_<unit>_<style> and only body
+                # style 1 is rendered -- "_2_2" would be unit 2's De Morgan
+                # alternate, which KiCad never draws, leaving units 2+ of a
+                # multi-unit part with no graphics and NO PINS on the sheet.
+                unit_sym = ["symbol", f"{part_name}_{unit_num}_1"]
                 unit_sym.extend(graphics)
                 unit_sym.extend(pin_cmds)
                 symbol_def.append(unit_sym)
@@ -851,7 +988,8 @@ def net_label_to_sexp(pin, tx=Tx(), force=False):
             which always need a label regardless of stub state).
 
     Returns:
-        Sexp or None: Label/power symbol S-expression, or None if no label needed.
+        Sexp, list[Sexp], or None: Label/power symbol S-expression(s) (a
+        power symbol also includes its stub wire), or None if no label needed.
     """
     if not force and (not pin.stub or not pin.is_connected()):
         return None
@@ -876,6 +1014,20 @@ def net_label_to_sexp(pin, tx=Tx(), force=False):
     part_tx = getattr(pin.part, "tx", Tx())
     pt = pin_pt * part_tx * tx
 
+    # ROBUSTNESS: an unplaced part or a degenerate (dangling, single-pin) net can
+    # yield a non-finite position here. Emitting "(at nan nan ...)" makes the
+    # ENTIRE .kicad_sch unloadable in KiCad ("Failed to load schematic"), which
+    # poisons an otherwise-correct sheet. Such a net has fewer than two pins, so
+    # a label adds no connectivity -- skip it rather than break the whole file.
+    if not (math.isfinite(pt.x) and math.isfinite(pt.y)):
+        import warnings as _warnings
+        _warnings.warn(
+            "skidl: skipping net label '{}' at non-finite position ({}, {}) -- "
+            "unplaced pin / dangling net".format(pin.net.name, pt.x, pt.y),
+            RuntimeWarning,
+        )
+        return None
+
     # Map pin orientation to angle (degrees).
     orient_map = {"R": 180, "D": 90, "L": 0, "U": 270}
     angle = orient_map[calc_pin_dir(pin)]
@@ -895,6 +1047,184 @@ def net_label_to_sexp(pin, tx=Tx(), force=False):
     )
 
     return label
+
+
+def no_connect_to_sexp(pin, tx=Tx()):
+    """Create S-expression for a No-Connect marker at a pin tied to skidl's NC.
+
+    A pin explicitly connected only to skidl's built-in no-connect net
+    (`part["PIN"] += NC`, see skidl.net.NCNet) is intentionally left
+    unrouted: is_connected() reports it as unconnected so it never gets a
+    wire, label, or placement/routing force, and would otherwise render as
+    a bare, unmarked pin stub. This renders the KiCad no_connect glyph at
+    the pin instead so the intent is visible on the schematic.
+
+    Args:
+        pin: Pin to check.
+        tx: Transformation matrix.
+
+    Returns:
+        Sexp, or None if the pin isn't tied only to a no-connect net.
+    """
+    from skidl.net import NCNet
+
+    if not pin.nets or not all(isinstance(n, NCNet) for n in pin.nets):
+        return None
+
+    pin_pt = getattr(pin, "pt", Point(pin.x, pin.y))
+    part_tx = getattr(pin.part, "tx", Tx())
+    pt = pin_pt * part_tx * tx
+
+    return Sexp(
+        [
+            "no_connect",
+            ["at", _round_mm(pt.x), _round_mm(pt.y)],
+            ["uuid", _gen_uuid(f"nc:{id(pin)}:{pt.x}:{pt.y}")],
+        ]
+    )
+
+
+# ---------------------------------------------------------------------------
+# Graphical bus notation (presentational overlay over individual labels)
+# ---------------------------------------------------------------------------
+
+# A bus_entry is conventionally a 45-degree diagonal stub (KiCad's own
+# generator uses 2.54mm/100mil); the spine sits this far above the
+# topmost bus-member label so the diagonals have room to run.
+_BUS_SPINE_CLEARANCE_MM = 5.08
+
+
+# Minimum member count for a SKiDL Bus to render as a graphical bus spine.
+_MIN_BUS_MEMBERS = 3
+
+
+def detect_bus_group(pin, circuit):
+    """Return (bus, index) if pin's net is a member of a SKiDL Bus.
+
+    Bus membership is read exclusively from circuit.buses (the actual
+    Bus objects built from `Bus(...)`/bus indexing in the source
+    script) -- never inferred from net naming patterns (e.g. seeing
+    GPIO0/GPIO1/GPIO2 as similarly-named nets does NOT make them a
+    detected bus). A net not on any Bus returns None.
+
+    Args:
+        pin: Pin to check.
+        circuit: Circuit whose `.buses` list is searched.
+
+    Returns:
+        tuple(Bus, int) or None.
+    """
+    net = getattr(pin, "net", None)
+    if net is None:
+        return None
+    for bus in getattr(circuit, "buses", []):
+        # A graphical bus is only worth drawing for >= 3 members; a 2-net
+        # "bus" reads more clearly as two plain labels (RULE_ENGINE Phase D).
+        if len(getattr(bus, "nets", [])) < _MIN_BUS_MEMBERS:
+            continue
+        for index, bus_net in enumerate(bus.nets):
+            if bus_net is net:
+                return bus, index
+    return None
+
+
+def bus_spine_y(points):
+    """Return the shared Y for a bus spine above a group of pin points.
+
+    All bus_entry stubs for one bus must land on the SAME spine Y for
+    the spine to be a single straight line -- each contributing pin can
+    be at a different Y, so this is computed once from the whole group
+    (the topmost pin's Y minus clearance) rather than per-pin.
+
+    Args:
+        points: List of Points (already sheet-transformed, in mm).
+
+    Returns:
+        float: Spine Y, or None if points is empty.
+    """
+    if not points:
+        return None
+    return min(pt.y for pt in points) - _BUS_SPINE_CLEARANCE_MM
+
+
+def bus_entry_to_sexp(pt, spine_y):
+    """Create S-expression for a single diagonal bus-entry stub running
+    from a label's anchor point up to the (shared, see bus_spine_y())
+    bus spine.
+
+    Args:
+        pt: Point (already sheet-transformed, in mm) of the label anchor
+            this entry connects from.
+        spine_y: Y coordinate of the bus spine this entry lands on.
+
+    Returns:
+        tuple(Sexp, Point): The bus_entry element, and the Point where
+        its diagonal lands on the spine (bus_to_sexp() needs this to
+        know how far the spine line must span).
+    """
+    dy = spine_y - pt.y  # Negative: spine sits above (smaller Y) the pin.
+    dx = dy  # 45-degree diagonal, same sign so it visibly slants.
+    landing = Point(pt.x + dx, spine_y)
+    entry = Sexp(
+        [
+            "bus_entry",
+            ["at", _round_mm(pt.x), _round_mm(pt.y)],
+            ["size", _round_mm(dx), _round_mm(dy)],
+            ["stroke", ["width", 0], ["type", "solid"]],
+            ["uuid", _gen_uuid(f"busentry:{pt.x}:{pt.y}")],
+        ]
+    )
+    return entry, landing
+
+
+def bus_to_sexp(bus, landings):
+    """Create S-expressions for a graphical bus line spanning a group of
+    bus-entry landing points, plus a range label at its midpoint.
+
+    Purely presentational: the individual member nets already have their
+    own net labels (emitted unconditionally alongside this), so this is
+    an additive visual overlay, not something connectivity depends on.
+
+    Args:
+        bus: The Bus these landings belong to (only .name is used, for
+            the range label text).
+        landings: List of Points (already sheet-transformed, in mm)
+            where bus_entry stubs land on the spine -- must share a
+            common Y (see bus_spine_y()/bus_entry_to_sexp()).
+
+    Returns:
+        list[Sexp]: [bus line, range label], or [] if fewer than 2
+        landing points (a "bus" of one member isn't worth drawing).
+    """
+    if len(landings) < 2:
+        return []
+
+    spine_y = landings[0].y
+    x1 = min(pt.x for pt in landings)
+    x2 = max(pt.x for pt in landings)
+
+    bus_line = Sexp(
+        [
+            "bus",
+            ["pts", ["xy", _round_mm(x1), _round_mm(spine_y)], ["xy", _round_mm(x2), _round_mm(spine_y)]],
+            ["stroke", ["width", 0], ["type", "solid"]],
+            ["uuid", _gen_uuid(f"bus:{bus.name}:{x1}:{spine_y}")],
+        ]
+    )
+
+    label_text = f"{bus.name}[0..{len(bus.nets) - 1}]"
+    label_x = (x1 + x2) / 2
+    range_label = Sexp(
+        [
+            "text",
+            label_text,
+            ["at", _round_mm(label_x), _round_mm(spine_y), 0],
+            ["effects", ["font", ["size", 1.27, 1.27]], ["justify", "left", "bottom"]],
+            ["uuid", _gen_uuid(f"buslabel:{bus.name}:{label_x}:{spine_y}")],
+        ]
+    )
+
+    return [bus_line, range_label]
 
 
 # ---------------------------------------------------------------------------
@@ -1090,7 +1420,7 @@ def _fix_sheet_filename(node):
 
 
 @export_to_all
-def node_to_sexp_schematic(node, sheet_tx=Tx(), version=20230409):
+def node_to_sexp_schematic(node, sheet_tx=Tx(), version=20230409, circuit=None):
     """Convert a SchNode tree to S-expression schematic(s).
 
     Follows the same recursive pattern as kicad5's node_to_eeschema():
@@ -1102,6 +1432,9 @@ def node_to_sexp_schematic(node, sheet_tx=Tx(), version=20230409):
         node: SchNode to convert.
         sheet_tx: Parent sheet transformation matrix.
         version: S-expression version number (20240108 for kicad6, 20230409 for kicad8/9).
+        circuit: Circuit (for circuit.buses, to render graphical bus
+            notation over stubbed pins that are members of a Bus). May
+            be None, in which case bus rendering is simply skipped.
 
     Returns:
         list[Sexp]: S-expression elements (parts, wires, labels, or a sheet ref).
@@ -1120,7 +1453,9 @@ def node_to_sexp_schematic(node, sheet_tx=Tx(), version=20230409):
 
     # Recurse into children.
     for child in node.children.values():
-        elements.extend(node_to_sexp_schematic(child, tx, version=version))
+        elements.extend(
+            node_to_sexp_schematic(child, tx, version=version, circuit=circuit)
+        )
 
     # Collect lib_symbols needed for this node's parts.
     lib_symbols = {}
@@ -1136,7 +1471,10 @@ def node_to_sexp_schematic(node, sheet_tx=Tx(), version=20230409):
             # NetTerminals become net labels.
             label = net_label_to_sexp(part.pins[0], tx=tx, force=True)
             if label:
-                elements.append(label)
+                if type(label) is list:
+                    elements.extend(label)
+                else:
+                    elements.append(label)
         else:
             elements.append(part_to_sexp(part, tx=tx))
 
@@ -1149,14 +1487,44 @@ def node_to_sexp_schematic(node, sheet_tx=Tx(), version=20230409):
     for net, junctions in node.junctions.items():
         elements.extend(junction_to_sexp(net, junctions, tx=tx))
 
-    # Generate net labels for stubbed pins.
+    # Generate net labels for stubbed pins, and no-connect markers for pins
+    # tied to skidl's NC net.
+    bus_points = defaultdict(list)  # bus -> [(pt, ...)] raw pin points.
     for part in node.parts:
         if isinstance(part, NetTerminal):
             continue
         for pin in part:
             label = net_label_to_sexp(pin, tx=tx)
             if label:
-                elements.append(label)
+                if type(label) is list:
+                    elements.extend(label)
+                else:
+                    elements.append(label)
+                if circuit is not None:
+                    bus_group = detect_bus_group(pin, circuit)
+                    if bus_group:
+                        bus, _index = bus_group
+                        pin_pt = getattr(pin, "pt", Point(pin.x, pin.y))
+                        part_tx = getattr(pin.part, "tx", Tx())
+                        bus_points[bus].append(pin_pt * part_tx * tx)
+            nc_marker = no_connect_to_sexp(pin, tx=tx)
+            if nc_marker:
+                elements.append(nc_marker)
+
+    # Graphical bus lines over stubbed pins that are members of a SKiDL
+    # Bus (see detect_bus_group()) -- purely additive: the labels above
+    # already carry real connectivity, this is presentation only. All of
+    # a bus's entries must land on one shared spine Y (see bus_spine_y()),
+    # which needs every member pin's point collected first -- hence this
+    # runs as a second pass rather than emitting entries inline above.
+    for bus, points in bus_points.items():
+        spine_y = bus_spine_y(points)
+        landings = []
+        for pt in points:
+            entry, landing = bus_entry_to_sexp(pt, spine_y)
+            elements.append(entry)
+            landings.append(landing)
+        elements.extend(bus_to_sexp(bus, landings))
 
     if node.flattened:
         # Return elements for inclusion in the parent sheet.
@@ -1247,7 +1615,9 @@ def write_top_schematic(circuit, node, filepath, top_name, title, version=202304
 
     # Recurse into children — they write their own files if unflattened.
     for child in node.children.values():
-        elements.extend(node_to_sexp_schematic(child, sheet_tx, version=version))
+        elements.extend(
+            node_to_sexp_schematic(child, sheet_tx, version=version, circuit=circuit)
+        )
 
     # Collect lib_symbols for ALL parts in the circuit.
     lib_symbols = {}
@@ -1262,7 +1632,10 @@ def write_top_schematic(circuit, node, filepath, top_name, title, version=202304
         if isinstance(part, NetTerminal):
             label = net_label_to_sexp(part.pins[0], tx=sheet_tx, force=True)
             if label:
-                elements.append(label)
+                if type(label) is list:
+                    elements.extend(label)
+                else:
+                    elements.append(label)
         else:
             elements.append(part_to_sexp(part, tx=sheet_tx))
 
@@ -1275,14 +1648,41 @@ def write_top_schematic(circuit, node, filepath, top_name, title, version=202304
     for net, junctions in node.junctions.items():
         elements.extend(junction_to_sexp(net, junctions, tx=sheet_tx))
 
-    # Generate net labels for stubbed pins.
+    # Generate net labels for stubbed pins, and no-connect markers for pins
+    # tied to skidl's NC net.
+    bus_points = defaultdict(list)  # bus -> [(pt, ...)] raw pin points.
     for part in node.parts:
         if isinstance(part, NetTerminal):
             continue
         for pin in part:
             label = net_label_to_sexp(pin, tx=sheet_tx)
             if label:
-                elements.append(label)
+                if type(label) is list:
+                    elements.extend(label)
+                else:
+                    elements.append(label)
+                bus_group = detect_bus_group(pin, circuit)
+                if bus_group:
+                    bus, _index = bus_group
+                    pin_pt = getattr(pin, "pt", Point(pin.x, pin.y))
+                    part_tx = getattr(pin.part, "tx", Tx())
+                    bus_points[bus].append(pin_pt * part_tx * sheet_tx)
+            nc_marker = no_connect_to_sexp(pin, tx=sheet_tx)
+            if nc_marker:
+                elements.append(nc_marker)
+
+    # Graphical bus lines over stubbed pins that are members of a SKiDL
+    # Bus (see detect_bus_group()) -- purely additive presentation. See
+    # the matching comment in node_to_sexp_schematic() for why this is a
+    # second pass rather than emitting entries inline above.
+    for bus, points in bus_points.items():
+        spine_y = bus_spine_y(points)
+        landings = []
+        for pt in points:
+            entry, landing = bus_entry_to_sexp(pt, spine_y)
+            elements.append(entry)
+            landings.append(landing)
+        elements.extend(bus_to_sexp(bus, landings))
 
     # Build lib_symbols section.
     lib_symbols_sexp = Sexp(["lib_symbols"])
@@ -1400,5 +1800,5 @@ def _write_sexp_schematic(schematic, filepath):
     schematic.add_quotes(need_quote)
     schematic.add_quotes(need_quote_alternate, stop_idx=2)
 
-    with open(filepath, "w") as f:
+    with open(filepath, "w", encoding="utf-8") as f:
         f.write(schematic.to_str())

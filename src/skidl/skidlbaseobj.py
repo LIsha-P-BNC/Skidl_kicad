@@ -44,6 +44,13 @@ class SkidlBaseObject(object):
     def __init__(self):
         """Initialize a new SkidlBaseObject with empty fields dictionary."""
         self.fields = {}
+        # Give each instance its own copy of these lists (seeded from
+        # whatever class-level defaults this subclass declares). Without
+        # this, add_erc_function()/add_erc_assertion() would mutate the
+        # shared class attribute, silently applying one instance's custom
+        # ERC checks to every instance of the same class in the process.
+        self.erc_list = list(self.erc_list)
+        self.erc_assertion_list = list(self.erc_assertion_list)
 
     def __getattr__(self, key):
         """

@@ -57,10 +57,10 @@ def get_fp_lib_tbl_dir():
 
     paths = (
         f"$HOME/.config/kicad/{kicad_version}.0",
-        "~/.config/kicad/{kicad_version}.0",
-        "%APPDATA%/kicad/{kicad_version}.0",
-        "$HOME/Library/Preferences/kicad/{kicad_version}.0",
-        "~/Library/Preferences/kicad/{kicad_version}.0",
+        f"~/.config/kicad/{kicad_version}.0",
+        f"%APPDATA%/kicad/{kicad_version}.0",
+        f"$HOME/Library/Preferences/kicad/{kicad_version}.0",
+        f"~/Library/Preferences/kicad/{kicad_version}.0",
         "$HOME/.config/kicad",
         "~/.config/kicad",
         "%APPDATA%/kicad",
@@ -426,6 +426,13 @@ def parse_lib_part(part, partial_parse):
         # Create a unit using pins with the same unit number.
         # This will also add pins from the global unit to this unit.
         u = part.make_unit(unit_label, unit=unit_num)
+        if not u.pins and len(unit_nums) > 1:
+            # This unit has no pins of its own and none inherited from the
+            # global unit, so it's graphics-only (e.g. a documentation
+            # drawing such as an antenna keep-out zone bundled into the
+            # symbol) rather than a real, separately-placeable electrical
+            # unit. Drop it so it isn't placed as a phantom duplicate symbol.
+            part.rmv_unit(unit_label)
 
     if len(part.unit) == 1:
         # If there's only one unit, that unit is the part itself.

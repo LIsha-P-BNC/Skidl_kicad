@@ -1,0 +1,5 @@
+{
+  "tool": "kicad9",
+  "pickle_dir": ".skidl_cache",
+  "part_search_db_dir": ".skidl_cache"
+}

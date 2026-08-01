@@ -462,7 +462,12 @@ class Bus(SkidlBaseObject):
             for k,v in self.__dict__.items():
                 if k in skip_attrs:
                     continue
-                if isinstance(v, Iterable) and not isinstance(v, str):
+                if k == "nets":
+                    # Each net must be independently copied rather than
+                    # aliased, or every "copy" of the bus would silently
+                    # share the same underlying nets as the original.
+                    setattr(cpy, k, [net.copy(circuit=circuit) for net in v])
+                elif isinstance(v, Iterable) and not isinstance(v, str):
                     # Copy the list with shallow copies of its items to the copy.
                     setattr(cpy, k, copy(v))
                 else:
