@@ -35,10 +35,13 @@ def _layer_board(layer_count):
                   pads=[_pad("1"), _pad("2")]),
         Footprint(ref="J1", lib_id="x", side="top",
                   pads=[_pad("1", pad_type="thru_hole", drill=0.8)]),
+        Footprint(ref="C1", lib_id="x", side="top", pads=[_pad("1")]),
     ]
     b.nets = {
         "GND":  Net("GND", 1, pad_refs=[("U1", "1"), ("J1", "1")]),
-        "VBUS": Net("VBUS", 2, net_class="power", pad_refs=[("U1", "2")]),
+        # 2 pads so should_pour can consider it (single-pad nets never pour)
+        "VBUS": Net("VBUS", 2, net_class="power",
+                    pad_refs=[("U1", "2"), ("C1", "1")]),
     }
     return b
 
@@ -213,3 +216,24 @@ def test_tighter_spacing_more_vias():
     coarse, _ = pour.plan_stitching_vias(b, {"GND": ["F.Cu", "B.Cu"]}, spacing_mm=8.0)
     fine, _ = pour.plan_stitching_vias(b, {"GND": ["F.Cu", "B.Cu"]}, spacing_mm=3.0)
     assert len(fine) > len(coarse)
+
+
+# ----- prepare_power_pours: option (b) orchestration -----
+
+def test_prepare_excludes_ground_only_power_stays_routed():
+    b = _outlined_board(4)
+    # user-declared 3 A makes VBUS pour on its In2 plane
+    exclude, zones, vias, warns = pour.prepare_power_pours(b, currents={"VBUS": 3.0})
+    assert exclude == {"GND"}                       # only ground leaves the DSN
+    assert "VBUS" not in exclude                     # power stays routed (option b)
+    assert {z.layer for z in zones if z.net == "GND"} == {"F.Cu", "In1.Cu", "B.Cu"}
+    assert {z.layer for z in zones if z.net == "VBUS"} == {"In2.Cu"}
+    assert all(v.net == "GND" for v in vias)         # power on 1 layer: not stitched
+
+
+def test_prepare_two_layer_only_ground_poured():
+    b = _outlined_board(2)
+    exclude, zones, vias, warns = pour.prepare_power_pours(b, currents={"VBUS": 3.0})
+    assert exclude == {"GND"}
+    assert {z.net for z in zones} == {"GND"}         # 2-layer: power rerouted, not poured
+    assert {z.layer for z in zones} == {"F.Cu", "B.Cu"}

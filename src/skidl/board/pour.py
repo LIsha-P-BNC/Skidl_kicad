@@ -201,6 +201,31 @@ def assign_pour_layers(board: BoardModel, pour_decisions: dict) -> tuple:
     return assignments, reroute, warnings
 
 
+def prepare_power_pours(board: BoardModel, currents: dict = None,
+                        spacing_mm: float = 5.0) -> tuple:
+    """One call from pipeline.build_pcb (after placement, before routing):
+    decide pours, assign layers, emit zones + stitching vias, and return the
+    nets to EXCLUDE from the DSN.
+
+    Only GROUND is excluded -- it pours on every layer its pads occupy, so
+    the router has nothing to add. POWER stays IN the DSN: it pours only on
+    its dedicated inner plane, and its outer-layer pads are routed to vias
+    that land on that plane (option b -- Specctra has no per-layer net
+    exclusion; confirmed against the .dsn grammar, every layer is
+    (type signal) and net classes are global). The asymmetry in
+    assign_pour_layers makes the exclusion set fall out for free: exactly
+    the ground nets, whose every pad already sits on a poured layer.
+
+    Returns (exclude, zones, vias, warnings)."""
+    decisions = plan_pours(board, currents)
+    assignments, _reroute, warns = assign_pour_layers(board, decisions)
+    zones = emit_zones(board, assignments, decisions)
+    vias, vwarns = plan_stitching_vias(board, assignments, spacing_mm)
+    exclude = {name for name, role in decisions.items()
+               if role == "ground" and name in assignments}
+    return exclude, zones, vias, warns + vwarns
+
+
 def emit_zones(board: BoardModel, assignments: dict,
                pour_decisions: dict) -> list:
     """One Zone per (net, layer) filling the board outline. Ground gets the
