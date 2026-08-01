@@ -146,6 +146,13 @@ def build_pcb(netlist_path, out_dir=None, name=None, layers=2,
         if canon and canon != net.net_class:
             net.net_class = canon
 
+    # SAFETY NET: guarantee power nets route at their IPC-2152-informed width
+    # even when initialize_pcb_project never ran (create_pcb called directly).
+    # Without this a power rail routes at the 0.25mm Default -- the width plan
+    # only lived in project_init. Idempotent: a net already in a wide-enough
+    # class doesn't appear in the plan.
+    width_guarantee = _guarantee_power_widths(board, sidecar.get("currents"))
+
     # MECHANICAL-FIRST: enclosure constraints (fixed outline, hole map,
     # edge connectors, keepouts) are applied BEFORE placement -- the
     # professional order. The placer works INSIDE them.
@@ -246,6 +253,8 @@ def build_pcb(netlist_path, out_dir=None, name=None, layers=2,
         "placement": place_report,
         "courtyard_overlaps": count_courtyard_overlaps(board),
     }
+    if width_guarantee:
+        report["power_width_guarantee"] = width_guarantee
 
     # --- DYNAMIC POWER POURS (option b) -------------------------------
     # Decide pours from the board, emit zones + stitching vias, and get the
@@ -316,6 +325,40 @@ def build_pcb(netlist_path, out_dir=None, name=None, layers=2,
     except Exception:
         pass
     return report
+
+
+def _guarantee_power_widths(board: BoardModel, currents: dict = None) -> dict:
+    """Ensure every net whose IPC-2152 required width exceeds its class width
+    routes in a synthesized PWR_* class carrying that width -- the same plan
+    project_init makes, applied here so create_pcb is safe WITHOUT init.
+    Idempotent: net_width_plan only lists nets that need MORE than their
+    current class, so a net already in a wide class is untouched. Returns
+    {class_name: width_mm} for the classes it added/assigned."""
+    from skidl.board.width_engine import net_width_plan, bucket_classes
+    classes = board.net_classes or {}
+    default_w = (classes.get("Default") or {}).get("width", 0.25)
+    nets_by_class = {}
+    for net in board.nets.values():
+        nets_by_class.setdefault(net.net_class, []).append(net.name)
+    try:
+        plan = net_width_plan(
+            nets_by_class,
+            {"classes": classes, "copper_oz": 1,
+             "rules": {"min_track_width": default_w}},
+            currents=currents or {})
+    except Exception:
+        return {}
+    applied = {}
+    for cname, spec in bucket_classes(plan).items():
+        base = dict(classes.get("Power") or classes.get("Default") or {})
+        base["width"] = spec["width"]
+        classes[cname] = base
+        for netname in spec["nets"]:
+            if netname in board.nets:
+                board.nets[netname].net_class = cname
+        applied[cname] = spec["width"]
+    board.net_classes = classes
+    return applied
 
 
 def _ground_net(board: BoardModel):
