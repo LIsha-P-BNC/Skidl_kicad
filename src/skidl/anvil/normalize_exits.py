@@ -1,6 +1,6 @@
 """Pin-exit normalization -- RULE_ENGINE Phase 5 (wire geometry, safe subset).
 
-A CONNECTIVITY-PRESERVING post-route pass on a .kicad_sch: every wire that
+A CONNECTIVITY-PRESERVING post-route pass on a .anvil_sch: every wire that
 leaves a component PIN should run a minimum straight stub before its first bend
 (the "no immediate bend at a pin" rule). Where a pin's exit stub is too short,
 we lengthen it by rigidly SLIDING the rest of that wire's chain -- and the
@@ -234,7 +234,7 @@ def _normalize(sch_path, min_exit_mm):
 if __name__ == "__main__":
     import sys
 
-    name = sys.argv[1] if len(sys.argv) > 1 else "circuit.kicad_sch"
-    if not name.endswith(".kicad_sch"):
-        name += ".kicad_sch"
+    name = sys.argv[1] if len(sys.argv) > 1 else "circuit.anvil_sch"
+    if not name.endswith(".anvil_sch"):
+        name += ".anvil_sch"
     print("exits lengthened:", normalize(name))

@@ -35,5 +35,5 @@ def gen_pcb(circuit, pcb_file, fp_libs=None):
             "kinet2pcb module is missing. Can't generate a KiCad PCB without it."
         )
     else:
-        pcb_file = pcb_file or (get_script_name() + ".kicad_pcb")
+        pcb_file = pcb_file or (get_script_name() + ".anvil_pcb")
         kinet2pcb.kinet2pcb(circuit, pcb_file, fp_libs)

@@ -17,7 +17,7 @@ Pure geometry, works for any circuit; connectivity-guarded by the caller.
 
 Use:
     import remove_label_taps
-    n = remove_label_taps.remove("myboard.kicad_sch")   # returns taps removed
+    n = remove_label_taps.remove("myboard.anvil_sch")   # returns taps removed
 """
 import re
 
@@ -199,7 +199,7 @@ def remove(sch_path):
 if __name__ == "__main__":
     import sys
 
-    p = sys.argv[1] if len(sys.argv) > 1 else "circuit.kicad_sch"
-    if not p.endswith(".kicad_sch"):
-        p += ".kicad_sch"
+    p = sys.argv[1] if len(sys.argv) > 1 else "circuit.anvil_sch"
+    if not p.endswith(".anvil_sch"):
+        p += ".anvil_sch"
     print(f"label taps removed: {remove(p)}")

@@ -1,0 +1,16 @@
+.title 
+V2 N_1 <skidl.part.PinNameSearch object at 0x000002198677A390> 5V
+VRESET <skidl.part.PinNumberSearch object at 0x00000219FFE72690> <skidl.part.PinNameSearch object at 0x00000219852AEFD0> DC 0V PULSE(0V 5V 1us 1us 1us 30ms 50ms)
+RA N_1 N_2 1kOhm
+RB N_2 N_3 5kOhm
+C N_3 <skidl.part.PinNameSearch object at 0x0000021986BBF490> 0.5uF
+Ccont <skidl.part.PinNumberSearch object at 0x0000021986BFAA10> <skidl.part.PinNameSearch object at 0x0000021986BFB150> 0.5uF
+RL N_1 <skidl.part.PinNameSearch object at 0x0000021986C46490> 1kOhm
+V4 N_4 0 DC 0V AC 1V SIN(1.65V 1.65V 10000.0Hz 0s 0Hz)
+A1 [N_4] [N_5] adc
+A2 N_5 N_6 buf
+A3 [N_6] [N_7] dac
+R4 N_7 0 1kOhm
+.model adc adc_bridge (fall_delay=1e-09s in_high=1.65V in_low=1.65V rise_delay=1e-09s)
+.model buf d_buffer (fall_delay=1e-09s input_load=1e-12s rise_delay=1e-09s)
+.model dac dac_bridge (out_high=3.3V out_low=0V)

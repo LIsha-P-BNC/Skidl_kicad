@@ -36,10 +36,6 @@ requirements = [
     "deprecation",
 ]
 
-test_requirements = [
-    # TODO: put package test requirements here
-]
-
 setup(
     name="skidl",
     version=__version__,
@@ -87,6 +83,4 @@ setup(
         "Programming Language :: Python :: Implementation :: CPython",
         "Topic :: Scientific/Engineering :: Electronic Design Automation (EDA)",
     ],
-    test_suite="tests",
-    tests_require=test_requirements,
 )

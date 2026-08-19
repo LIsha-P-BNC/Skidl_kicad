@@ -1,5 +1,5 @@
 """Remove geometrically-dangling global labels (spurious extra labels the
-generator placed off any pin/wire) from a .kicad_sch, WITHOUT changing
+generator placed off any pin/wire) from a .anvil_sch, WITHOUT changing
 connectivity: every affected net still keeps its on-pin labels, which connect
 by name. Verifies with kicad-cli ERC before/after.
 """
@@ -63,7 +63,7 @@ def strip(sch):
     return len(remove)
 
 if __name__ == "__main__":
-    sch = sys.argv[1] if len(sys.argv) > 1 else "atmega32u2_usb_mcu.kicad_sch"
+    sch = sys.argv[1] if len(sys.argv) > 1 else "atmega32u2_usb_mcu.anvil_sch"
     n = strip(sch)
     print(f"stripped {n} dangling labels")
     left = erc_dangling(sch)

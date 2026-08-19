@@ -60,7 +60,7 @@ class Footprint:
         """Pad position in board space, honoring this footprint's
         placement and rotation (and mirroring if on the bottom side).
         Uses KiCad's rotation matrix [c, s; -s, c] (Y-down, positive =
-        CCW on screen) so model geometry matches the .kicad_pcb exactly."""
+        CCW on screen) so model geometry matches the .anvil_pcb exactly."""
         lx, ly = pad.x, pad.y
         if self.side == "bottom":
             lx = -lx

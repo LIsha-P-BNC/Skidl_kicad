@@ -53,10 +53,13 @@ def _find_install_symbols():
         for name in names:
             if "CAD" not in name.upper():
                 continue
-            sym = os.path.join(root, name, "share", "kicad", "symbols")
-            if os.path.isdir(sym) and sym not in seen:
-                seen.add(sym)
-                cands.append((name, sym))
+            # Anvil ships libraries under share/anvil; fall back to share/kicad for
+            # older installs.
+            for _share in ("anvil", "kicad"):
+                sym = os.path.join(root, name, "share", _share, "symbols")
+                if os.path.isdir(sym) and sym not in seen:
+                    seen.add(sym)
+                    cands.append((name, sym))
     if not cands:
         return None
     # Prefer Anvil/Envil branding, then any dir that actually ships .kicad_symdir libs.

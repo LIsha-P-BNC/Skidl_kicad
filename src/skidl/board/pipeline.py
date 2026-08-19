@@ -4,8 +4,8 @@ src/skidl/board/pipeline.py
 One-call driver for the whole board pipeline the MCP server (or any
 script) can invoke in a subprocess:
 
-    .net -> populate -> place -> .kicad_pcb
-         -> .dsn -> FreeRouting (invisible) -> .ses -> routed .kicad_pcb
+    .net -> populate -> place -> .anvil_pcb
+         -> .dsn -> FreeRouting (invisible) -> .ses -> routed .anvil_pcb
 
 Everything here is pure python + the FreeRouting subprocess. kicad-cli
 steps (DRC, ipcd356 verify, manufacturing exports) are NOT run here --
@@ -27,12 +27,12 @@ from skidl.board.pcb_writer import write_pcb, update_project_net_classes
 from skidl.board.route import export_dsn, route_with_freerouting, import_ses
 
 
-def build_pcb(netlist_path, out_dir=None, name=None, layers=2,
+def build_pcb(netlist_path, out_dir=None, name=None, layers=None,
               route=True, passes=30, route_timeout_s=300,
               net_classes=None, placement="rules",
-              progress_file=None, reuse_ses=False) -> dict:
+              progress_file=None, reuse_ses=False, kicad_cli=None) -> dict:
     """Run the full board pipeline. Returns a report dict; 'ok' means a
-    legal .kicad_pcb exists (routed if route=True and an engine ran to
+    legal .anvil_pcb exists (routed if route=True and an engine ran to
     completion; placed-but-unrouted otherwise, flagged in 'routing').
 
     placement: "rules" (M2 placer, auto-falls back to "simple" on
@@ -42,29 +42,48 @@ def build_pcb(netlist_path, out_dir=None, name=None, layers=2,
     out_dir = Path(out_dir) if out_dir else netlist_path.parent
     base = name or netlist_path.stem
 
-    # LEARN FIRST: the init sidecar (AI choices from initialize_project)
-    # + the previous board's user-edited setup blocks. Both are consumed
-    # below; both survive regeneration.
+    # LEARN FIRST: SAVED KiCad files are the source of truth when the USER
+    # saved them (fingerprint arbitration in board_setup); otherwise the
+    # sidecar -- including pending update_board_setup requests -- is what
+    # this build applies. Both survive regeneration.
     import json as _json
-    sidecar = {}
+    from skidl.board.board_setup import (load_sidecar, read_saved_state,
+                                         board_edit_status)
     sidecar_path = out_dir / f"{base}.board_config.json"
-    if sidecar_path.is_file():
-        try:
-            sidecar = _json.loads(sidecar_path.read_text(encoding="utf-8"))
-        except Exception:
-            pass
+    sidecar = load_sidecar(base, out_dir)
+    saved = read_saved_state(base, out_dir)
+    user_edited = bool(saved["exists"]) and \
+        board_edit_status(base, out_dir)["machine_generated"] is False
 
-    board = BoardModel(name=base,
-                       layer_count=int(sidecar.get("layers") or layers),
-                       thickness=float(sidecar.get("thickness") or 1.6))
+    truth_arbitration = {"user_edited_board": user_edited}
+    if user_edited and saved.get("layers"):
+        eff_layers = int(saved["layers"])
+        if sidecar.get("layers") and int(sidecar["layers"]) != eff_layers:
+            truth_arbitration["layers"] = (
+                f"user-saved board has {eff_layers} copper layers; sidecar "
+                f"asked {sidecar['layers']} -- the SAVED board wins")
+    else:
+        eff_layers = int(sidecar.get("layers") or layers or 2)
+    if user_edited and saved.get("thickness"):
+        eff_thickness = float(saved["thickness"])
+        if sidecar.get("thickness") and \
+                abs(float(sidecar["thickness"]) - eff_thickness) > 1e-6:
+            truth_arbitration["thickness"] = (
+                f"user-saved board thickness {eff_thickness}; sidecar asked "
+                f"{sidecar['thickness']} -- the SAVED board wins")
+    else:
+        eff_thickness = float(sidecar.get("thickness") or 1.6)
+
+    board = BoardModel(name=base, layer_count=eff_layers,
+                       thickness=eff_thickness)
 
     # DYNAMIC rule pickup: whatever the user set in KiCad's net-class /
-    # Board Setup dialogs lives in the project's .kicad_pro -- read it
+    # Board Setup dialogs lives in the project's .anvil_pro -- read it
     # back so user-tuned clearances/widths drive BOTH the board file and
     # the router. Precedence: explicit net_classes arg > user's
-    # .kicad_pro > built-in defaults.
+    # .anvil_pro > built-in defaults.
     from skidl.board.pcb_writer import read_project_rules, _DEFAULT_NET_CLASS
-    user_rules = read_project_rules(out_dir / f"{base}.kicad_pro")
+    user_rules = read_project_rules(out_dir / f"{base}.anvil_pro")
     merged = {}
     for cls_name, rules in user_rules.items():
         merged[cls_name] = {**_DEFAULT_NET_CLASS, **rules}
@@ -73,47 +92,20 @@ def build_pcb(netlist_path, out_dir=None, name=None, layers=2,
     if merged:
         board.net_classes = merged
 
-    # Board Setup carry-forward: only from a file the USER/KiCad saved
-    # (generator != skidl_board) -- our own generated setup is just
-    # re-templated fresh.
+    # Board Setup carry-forward: ONLY from a user-edited board (fingerprint
+    # mismatch / foreign generator, decided by board_edit_status -- the
+    # old generator-token + mtime dance lives there now). Our own machine
+    # boards are re-templated fresh from the sidecar, so a pending
+    # update_board_setup thickness/layers request actually applies.
     carry_forward = None
-    prev_pcb = out_dir / f"{base}.kicad_pcb"
-    if prev_pcb.is_file():
-        head = prev_pcb.read_text(encoding="utf-8", errors="replace")[:300]
-        if '(generator "skidl_board")' not in head:
-            from skidl.board.rule_discovery import read_board_setup
-            cf = read_board_setup(prev_pcb)
-            if cf.get("setup_text") or cf.get("layers_text"):
-                carry_forward = cf
-                if cf.get("thickness"):
-                    board.thickness = cf["thickness"]
-                # Board Setup is the source of truth: if the user changed
-                # the LAYER COUNT in the editor, routing follows it. BUT
-                # kicad-cli --save-board flips OUR generator tag to
-                # pcbnew, so an old 2-layer artifact re-reads as "user
-                # saved" and silently overrides a NEWER sidecar layers=4
-                # (measured: tracker routed 2-layer for a whole day).
-                # Latest user action wins: only adopt the board's stack
-                # when the board file is newer than the sidecar setting.
-                import re as _re
-                copper = _re.findall(r'"\w+\.Cu"', cf.get("layers_text", ""))
-                sidecar_file = out_dir / f"{base}.board_config.json"
-                sidecar_newer = (sidecar.get("layers")
-                                 and sidecar_file.is_file()
-                                 and sidecar_file.stat().st_mtime
-                                     > prev_pcb.stat().st_mtime)
-                if len(copper) >= 2 and not sidecar_newer:
-                    board.layer_count = len(copper)
-                    if sidecar.get("layers") and len(copper) != int(sidecar["layers"]):
-                        cf["layer_conflict"] = (
-                            f"board file stack has {len(copper)} copper layers "
-                            f"but sidecar asks {sidecar['layers']} -- board file "
-                            "is newer, using its stack")
-                elif sidecar_newer and len(copper) != int(sidecar["layers"]):
-                    # Sidecar wins: the carried layers block describes the
-                    # WRONG stack -- drop it so the writer regenerates the
-                    # layer table for the requested count.
-                    cf.pop("layers_text", None)
+    prev_pcb = out_dir / f"{base}.anvil_pcb"
+    if user_edited and prev_pcb.is_file():
+        from skidl.board.rule_discovery import read_board_setup
+        cf = read_board_setup(prev_pcb)
+        if cf.get("setup_text") or cf.get("layers_text"):
+            carry_forward = cf
+            # layers/thickness were already adopted from the SAVED file
+            # above -- the carried blocks describe exactly that stack.
 
     # Mask clearance the user set via update_board_setup (sidecar) is
     # applied to regenerated boards too.
@@ -151,7 +143,68 @@ def build_pcb(netlist_path, out_dir=None, name=None, layers=2,
     # Without this a power rail routes at the 0.25mm Default -- the width plan
     # only lived in project_init. Idempotent: a net already in a wide-enough
     # class doesn't appear in the plan.
-    width_guarantee = _guarantee_power_widths(board, sidecar.get("currents"))
+    width_guarantee = _guarantee_power_widths(
+        board, sidecar.get("currents"),
+        copper_oz=sidecar.get("copper_oz") or 1)
+
+    # EDGE.CUTS VERBATIM CARRY: a user-drawn outline is the user's own
+    # work. Its extents become a FIXED (grow=False) outline for placement;
+    # a NON-rectangular shape is additionally carried verbatim -- at write
+    # time the user's gr_* blocks replace the generated rectangle, so the
+    # drawn shape survives regeneration. Parts that don't fit fail
+    # honestly via the mechanical-fit path.
+    uec_stored = sidecar.get("user_edge_cuts")
+    if user_edited and saved.get("edge_cuts"):
+        from skidl.board.board_setup import (read_edge_cuts_blocks,
+                                             edge_cuts_is_rectangle)
+        ec = saved["edge_cuts"]
+        _ec_blocks = read_edge_cuts_blocks(
+            prev_pcb.read_text(encoding="utf-8", errors="replace"))
+        mech_cfg = dict(sidecar.get("mechanical") or {})
+        mb = dict(mech_cfg.get("board") or {})
+        mb["width"], mb["height"] = ec["width_mm"], ec["height_mm"]
+        mb.setdefault("grow", False)
+        mech_cfg["board"] = mb
+        sidecar = {**sidecar, "mechanical": mech_cfg,
+                   "board_width": ec["width_mm"],
+                   "board_height": ec["height_mm"]}
+        if _ec_blocks and not edge_cuts_is_rectangle(_ec_blocks):
+            uec = {"blocks": _ec_blocks,
+                   "extents": [ec["minx"], ec["miny"], ec["maxx"],
+                               ec["maxy"]]}
+            carry_forward = carry_forward or {}
+            carry_forward["user_edge_cuts"] = uec
+            # Persisted (sidecar is written at the end of the build) so
+            # the shape ALSO survives later machine rebuilds -- until the
+            # user redraws the outline.
+            sidecar = {**sidecar, "user_edge_cuts": uec}
+            truth_arbitration["edge_cuts"] = (
+                "user-drawn NON-rectangular outline carried VERBATIM; "
+                f"placement constrained to its {ec['width_mm']}x"
+                f"{ec['height_mm']} mm extents")
+        else:
+            if "user_edge_cuts" in sidecar:
+                sidecar = {k: v for k, v in sidecar.items()
+                           if k != "user_edge_cuts"}
+            truth_arbitration["edge_cuts"] = (
+                f"user outline adopted as fixed {ec['width_mm']}x"
+                f"{ec['height_mm']} mm rectangle")
+    elif uec_stored:
+        # The user's previously adopted drawn shape keeps carrying through
+        # machine rebuilds until the user redraws the outline.
+        ext = uec_stored["extents"]
+        w, h = round(ext[2] - ext[0], 2), round(ext[3] - ext[1], 2)
+        mech_cfg = dict(sidecar.get("mechanical") or {})
+        mb = dict(mech_cfg.get("board") or {})
+        mb["width"], mb["height"] = w, h
+        mb.setdefault("grow", False)
+        mech_cfg["board"] = mb
+        sidecar = {**sidecar, "mechanical": mech_cfg,
+                   "board_width": w, "board_height": h}
+        carry_forward = carry_forward or {}
+        carry_forward["user_edge_cuts"] = uec_stored
+        truth_arbitration["edge_cuts"] = (
+            "user-drawn outline (previously adopted) carried VERBATIM")
 
     # MECHANICAL-FIRST: enclosure constraints (fixed outline, hole map,
     # edge connectors, keepouts) are applied BEFORE placement -- the
@@ -295,6 +348,19 @@ def build_pcb(netlist_path, out_dir=None, name=None, layers=2,
         if r.get("ok"):
             stats = import_ses(board, ses)
             routing.update(stats)
+            # RE-PLAN stitching vias now that routed copper exists. The
+            # pre-route plan only knew component courtyards, so its vias got
+            # stamped ON TOP of signal tracks (copper shorts) and stranded
+            # outside the ground fill (dangling vias). Replanning against the
+            # real tracks/vias keeps every stitch via clear of other-net
+            # copper and inside solid ground -> no shorts, no dangling.
+            if sidecar.get("ground_pour", True) and board.outline and pour_zones:
+                from skidl.board.pour import plan_stitching_vias_for
+                pour_vias, revwarns = plan_stitching_vias_for(
+                    board, sidecar.get("currents"))
+                board.warnings.extend(revwarns)
+                report["power_pours"]["stitch_vias"] = len(pour_vias)
+                report["power_pours"]["stitch_warnings"] = revwarns
         else:
             routing["note"] = ("board saved PLACED but UNROUTED -- routing "
                                "engine unavailable or failed; open in KiCad "
@@ -308,18 +374,87 @@ def build_pcb(netlist_path, out_dir=None, name=None, layers=2,
     board.zones.extend(pour_zones)
     board.vias.extend(pour_vias)
 
-    pcb = write_pcb(board, out_dir / f"{base}.kicad_pcb", carry_forward=carry_forward,
+    pcb = write_pcb(board, out_dir / f"{base}.anvil_pcb", carry_forward=carry_forward,
                     mask_clearance=mask_clearance)
-    pro = update_project_net_classes(board, out_dir / f"{base}.kicad_pro")
+
+    # GROUND-ISLAND HEAL: a dense route can pinch the ground pour into copper
+    # regions the fill can't tie together (every PIN is still connected -- it
+    # is floating ground, an EMI nit + a DRC 'unconnected zone'). KiCad's fill
+    # tells us exactly where; drop a ground via at a nearby CLEAR spot to bond
+    # each island to the plane, then rewrite. Needs kicad_cli (to compute the
+    # fill) and only runs on a routed board with ground zones.
+    if kicad_cli and route and pour_zones and board.outline:
+        try:
+            from skidl.board.pour import (find_ground_islands, plan_island_vias,
+                                          plan_pours, assign_pour_layers)
+            gnd_names = sorted(pour_exclude) or [
+                n for n, r in plan_pours(board, sidecar.get("currents")).items()
+                if r == "ground"]
+            assigns, _r, _w = assign_pour_layers(
+                board, plan_pours(board, sidecar.get("currents")))
+            healed = 0
+            for _round in range(3):
+                pts = find_ground_islands(pcb, kicad_cli, gnd_names)
+                if not pts:
+                    break
+                added = []
+                for gname in gnd_names:
+                    layers_g = assigns.get(gname)
+                    if layers_g and len(layers_g) >= 2:
+                        added += plan_island_vias(board, pts, gname, layers_g)
+                if not added:
+                    break
+                board.vias.extend(added)
+                healed += len(added)
+                pcb = write_pcb(board, out_dir / f"{base}.anvil_pcb",
+                                carry_forward=carry_forward,
+                                mask_clearance=mask_clearance)
+            if healed:
+                report["power_pours"]["island_vias_added"] = healed
+        except Exception as _exc:
+            report.setdefault("power_pours", {})["island_heal_error"] = repr(_exc)
+
+    pro = update_project_net_classes(board, out_dir / f"{base}.anvil_pro")
     report["kicad_pcb"] = str(pcb)
     report["kicad_pro"] = str(pro)
     report["setup_carried_forward"] = bool(carry_forward)
+    report["truth_arbitration"] = truth_arbitration
+
+    # Surface the FINAL board size so the caller can tell the user "your board
+    # is W x H mm" and where that came from -- otherwise the dimension is only
+    # implied by the outline and never reported. Only axis-aligned rectangular
+    # outlines are produced (no rotated/diagonal boards), so shape is fixed;
+    # a real angled enclosure would need a mechanical outline, not a size.
+    if board.outline:
+        xs = [p[0] for p in board.outline]
+        ys = [p[1] for p in board.outline]
+        bw = round(max(xs) - min(xs), 2)
+        bh = round(max(ys) - min(ys), 2)
+        if mech and mech.width:
+            size_source = "enclosure/mechanical spec (authoritative)"
+        elif want_w or want_h:
+            size_source = "user-requested (grown to fit parts where needed)"
+        else:
+            size_source = "auto-sized from placed parts (no dimensions given)"
+        report["board_dimensions"] = {
+            "width_mm": bw,
+            "height_mm": bh,
+            "area_cm2": round(bw * bh / 100.0, 2),
+            "shape": "rectangular",
+            "source": size_source,
+        }
 
     # Record the setup hash this build consumed, so later operations can
-    # tell the user when Board Setup changed in the meantime.
+    # tell the user when Board Setup changed in the meantime. Stamp the
+    # fingerprint FIRST: a machine write without a fresh fingerprint would
+    # be mis-read as the user's manual edit by the arbitration.
     try:
-        from skidl.board.board_setup import compute_setup_hash
-        sidecar["setup_hash"] = compute_setup_hash(base, out_dir)
+        from skidl.board.board_setup import (get_board_setup as _gbs,
+                                             stamp_board_fingerprint)
+        stamp_board_fingerprint(base, out_dir)
+        snap = _gbs(base, out_dir)
+        sidecar["setup_hash"] = snap["setup_hash"]
+        sidecar["state_hash"] = snap["state_hash"]
         sidecar_path.write_text(_json.dumps(sidecar, indent=2) + "\n",
                                 encoding="utf-8")
     except Exception:
@@ -327,7 +462,8 @@ def build_pcb(netlist_path, out_dir=None, name=None, layers=2,
     return report
 
 
-def _guarantee_power_widths(board: BoardModel, currents: dict = None) -> dict:
+def _guarantee_power_widths(board: BoardModel, currents: dict = None,
+                            copper_oz: float = 1) -> dict:
     """Ensure every net whose IPC-2152 required width exceeds its class width
     routes in a synthesized PWR_* class carrying that width -- the same plan
     project_init makes, applied here so create_pcb is safe WITHOUT init.
@@ -343,7 +479,7 @@ def _guarantee_power_widths(board: BoardModel, currents: dict = None) -> dict:
     try:
         plan = net_width_plan(
             nets_by_class,
-            {"classes": classes, "copper_oz": 1,
+            {"classes": classes, "copper_oz": copper_oz,
              "rules": {"min_track_width": default_w}},
             currents=currents or {})
     except Exception:

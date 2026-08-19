@@ -208,6 +208,58 @@ def find_decap_affinities(parts):
     return affinities
 
 
+# A cap counts as "functional" (vs a plain VCC bypass) when it hangs off a
+# DEDICATED signal pin of one IC -- the 555 CONT-pin cap, crystal load caps
+# (XTALn), op-amp compensation caps, gate-driver bootstrap caps. A node like
+# CONT/XTAL is shared only by the cap, its IC, and maybe one partner (crystal
+# or series R), so we cap the fanout here.
+_FUNC_CAP_MAX_NET_PARTS = 3
+
+
+@export_to_all
+def find_functional_cap_affinities(parts):
+    """Find caps tied to an IC by a dedicated SIGNAL pin (not a power rail).
+
+    Complements :func:`find_decap_affinities`, which only sees ~100nF caps on
+    VCC/GND. A functional cap can be ANY value (10nF on CONT, 22pF crystal
+    load, a compensation cap) and its meaningful net is the low-fanout signal
+    node it shares with the IC. Keying on THAT net -- never the shared ground
+    rail, which every cap touches and would collide on -- lets the placer pull
+    each such cap tight to its IC so the short trace actually routes.
+
+    Args:
+        parts (list): Parts to inspect.
+
+    Returns:
+        dict: net -> (cap_part, ic_part) for every functional-cap link.
+    """
+    affinities = {}
+    for part in parts:
+        if (getattr(part, "ref_prefix", "") or "").upper() != _DECAP_REF_PREFIX:
+            continue
+        if len(getattr(part, "pins", [])) != 2:
+            continue
+        for pin in part.pins:
+            net = getattr(pin, "net", None)
+            # skip power/ground rails: broad, shared by every cap -> collide.
+            if net is None or classify_net_role(net) is not None:
+                continue
+            net_parts = {p.part for p in net.pins
+                         if getattr(p, "part", None) is not None}
+            if len(net_parts) > _FUNC_CAP_MAX_NET_PARTS:
+                continue  # a real bus, not a dedicated cap node
+            ics = {
+                p.part
+                for p in net.pins
+                if p.part is not part
+                and (getattr(p.part, "ref_prefix", "") or "").upper()
+                in _ANCHOR_REF_PREFIXES
+            }
+            if len(ics) == 1:
+                affinities.setdefault(net, (part, next(iter(ics))))
+    return affinities
+
+
 @export_to_all
 def compute_net_affinity_weights(parts, cluster_boost=3.0, decap_boost=6.0):
     """
@@ -241,6 +293,11 @@ def compute_net_affinity_weights(parts, cluster_boost=3.0, decap_boost=6.0):
 
     for net in find_decap_affinities(parts):
         weights[net] = decap_boost
+
+    # Functional caps (555 CONT, crystal load, comp/bootstrap) get the same
+    # pull toward their IC so the dedicated signal trace stays short.
+    for net in find_functional_cap_affinities(parts):
+        weights[net] = max(weights.get(net, 1.0), decap_boost)
 
     return weights
 

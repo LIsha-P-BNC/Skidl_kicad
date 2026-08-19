@@ -3,10 +3,10 @@
 Produces, from whatever circuit is in the default SKiDL circuit:
   * ERC check
   * <name>.net              (netlist for PCB)
-  * <name>.kicad_sch (+ per-@subcircuit sheets)  -- wires where a block can be routed,
+  * <name>.anvil_sch (+ per-@subcircuit sheets)  -- wires where a block can be routed,
                                                      net labels only where a block is too
                                                      dense, decided PER BLOCK dynamically.
-  * <name>.kicad_pro        (minimal project so Anvil CAD/KiCad opens it directly)
+  * <name>.anvil_pro        (minimal project so Anvil CAD/KiCad opens it directly)
 
 This relies on the SKiDL route.py per-block fallback patch (Patch A/B). If that patch is
 missing (e.g. after a fresh `pip install skidl`), build() emits a RuntimeWarning instead
@@ -108,7 +108,7 @@ def _assert_skidl_patched():
 
 
 def _write_kicad_pro(sch_path):
-    """Write a minimal <name>.kicad_pro next to the schematic (never clobber existing)."""
+    """Write a minimal <name>.anvil_pro next to the schematic (never clobber existing)."""
     name = os.path.splitext(os.path.basename(sch_path))[0]
     root = ""
     try:
@@ -119,13 +119,60 @@ def _write_kicad_pro(sch_path):
     except OSError:
         pass
     pro = json.loads(json.dumps(_PRO_TEMPLATE))  # deep copy
-    pro["meta"]["filename"] = name + ".kicad_pro"
+    pro["meta"]["filename"] = name + ".anvil_pro"
     pro["sheets"] = [[root, "Root"]] if root else []
-    out = os.path.join(os.path.dirname(sch_path) or ".", name + ".kicad_pro")
+    out = os.path.join(os.path.dirname(sch_path) or ".", name + ".anvil_pro")
     if not os.path.exists(out):
         with open(out, "w", encoding="utf-8") as f:
             json.dump(pro, f, indent=2)
     return out
+
+
+def _design_gates():
+    """Hard design gates run for EVERY build path (MCP body mode, MCP script
+    mode, direct library use) -- the single chokepoint no caller can bypass.
+
+    1) FLOATING PINS: every pin must be either connected or explicitly marked
+       no-connect (pin += NC). Library-declared no-connect pins (func ==
+       NOCONNECT) are exempt: the symbol itself says they connect to nothing.
+       A silently floating pin is exactly how boards ship with missing MCU /
+       STAT / collector connections, so it stops the build here.
+    2) BARE FOOTPRINTS (only when ANVIL_REQUIRE_FOOTPRINTS is set, as the MCP
+       pipeline does): every real part must carry a footprint, otherwise the
+       netlist is written with silent (footprint "") holes that only surface
+       at PCB time. Direct library/test use stays permissive by default.
+    """
+    import builtins
+    from skidl.pin import pin_types
+
+    floating, nofp = [], []
+    for part in builtins.default_circuit.parts:
+        ref = str(getattr(part, "ref", "") or "")
+        if ref.startswith("#"):
+            continue
+        pins = list(getattr(part, "pins", []))
+        if not pins:
+            continue
+        for pin in pins:
+            try:
+                if not pin.nets and pin.func != pin_types.NOCONNECT:
+                    floating.append("%s[%s] %s" % (ref, pin.num,
+                                                   str(pin.name or "").strip()))
+            except Exception:
+                pass
+        if os.environ.get("ANVIL_REQUIRE_FOOTPRINTS"):
+            if not str(getattr(part, "footprint", "") or "").strip():
+                nofp.append("%s (%s)" % (ref, str(getattr(part, "name", "") or "")))
+    errs = []
+    if floating:
+        errs.append("FLOATING pin(s) -- connect each, or mark it no-connect "
+                    "(part[pin] += NC): " + ", ".join(sorted(floating)))
+    if nofp:
+        errs.append("part(s) with NO footprint -- assign footprint=\"Lib:Name\" "
+                    "to each: " + ", ".join(sorted(nofp)))
+    if errs:
+        raise RuntimeError("smart_schematic design gates FAILED -- " +
+                           " | ".join(errs))
 
 
 def build(name=None, title="SKiDL-Generated Schematic", auto_stub_fanout=None,
@@ -148,6 +195,7 @@ def build(name=None, title="SKiDL-Generated Schematic", auto_stub_fanout=None,
     """
     set_default_tool(KICAD9)
     _assert_skidl_patched()
+    _design_gates()
     name = name or get_script_name()
 
     # Route ALL generated files into the project's own folder. This project script
@@ -159,7 +207,7 @@ def build(name=None, title="SKiDL-Generated Schematic", auto_stub_fanout=None,
     os.chdir(_proj)
 
     # ---- ATOMIC BUILD STAGING (first-time-correct rule) ----
-    # The build rewrites <name>.kicad_sch MANY times (seed sweep + cleanup passes).
+    # The build rewrites <name>.anvil_sch MANY times (seed sweep + cleanup passes).
     # If the CAD app has the project open -- or opens it mid-build -- it can load a
     # half-done intermediate (e.g. wires without their junction dots), show phantom
     # "pin not connected" ERC errors, and a user Ctrl+S then overwrites the good
@@ -422,7 +470,7 @@ def build(name=None, title="SKiDL-Generated Schematic", auto_stub_fanout=None,
 
     def _clean_sheets():
         # remove this project's sheet files so a retry doesn't leave "_1" duplicate sheets
-        for _p in _glob.glob(name + ".kicad_sch") + _glob.glob(name + "_*.kicad_sch"):
+        for _p in _glob.glob(name + ".anvil_sch") + _glob.glob(name + "_*.anvil_sch"):
             try:
                 os.remove(_p)
             except OSError:
@@ -515,7 +563,7 @@ def build(name=None, title="SKiDL-Generated Schematic", auto_stub_fanout=None,
 
     # Build-level auto-fallback bookkeeping: if placement_mode="anchor" is
     # requested but the anchor layout can't be verified/published, the build
-    # transparently retries with the legacy placer so a valid .kicad_sch is
+    # transparently retries with the legacy placer so a valid .anvil_sch is
     # ALWAYS produced. See docs/anchor_placer_design.md (P3 + acceptance gate).
     _placer_used = "anchor" if opts.get("placement_mode") == "anchor" else "legacy"
 
@@ -686,7 +734,7 @@ def build(name=None, title="SKiDL-Generated Schematic", auto_stub_fanout=None,
     # re-verified, and rolled back on its own if it changed connectivity -- so a
     # revert of one step (e.g. beautify on a dense sheet) never discards the gains
     # of the others (grid alignment). Each is also fail-safe (skips on error).
-    sheet_paths = [name + ".kicad_sch"] + sorted(_glob.glob(name + "_*.kicad_sch"))
+    sheet_paths = [name + ".anvil_sch"] + sorted(_glob.glob(name + "_*.anvil_sch"))
     import shutil
 
     def _guarded(sheet_path, step, note):
@@ -801,9 +849,9 @@ def build(name=None, title="SKiDL-Generated Schematic", auto_stub_fanout=None,
     # flaky and would then falsely revert the flags (observed: 4 ERC errors left
     # on a 51-part sheet whose flags verified fine standalone). Applying it after
     # the guarded chain keeps the flags.
-    _do_pwrflags(name + ".kicad_sch")
+    _do_pwrflags(name + ".anvil_sch")
 
-    _write_kicad_pro(os.path.abspath(name + ".kicad_sch"))
+    _write_kicad_pro(os.path.abspath(name + ".anvil_sch"))
 
     # IPC compliance gate: report every build against the enforceable IPC-2612 /
     # IPC-2611 schematic rules (Manhattan 90deg, on-grid, no dangling labels,
@@ -819,7 +867,7 @@ def build(name=None, title="SKiDL-Generated Schematic", auto_stub_fanout=None,
 
     # ---- atomic publish: move the finished artifacts into the project dir ----
     os.chdir(_proj)
-    for _old in _glob.glob(os.path.join(_proj, name + "_*.kicad_sch")):
+    for _old in _glob.glob(os.path.join(_proj, name + "_*.anvil_sch")):
         if not os.path.exists(os.path.join(_stage, os.path.basename(_old))):
             try:
                 os.remove(_old)  # stale child sheet from a previous layout
@@ -828,19 +876,19 @@ def build(name=None, title="SKiDL-Generated Schematic", auto_stub_fanout=None,
     for _f in os.listdir(_stage):
         _src = os.path.join(_stage, _f)
         _dst = os.path.join(_proj, _f)
-        if _f == name + ".kicad_pro":
+        if _f == name + ".anvil_pro":
             if not os.path.exists(_dst):  # never clobber an existing project file
                 os.replace(_src, _dst)
             continue
-        if _f.endswith(".kicad_sch") or _f in (name + ".net", name + ".erc"):
+        if _f.endswith(".anvil_sch") or _f in (name + ".net", name + ".erc"):
             os.replace(_src, _dst)
     _shutil.rmtree(_stage, ignore_errors=True)
 
-    sch = os.path.join(_proj, name + ".kicad_sch")
-    pro = os.path.join(_proj, name + ".kicad_pro")
+    sch = os.path.join(_proj, name + ".anvil_sch")
+    pro = os.path.join(_proj, name + ".anvil_pro")
     if not os.path.exists(pro):
         pro = _write_kicad_pro(sch)
-    print(f">>> smart_schematic: {name}.net + {name}.kicad_sch + "
+    print(f">>> smart_schematic: {name}.net + {name}.anvil_sch + "
           f"{os.path.basename(pro)} ready (published atomically)")
     print(f">>> smart_schematic: placement = {_placer_used}")
     return sch, pro

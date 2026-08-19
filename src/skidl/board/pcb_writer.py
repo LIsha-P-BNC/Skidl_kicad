@@ -2,17 +2,17 @@
 src/skidl/board/pcb_writer.py
 
 [A] in the M0/M1 pipeline: <name>.net (SKiDL/KiCad netlist) + footprint
-library -> populated BoardModel -> <name>.kicad_pcb.
+library -> populated BoardModel -> <name>.anvil_pcb.
 
 Net classes: modern KiCad (6+) stores net-class *rules* in the project's
-.kicad_pro JSON (net_settings.classes), NOT in the board file -- a
-(net_class ...) block inside .kicad_pcb is a KiCad-5-ism the KiCad-10
+.anvil_pro JSON (net_settings.classes), NOT in the board file -- a
+(net_class ...) block inside .anvil_pcb is a KiCad-5-ism the KiCad-10
 parser rejects. So write_pcb() emits no class blocks; call
 update_project_net_classes() to fold BoardModel.net_classes into the
-.kicad_pro the schematic build already produced. Per-net class NAMES come
+.anvil_pro the schematic build already produced. Per-net class NAMES come
 straight from the netlist's own (class "...") field.
 
-.kicad_pcb writing is hand-templated rather than a generic s-expression
+.anvil_pcb writing is hand-templated rather than a generic s-expression
 writer -- see sexp.py's docstring for why. The (version ...) datestamp
 below is the KiCad-8-era format also used by the repo's example boards;
 the M0 gate (kicad-cli pcb drc parses the output) is what validates it
@@ -35,7 +35,7 @@ from skidl.board.model import BoardModel, Footprint
 _DEFAULT_NET_CLASS = {"width": 0.25, "clearance": 0.15, "via_size": 0.8, "via_drill": 0.4}
 
 # KiCad-8-era board format datestamp -- matches the repo's own example
-# board (tests/examples/netlist_to_skidl/kicad_project/*.kicad_pcb) and
+# board (tests/examples/netlist_to_skidl/kicad_project/*.anvil_pcb) and
 # parses in the installed 10.99 fork (validated by the M0 gate).
 BOARD_FORMAT_VERSION = 20240108
 
@@ -60,7 +60,7 @@ def build_board(netlist_path: Path, name: Optional[str] = None,
     """Parse `netlist_path`, resolve every footprint, and return a
     populated BoardModel with a trivial placeholder layout (see
     _default_grid_layout) -- not yet placed by any real rule. Does not
-    write the .kicad_pcb file itself; see write_pcb() below."""
+    write the .anvil_pcb file itself; see write_pcb() below."""
     from skidl.board.footprint_libs import (
         load_pads_and_courtyard, load_footprint_source, FootprintNotFoundError,
     )
@@ -93,7 +93,7 @@ def build_board(netlist_path: Path, name: Optional[str] = None,
     for net_name, net_info in nets.items():
         net_class = net_info["class"]
         # Any class the netlist names but the caller didn't parameterize
-        # still gets an entry (with default rules) so .kicad_pro emission
+        # still gets an entry (with default rules) so .anvil_pro emission
         # and DSN export always have rules to point at.
         board.net_classes.setdefault(net_class, dict(_DEFAULT_NET_CLASS))
         net = board.get_or_add_net(net_name, net_class=net_class)
@@ -201,8 +201,35 @@ def _read_netlist(path: Path):
 
 
 # ---------------------------------------------------------------------------
-# .kicad_pcb writing (hand-templated -- see module docstring)
+# .anvil_pcb writing (hand-templated -- see module docstring)
 # ---------------------------------------------------------------------------
+
+def _shift_edge_blocks(blocks, dx, dy):
+    """Translate verbatim Edge.Cuts blocks by (dx, dy) -- coordinate pairs
+    only, everything else (stroke, uuid, layer) untouched."""
+    import re
+
+    def _sh(m):
+        return (f"({m.group(1)} {float(m.group(2)) + dx:g} "
+                f"{float(m.group(3)) + dy:g})")
+
+    return [re.sub(r"\((start|end|center|mid|xy)\s+([\d.-]+)\s+([\d.-]+)\)",
+                   _sh, b) for b in blocks]
+
+
+def _patch_setup_mask(setup_text: str, mask) -> str:
+    """Set pad_to_mask_clearance inside a carried (setup ...) block --
+    update in place, or INSERT right after the head when the block never
+    had the token."""
+    import re
+    new, n = re.subn(r"\(pad_to_mask_clearance\s+[\d.-]+\)",
+                     f"(pad_to_mask_clearance {mask:g})", setup_text, count=1)
+    if n:
+        return new
+    return re.sub(r"\(\s*setup\b",
+                  f"(setup (pad_to_mask_clearance {mask:g})",
+                  setup_text, count=1)
+
 
 def write_pcb(board: BoardModel, out_path: Path, carry_forward: dict = None,
               mask_clearance=None) -> Path:
@@ -210,7 +237,7 @@ def write_pcb(board: BoardModel, out_path: Path, carry_forward: dict = None,
     rule_discovery.read_board_setup on the PREVIOUS board file) supplies
     the user's own (general …)/(layers …)/(setup …) blocks -- Board
     Setup edits (stackup, mask/paste, hatch offsets…) survive
-    regeneration verbatim, the board-file analog of the .kicad_pro
+    regeneration verbatim, the board-file analog of the .anvil_pro
     setdefault discipline."""
     out_path = Path(out_path)
     cf = carry_forward or {}
@@ -227,8 +254,16 @@ def write_pcb(board: BoardModel, out_path: Path, carry_forward: dict = None,
     parts.append("  " + cf["layers_text"] if cf.get("layers_text")
                  else _write_layers(board.layer_count))
     mask = mask_clearance if mask_clearance is not None else 0
-    parts.append("  " + cf["setup_text"] if cf.get("setup_text")
-                 else f'  (setup (pad_to_mask_clearance {mask:g}) (aux_axis_origin 0 0))')
+    if cf.get("setup_text"):
+        st = cf["setup_text"]
+        if mask_clearance is not None:
+            # A pending mask request must survive the verbatim carry --
+            # without this the carried block (possibly lacking the token)
+            # would silently drop the user's requested clearance.
+            st = _patch_setup_mask(st, mask_clearance)
+        parts.append("  " + st)
+    else:
+        parts.append(f'  (setup (pad_to_mask_clearance {mask:g}) (aux_axis_origin 0 0))')
     parts.append('  (net 0 "")')
     for net in board.nets.values():
         parts.append(f'  (net {net.code} "{_esc(net.name)}")')
@@ -238,7 +273,19 @@ def write_pcb(board: BoardModel, out_path: Path, carry_forward: dict = None,
     for fp in board.footprints:
         parts.append(_write_footprint(fp, net_code_by_name, zc_by_ref.get(fp.ref) or {}))
     if board.outline:
-        parts.append(_write_edge_cuts(board.outline))
+        uec = cf.get("user_edge_cuts")
+        if uec:
+            # The user's drawn Edge.Cuts shape, translated so its min
+            # corner lands on the regenerated outline's min corner (the
+            # sheet-centering shift moved the board; same shape, moved).
+            xs = [p[0] for p in board.outline]
+            ys = [p[1] for p in board.outline]
+            dx = round(min(xs) - uec["extents"][0], 2)
+            dy = round(min(ys) - uec["extents"][1], 2)
+            for blk in _shift_edge_blocks(uec["blocks"], dx, dy):
+                parts.append("  " + blk)
+        else:
+            parts.append(_write_edge_cuts(board.outline))
     for track in board.tracks:
         parts.append(_write_track(track, net_code_by_name))
     for via in board.vias:
@@ -302,7 +349,7 @@ def _write_rule_area(ko) -> str:
 
 def read_project_rules(pro_path: Path) -> dict:
     """DYNAMIC rule pickup: read the net-class rules the USER has set in
-    KiCad from the project's .kicad_pro (KiCad saves the Board Setup /
+    KiCad from the project's .anvil_pro (KiCad saves the Board Setup /
     net-class dialogs there). Returns {class_name: {width, clearance,
     via_size, via_drill}} for every class that carries any rule -- empty
     dict when the project has none yet. build_pcb() feeds these into the
@@ -381,8 +428,8 @@ def canonical_class_entry(name: str, rules: dict, existing: dict = None,
 
 def update_project_net_classes(board: BoardModel, pro_path: Path) -> Path:
     """Fold board.net_classes (+ per-net assignments) into the project's
-    .kicad_pro JSON -- where modern KiCad actually keeps net-class rules.
-    The schematic build (smart_schematic) already writes a .kicad_pro with
+    .anvil_pro JSON -- where modern KiCad actually keeps net-class rules.
+    The schematic build (smart_schematic) already writes a .anvil_pro with
     a bare net_settings.classes [{"name": "Default"}]; this enriches it in
     place, preserving every unrelated key."""
     pro_path = Path(pro_path)
@@ -420,6 +467,12 @@ def update_project_net_classes(board: BoardModel, pro_path: Path) -> Path:
             priority=None if name == "Default" else prio))
         if name != "Default":
             prio += 1
+    for name, entry in existing.items():
+        if name and name not in board.net_classes:
+            # A user-created class carrying no rule values never enters
+            # board.net_classes (read_project_rules skips it) -- keep
+            # their entry verbatim instead of dropping it on rewrite.
+            classes.append(entry)
     net_settings["classes"] = classes
     net_settings["meta"] = {
         "version": _net_settings_meta_version(net_settings.get("meta"))}

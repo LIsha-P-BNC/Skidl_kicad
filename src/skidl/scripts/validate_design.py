@@ -686,8 +686,8 @@ def validate_netlist(path):
     return findings
 
 
-# --- golden verification (produced .net <-> .kicad_sch artifacts) ---------------------
-# Phase 10: a .kicad_sch merely EXISTING is not proof the design is correct -- a part may
+# --- golden verification (produced .net <-> .anvil_sch artifacts) ---------------------
+# Phase 10: a .anvil_sch merely EXISTING is not proof the design is correct -- a part may
 # be dropped, or a symbol missing. Golden verification cross-checks the produced artifacts
 # against each other: every netlist component must appear as a schematic symbol, no UUID
 # may be duplicated, and the project structure must be sane. Comparison against the
@@ -718,7 +718,7 @@ def _net_component_refs(net_path):
 
 
 def _sch_symbols(sch_path):
-    """(instances, sheet_uuids) from a .kicad_sch. instances = [(ref, uuid, lib_id)].
+    """(instances, sheet_uuids) from a .anvil_sch. instances = [(ref, uuid, lib_id)].
 
     Only DIRECT children of the root are read, so library symbol DEFINITIONS nested
     under (lib_symbols ...) are never mistaken for placed instances."""
@@ -765,7 +765,7 @@ def golden_verify(net_path, sch_paths, pro_path=None, expected_sheets=None):
 
     if parsed == 0:
         findings.append(Finding("GV-4", ERROR, 0,
-            "no .kicad_sch could be parsed -- the schematic artifact was not produced "
+            "no .anvil_sch could be parsed -- the schematic artifact was not produced "
             "(build is INCOMPLETE, not successful)"))
         return findings
 
@@ -804,14 +804,14 @@ def golden_verify(net_path, sch_paths, pro_path=None, expected_sheets=None):
     # GV-4: project structure.
     if pro_path is not None and not os.path.isfile(pro_path):
         findings.append(Finding("GV-4", INFO, 0,
-            "no .kicad_pro yet (%s) -- KiCad creates it on first open; the .kicad_sch is "
+            "no .anvil_pro yet (%s) -- KiCad creates it on first open; the .anvil_sch is "
             "the deliverable" % os.path.basename(pro_path)))
 
     # GV-5: sheet count vs the hierarchy plan (informational -- flattening is legitimate).
     if expected_sheets is not None and parsed != expected_sheets:
         findings.append(Finding("GV-5", INFO, 0,
             "sheet count: plan expects ~%d (1 + @subcircuit call sites), found %d "
-            ".kicad_sch file(s) (small designs may be legitimately flattened to one sheet)"
+            ".anvil_sch file(s) (small designs may be legitimately flattened to one sheet)"
             % (expected_sheets, parsed)))
 
     return findings
@@ -888,7 +888,7 @@ def main(argv=None):
                     help="also print the net -> @subcircuit connectivity matrix")
     ap.add_argument("--golden", action="store_true",
                     help="Phase-10 golden verification: cross-check the produced "
-                         ".net/.kicad_sch artifacts (auto-discovered next to the .py)")
+                         ".net/.anvil_sch artifacts (auto-discovered next to the .py)")
     ap.add_argument("--no-color", action="store_true", help="disable ANSI colour")
     args = ap.parse_args(argv)
 
@@ -907,8 +907,8 @@ def main(argv=None):
         d = os.path.dirname(os.path.abspath(args.pyfile))
         base = os.path.splitext(os.path.basename(args.pyfile))[0]
         net = args.netlist or os.path.join(d, base + ".net")
-        sch_paths = sorted(glob.glob(os.path.join(d, base + "*.kicad_sch")))
-        pro = os.path.join(d, base + ".kicad_pro")
+        sch_paths = sorted(glob.glob(os.path.join(d, base + "*.anvil_sch")))
+        pro = os.path.join(d, base + ".anvil_pro")
         expected = None
         if validator is not None:
             expected = 1 + sum(len(v) for v in validator.subcircuit_call_lines.values())

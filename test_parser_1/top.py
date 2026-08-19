@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 from skidl import *
-from sub1_1 import sub1_1
 from sub1_2 import sub1_2
+from sub1_1 import sub1_1
 
 @subcircuit
 def top():
@@ -10,6 +10,6 @@ def top():
     N_2 = Net('N$2')
 
     # Hierarchical subcircuits
-    sub1_1(N_1, N_2)
     sub1_2(N_1, N_2)
+    sub1_1(N_1, N_2)
     return

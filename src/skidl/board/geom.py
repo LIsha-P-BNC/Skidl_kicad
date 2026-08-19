@@ -8,6 +8,25 @@ later DRC-style checks. No KiCad types; mm throughout.
 
 from __future__ import annotations
 
+import math
+
+
+def point_segment_distance(px, py, x1, y1, x2, y2) -> float:
+    """Shortest distance from point (px,py) to the segment (x1,y1)-(x2,y2).
+
+    Used to keep a stitching via clear of a routed track: the via's centre
+    must stay at least (via_radius + track_half_width + clearance) from every
+    other-net track segment, or KiCad reports a copper short / clearance error.
+    """
+    dx, dy = x2 - x1, y2 - y1
+    seg2 = dx * dx + dy * dy
+    if seg2 == 0.0:                      # degenerate segment -> point
+        return math.hypot(px - x1, py - y1)
+    t = ((px - x1) * dx + (py - y1) * dy) / seg2
+    t = 0.0 if t < 0.0 else (1.0 if t > 1.0 else t)
+    cx, cy = x1 + t * dx, y1 + t * dy
+    return math.hypot(px - cx, py - cy)
+
 
 def point_in_polygon(pt, polygon) -> bool:
     """True if `pt` is inside `polygon` ([(x,y), ...], implicitly closed).

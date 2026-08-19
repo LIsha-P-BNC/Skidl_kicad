@@ -1,4 +1,4 @@
-"""IPC-3 grid alignment -- snap the CONNECTION coordinates of a .kicad_sch to the
+"""IPC-3 grid alignment -- snap the CONNECTION coordinates of a .anvil_sch to the
 KiCad 1.27 mm (50 mil) grid.
 
 WHY a post-pass and not just placement: SKiDL snaps each part's *anchor* pin to
@@ -129,7 +129,7 @@ def _sub_xy(blk):
 if __name__ == "__main__":
     import sys
 
-    name = sys.argv[1] if len(sys.argv) > 1 else "circuit.kicad_sch"
-    if not name.endswith(".kicad_sch"):
-        name += ".kicad_sch"
+    name = sys.argv[1] if len(sys.argv) > 1 else "circuit.anvil_sch"
+    if not name.endswith(".anvil_sch"):
+        name += ".anvil_sch"
     print("coordinates snapped to grid:", snap(name))

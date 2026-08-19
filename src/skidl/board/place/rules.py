@@ -19,6 +19,10 @@ Phase 3, applied to a BoardModel:
   * courtyard de-overlap, grid snap, Edge.Cuts refit -- shared with the
     M1 coarse placer, which stays as the automatic fallback (pipeline.py)
     when anything here fails.
+  * utilization-driven densify: a sparse board (utilization under the
+    professional 35% floor) re-legalizes at tighter gaps (2.0 -> 1.0 ->
+    0.5 mm) while it stays overlap-free and routable -- small circuit,
+    small board. Skipped under a mechanical outline.
 
 Same discipline as simple.py: classification is REUSED from
 schematics/cluster.py + net_classify.py via the duck-typed view shims.
@@ -54,6 +58,18 @@ BLOCK_GAP_MULT = 1.5    # spacing between functional blocks, in GAPs
 LOOSE_ROW_MULT = 1.6    # loose-block shelf width vs sqrt(parts area)
 GLOBAL_COMPACT = True   # tetris-pack pass across all blocks
 GLOBAL_OPT = True       # connectivity-driven block optimization
+
+# Utilization-driven densify (small circuit -> small board): the 2.0mm
+# GAP is roomy ON PURPOSE so the autorouter keeps corridors, but on a
+# sparse board it leaves utilization far below the professional 35-60%
+# window (metrics.py) -- a small circuit lands on twice the board it
+# needs. When utilization < UTIL_FLOOR, the legalization stack re-runs
+# at each tighter gap; a rung is kept only while the board stays
+# overlap-free, the congestion estimate stays under the ceiling, and
+# the weighted HPWL does not regress.
+UTIL_FLOOR = 0.35            # professional lower packing bound
+DENSIFY_GAPS = (1.0, 0.5)    # mm courtyard gaps tried, tightest last
+DENSIFY_CONGESTION = 1.0     # peak demand/capacity ceiling while tightening
 
 
 def place_board_rules(board: BoardModel, mech=None) -> dict:
@@ -298,6 +314,14 @@ def _place_once(board: BoardModel, mech=None, use_affinity=False) -> dict:
         _shift_and_fit(board, fps, left_edge=set(), right_edge=set(),
                        fixed_outline=fixed_outline, statics=statics)
 
+    # Small circuit -> small board: with no mechanical spec, tighten a
+    # sparse layout toward the professional utilization floor. Under a
+    # mechanical outline the enclosure fixes the board size, so packing
+    # tighter buys nothing.
+    density = (_densify(board, fps, anchors, close_pairs,
+                        left_conn, right_conn)
+               if mech is None else None)
+
     if fixed_outline:
         # Clamp <-> keepout push can ping-pong a part; a few bounded
         # resolve rounds settle it before the honest fit check.
@@ -312,14 +336,23 @@ def _place_once(board: BoardModel, mech=None, use_affinity=False) -> dict:
                        allowed_close=close_pairs, fixed=fixed_set)
             _shift_and_fit(board, fps, left_edge=set(), right_edge=set(),
                            fixed_outline=fixed_outline, statics=statics)
+        if count_courtyard_overlaps(board, ignore={r for r in fixed_set
+                                                   if r.startswith("__KO")}):
+            _rescue_overlaps(board, fps, fixed_set, fixed_outline)
         _check_mech_fit(board, fps, mech)
 
     overlaps = count_courtyard_overlaps(board, ignore={r for r in fixed_set
                                                        if r.startswith("__KO")})
-    maxx = max(b[2] for b in map(_world_bbox, fps + statics)) + EDGE_MARGIN
-    maxy = max(b[3] for b in map(_world_bbox, fps + statics)) + EDGE_MARGIN
     if fixed_outline:
         maxx, maxy = fixed_outline
+    elif board.outline:
+        # _shift_and_fit / _densify own the outline; report what was set
+        # (the bbox+EDGE_MARGIN estimate disagrees after a densify).
+        maxx = max(p[0] for p in board.outline)
+        maxy = max(p[1] for p in board.outline)
+    else:
+        maxx = max(b[2] for b in map(_world_bbox, fps + statics)) + EDGE_MARGIN
+        maxy = max(b[3] for b in map(_world_bbox, fps + statics)) + EDGE_MARGIN
     return {
         "placed": len(fps),
         "placer": "rules",
@@ -331,10 +364,60 @@ def _place_once(board: BoardModel, mech=None, use_affinity=False) -> dict:
         "courtyard_overlaps": overlaps,
         "mechanical_fixed": sorted(r for r in fixed_set
                                    if not r.startswith("__KO")),
+        "density": density,
         "global_opt": opt_report,
         "quality": _quality_metrics(board),
         "rf": _apply_rf_rules(board, rf_views),
     }
+
+
+def _rescue_overlaps(board, fps, fixed_set, outline_wh):
+    """LAST-RESORT legal relocation inside a FIXED outline: the push-based
+    de-overlap/clamp passes can ping-pong a part wedged between a locked
+    edge connector and its block (measured: C2 vs edge-pinned J1 on a
+    7-part 70x50 board -- a size-independent 1-overlap loop). For each
+    movable part still in an overlap, spiral outward from its position
+    and take the NEAREST spot that reduces the global overlap count.
+    Runs only when the normal passes have already failed -- a slower
+    success beats a fast honest failure."""
+    W, H = outline_wh
+    ko = {r for r in fixed_set if r.startswith("__KO")}
+
+    def _ring(r):
+        for dx in range(-r, r + 1):
+            yield dx, -r
+            yield dx, r
+        for dy in range(-r + 1, r):
+            yield -r, dy
+            yield r, dy
+
+    n = count_courtyard_overlaps(board, ignore=ko)
+    for fp in fps:
+        if not n:
+            break
+        if fp.ref in fixed_set:
+            continue
+        if count_courtyard_overlaps(board, ignore=ko | {fp.ref}) >= n:
+            continue                      # not involved in any overlap
+        ox, oy = fp.x, fp.y
+        moved = False
+        for r in range(1, int(max(W, H)) + 1):
+            for dx, dy in _ring(r):
+                fp.x, fp.y = ox + dx, oy + dy
+                b = _world_bbox(fp)
+                if b[0] < 0.5 or b[1] < 0.5 or b[2] > W - 0.5 \
+                        or b[3] > H - 0.5:
+                    continue
+                new_n = count_courtyard_overlaps(board, ignore=ko)
+                if new_n < n:
+                    n = new_n
+                    moved = True
+                    break
+            if moved:
+                break
+        if not moved:
+            fp.x, fp.y = ox, oy
+    return n
 
 
 def _apply_rf_rules(board, rf_views):
@@ -437,6 +520,62 @@ def _check_mech_fit(board, fps, mech):
             f"(parts need ~{needed:.0f} mm2 of {W * H:.0f} mm2, plus routing "
             f"room): {', '.join(outside[:8])}",
             needed_mm2=needed, board_mm2=W * H, worst_refs=outside[:8])
+
+
+def _densify(board, fps, anchors, close_pairs, left_conn, right_conn):
+    """Utilization-driven gap tightening (small circuit -> small board).
+    Re-runs the legalization stack (_compact -> _deoverlap ->
+    _shift_and_fit) at each DENSIFY_GAPS rung; a rung is accepted only
+    when the board stays overlap-free, the congestion estimate stays
+    under DENSIFY_CONGESTION, and the weighted HPWL does not regress --
+    a tighter board that routes worse is not an improvement. Snapped
+    decap/crystal pairs keep their closeness via allowed_close. Stops at
+    the first rung that reaches UTIL_FLOOR; a failed rung restores the
+    previous state and stops."""
+    from skidl.board.place.metrics import (
+        congestion_map, utilization, weighted_hpwl)
+
+    before = utilization(board)
+    report = {"utilization_before": before, "utilization_after": before,
+              "target": UTIL_FLOOR, "gap_mm": GAP}
+    if before >= UTIL_FLOOR:
+        return report
+
+    heavy = {v.fp.ref for v in anchors}
+    left = {v.fp.ref for v in left_conn}
+    right = {v.fp.ref for v in right_conn}
+    hpwl0 = weighted_hpwl(board)
+
+    def snapshot():
+        return ({fp.ref: (fp.x, fp.y, fp.rotation) for fp in fps},
+                list(board.outline or []))
+
+    def restore(state):
+        pos, outline = state
+        for fp in fps:
+            fp.x, fp.y, fp.rotation = pos[fp.ref]
+        board.outline = outline or None
+
+    good = snapshot()
+    for gap in DENSIFY_GAPS:
+        _compact(fps, allowed_close=close_pairs, gap=gap)
+        _deoverlap(fps, heavy=heavy, allowed_close=close_pairs, gap=gap)
+        # Edge keepout shrinks with the gap but never below the ~2mm
+        # (80mil) manufacturing floor.
+        _shift_and_fit(board, fps, left_edge=left, right_edge=right,
+                       gap=gap, edge=max(2.0, gap * 2))
+        peak = congestion_map(board).get("peak_ratio", 0.0)
+        if (count_courtyard_overlaps(board)
+                or peak > DENSIFY_CONGESTION
+                or weighted_hpwl(board) > hpwl0 * 1.05):
+            restore(good)
+            break
+        good = snapshot()
+        report["gap_mm"] = gap
+        if utilization(board) >= UTIL_FLOOR:
+            break
+    report["utilization_after"] = utilization(board)
+    return report
 
 
 # ---------------------------------------------------------------------------
@@ -731,12 +870,13 @@ def _stack_connectors(connectors, x, mid_y):
 # Legalization (shared logic with simple.py, parameterized weights)
 # ---------------------------------------------------------------------------
 
-def _compact(fps, allowed_close=None, rounds=12, fixed=None):
+def _compact(fps, allowed_close=None, rounds=12, fixed=None, gap=GAP):
     """Tetris-pack: slide every part as far toward the layout's min-x
     then min-y as legality allows, repeating until stable. `fixed` refs
     (anchors, snapped decaps/crystals) never move -- their pad-relative
     positions are design intent, not slack. Pairs in allowed_close keep
-    their tighter margin."""
+    their tighter margin. `gap` is the courtyard margin between parts
+    (the densify ladder passes tighter values than the default)."""
     allowed_close = allowed_close or set()
     fixed = fixed or set()
 
@@ -759,7 +899,7 @@ def _compact(fps, allowed_close=None, rounds=12, fixed=None):
                     continue
                 ob = boxes[o.ref]
                 margin = (0.0 if frozenset((fp.ref, o.ref)) in allowed_close
-                          else GAP)
+                          else gap)
                 if axis == "x":
                     if ob[1] < b[3] + margin and b[1] < ob[3] + margin:
                         if ob[2] + margin <= b[0] + 1e-6:
@@ -785,7 +925,8 @@ def _compact(fps, allowed_close=None, rounds=12, fixed=None):
             break
 
 
-def _deoverlap(fps, heavy, iterations=500, allowed_close=None, fixed=None):
+def _deoverlap(fps, heavy, iterations=500, allowed_close=None, fixed=None,
+               gap=GAP):
     """allowed_close: pairs (frozenset of two refs) permitted to sit at
     _DECAP_CLEAR instead of the general GAP -- decaps/crystals hug their
     IC by DESIGN; pushing them back out defeats the snap rule. `fixed`
@@ -803,7 +944,7 @@ def _deoverlap(fps, heavy, iterations=500, allowed_close=None, fixed=None):
                 a, b = fps[i], fps[j]
                 if a.ref in fixed and b.ref in fixed:
                     continue
-                margin = 0.0 if frozenset((a.ref, b.ref)) in allowed_close else GAP
+                margin = 0.0 if frozenset((a.ref, b.ref)) in allowed_close else gap
                 ov = _overlap(_world_bbox(a), _world_bbox(b), margin)
                 if ov is None:
                     continue
@@ -848,7 +989,7 @@ def _deoverlap(fps, heavy, iterations=500, allowed_close=None, fixed=None):
                 for j in range(i + 1, len(fps)):
                     a, b = fps[i], fps[j]
                     margin = (0.0 if frozenset((a.ref, b.ref)) in allowed_close
-                              else GAP)
+                              else gap)
                     ov = _overlap(_world_bbox(a), _world_bbox(b), margin)
                     if ov is None:
                         continue
@@ -875,15 +1016,18 @@ def _deoverlap(fps, heavy, iterations=500, allowed_close=None, fixed=None):
 
 
 def _shift_and_fit(board, fps, left_edge, right_edge,
-                   fixed_outline=None, statics=None):
+                   fixed_outline=None, statics=None,
+                   gap=GAP, edge=EDGE_MARGIN):
     """Shift the MOVABLE parts positive, refit the outline, then pull
     edge connectors flush (courtyard 1mm from the board edge). With
     `fixed_outline` (mechanical-first) the outline is authoritative:
     statics never move, movable parts shift into the fixed frame, and
-    the flush pull targets the fixed edges."""
+    the flush pull targets the fixed edges. `gap`/`edge` are the
+    part-to-part and part-to-edge margins (the densify ladder passes
+    tighter values than the defaults)."""
     boxes = [_world_bbox(fp) for fp in fps]
-    minx = min(b[0] for b in boxes) - EDGE_MARGIN
-    miny = min(b[1] for b in boxes) - EDGE_MARGIN
+    minx = min(b[0] for b in boxes) - edge
+    miny = min(b[1] for b in boxes) - edge
     for fp in fps:
         fp.x = _snap(fp.x - minx)
         fp.y = _snap(fp.y - miny)
@@ -902,14 +1046,14 @@ def _shift_and_fit(board, fps, left_edge, right_edge,
         # overlap the clamp re-introduces.
         for fp in fps:
             x1, y1, x2, y2 = _world_bbox(fp)
-            if x1 < GAP:
-                fp.x = _snap(fp.x + (GAP - x1))
-            elif x2 > W - GAP:
-                fp.x = _snap(fp.x - (x2 - (W - GAP)))
-            if y1 < GAP:
-                fp.y = _snap(fp.y + (GAP - y1))
-            elif y2 > H - GAP:
-                fp.y = _snap(fp.y - (y2 - (H - GAP)))
+            if x1 < gap:
+                fp.x = _snap(fp.x + (gap - x1))
+            elif x2 > W - gap:
+                fp.x = _snap(fp.x - (x2 - (W - gap)))
+            if y1 < gap:
+                fp.y = _snap(fp.y + (gap - y1))
+            elif y2 > H - gap:
+                fp.y = _snap(fp.y - (y2 - (H - gap)))
         board.outline = [(0.0, 0.0), (W, 0.0), (W, H), (0.0, H)]
         return
 
@@ -917,14 +1061,14 @@ def _shift_and_fit(board, fps, left_edge, right_edge,
     # pulled flush against it -- computing width including the connectors'
     # own pre-nudge positions inflates the board with dead space.
     interior = [fp for fp in fps if fp.ref not in right_edge]
-    maxx_int = max(_world_bbox(fp)[2] for fp in interior) + GAP
+    maxx_int = max(_world_bbox(fp)[2] for fp in interior) + gap
     if right_edge:
         conn_w = max(_world_bbox(fp)[2] - _world_bbox(fp)[0]
                      for fp in fps if fp.ref in right_edge)
         maxx = maxx_int + conn_w + 2.0
     else:
-        maxx = maxx_int + EDGE_MARGIN - GAP
-    maxy = max(_world_bbox(fp)[3] for fp in fps) + EDGE_MARGIN
+        maxx = maxx_int + edge - gap
+    maxy = max(_world_bbox(fp)[3] for fp in fps) + edge
 
     for fp in fps:
         bbox = _world_bbox(fp)

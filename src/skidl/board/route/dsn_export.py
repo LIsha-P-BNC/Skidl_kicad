@@ -3,7 +3,7 @@ src/skidl/board/route/dsn_export.py
 
 [C] first leg: serialize a placed BoardModel to a Specctra .dsn file for
 FreeRouting. Emitted directly from BoardModel -- never by re-parsing the
-.kicad_pcb -- so the board file and the DSN can't drift apart (one model,
+.anvil_pcb -- so the board file and the DSN can't drift apart (one model,
 two serializers).
 
 Conventions (matching what KiCad's own exporter feeds FreeRouting):

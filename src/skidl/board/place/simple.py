@@ -29,6 +29,7 @@ from skidl.board.model import BoardModel, Footprint
 from skidl.schematics.cluster import (
     find_anchor_parts,
     find_decap_affinities,
+    find_functional_cap_affinities,
     is_decoupling_cap,
 )
 from skidl.schematics.net_classify import is_connector_part
@@ -159,7 +160,16 @@ def place_board(board: BoardModel) -> dict:
     decap_by_part = {}   # decap _PartView -> ic _PartView
     for _net, (decap, ic) in find_decap_affinities(views).items():
         decap_by_part.setdefault(decap, ic)
-    placed_special = set(connectors) | set(anchors) | set(decap_by_part)
+    # Functional caps (555 CONT, crystal load, comp/bootstrap): tie to an IC
+    # via a SIGNAL pin, so find_decap_affinities (VCC-only) misses them and
+    # they'd scatter into 'others' -- too far to route. Pull them beside their
+    # IC too. Power bypass caps already claimed above win.
+    funccap_by_part = {}   # functional cap _PartView -> ic _PartView
+    for _net, (cap, ic) in find_functional_cap_affinities(views).items():
+        if cap not in decap_by_part:
+            funccap_by_part.setdefault(cap, ic)
+    placed_special = (set(connectors) | set(anchors)
+                      | set(decap_by_part) | set(funccap_by_part))
     others = [v for v in views if v not in placed_special]
 
     # Board size estimate from total courtyard area at ~20% fill --
@@ -185,6 +195,17 @@ def place_board(board: BoardModel) -> dict:
         per_ic_count[ic] = n + 1
         decap.fp.x = _snap(ic.fp.x + iw / 2 + dw / 2)
         decap.fp.y = _snap(ic.fp.y - ih / 2 + dh / 2 + n * (dh + GAP))
+
+    # 2b) Functional caps: tight column at the LEFT edge of their IC (decaps
+    # took the right edge) so the dedicated signal trace stays short.
+    per_ic_fcount = {}
+    for cap, ic in sorted(funccap_by_part.items(), key=lambda kv: kv[0].ref):
+        iw, ih = _size(ic.fp)
+        cw, ch = _size(cap.fp)
+        n = per_ic_fcount.get(ic, 0)
+        per_ic_fcount[ic] = n + 1
+        cap.fp.x = _snap(ic.fp.x - iw / 2 - cw / 2)
+        cap.fp.y = _snap(ic.fp.y - ih / 2 + ch / 2 + n * (ch + GAP))
 
     # 3) Connectors: left edge, stacked top-to-bottom.
     y = EDGE_MARGIN
@@ -216,7 +237,7 @@ def place_board(board: BoardModel) -> dict:
             weight[v.fp.ref] = 4.0
         elif v in connectors:
             weight[v.fp.ref] = 3.0
-        elif v in decap_by_part:
+        elif v in decap_by_part or v in funccap_by_part:
             weight[v.fp.ref] = 1.0
         else:
             weight[v.fp.ref] = 2.0
@@ -269,6 +290,7 @@ def place_board(board: BoardModel) -> dict:
         "anchors": [v.ref for v in anchors],
         "connectors": [v.ref for v in connectors],
         "decaps": {d.ref: ic.ref for d, ic in decap_by_part.items()},
+        "functional_caps": {c.ref: ic.ref for c, ic in funccap_by_part.items()},
         "board_size_mm": (round(maxx, 1), round(maxy, 1)),
         "courtyard_overlaps": overlaps,
     }

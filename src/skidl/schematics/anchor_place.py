@@ -251,10 +251,12 @@ def _world_bbox(part):
 
 
 def _resolve_collisions(order, anchor, iters=400):
-    """Push overlapping parts apart (anchor stays fixed at centre). Body-bbox
-    based (M6 visual-bbox with label DIRECTION awareness is a later increment --
-    a uniform margin was tried and only spread the sheet without fixing the
-    all-label label-direction collisions). Deterministic, grid-snapped."""
+    """Push overlapping parts apart (anchor stays fixed at centre). Uses
+    place_bbox, which already includes labels stubbed BEFORE placement; labels
+    stubbed AFTER placement (by _classify_and_stub_complex_nets) are handled by
+    the tool-level M6 pass gen_schematic._relax_label_collisions, which runs
+    for every placer -- including this one -- before routing. Deterministic,
+    grid-snapped."""
     from skidl.geometry import Tx, Point
 
     def vbox(p):
@@ -758,7 +760,7 @@ def auto_hierarchy(circuit=None, min_cluster=3):
 
 
 def benchmark(sch_path):
-    """Score a generated .kicad_sch on the design-doc metrics (span, density,
+    """Score a generated .anvil_sch on the design-doc metrics (span, density,
     overlap count, anchor centrality). Pure post-hoc read of the sheet."""
     import re
     import math as _m

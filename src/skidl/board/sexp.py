@@ -6,7 +6,7 @@ Only handles what M0 needs: parens, double-quoted strings (with \\" and
 \\\\ escapes), and bare atoms (symbols / numbers) -- returned as a tree
 of Python lists / str.
 
-This is a *reader* only. Everything this package writes (.kicad_pcb in
+This is a *reader* only. Everything this package writes (.anvil_pcb in
 pcb_writer.py) is built from explicit string templates instead --
 KiCad's serializer has enough quoting/ordering quirks across versions
 that a templated writer, validated against your real kicad-cli, is more

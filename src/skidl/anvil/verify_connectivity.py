@@ -1,4 +1,4 @@
-"""verify_connectivity.py -- PROVE a generated .kicad_sch has NO unwanted (or missing)
+"""verify_connectivity.py -- PROVE a generated .anvil_sch has NO unwanted (or missing)
 connection.
 
 It extracts the netlist FROM THE GENERATED SCHEMATIC (via kicad-cli) and compares its
@@ -69,6 +69,29 @@ def _partition(path, symmetric_refs=frozenset()):
     return groups
 
 
+def _pins(path, symmetric_refs=frozenset()):
+    """Return the set of every real 'REF.PIN' node in a netlist (ANY net size).
+
+    Complements _partition (which ignores <2-pin groups, so it is blind to a
+    1-pin intended net or to a symbol the renderer dropped entirely): every pin
+    the intended netlist knows about must still EXIST somewhere in the
+    schematic-extracted netlist. kicad-cli lists unconnected pads as
+    'unconnected-(REF-PadN)' nets, so every rendered symbol pin appears here
+    regardless of its connectivity. Same '#'-ref exclusion and symmetric-passive
+    canonicalization as _partition.
+    """
+    text = open(path, encoding="utf-8", errors="replace").read()
+    pins = set()
+    for block in re.split(r"\(net\s+\(code", text)[1:]:
+        nodes = re.findall(
+            r'\(node\s+\(ref\s+"?([^")\s]+)"?\)\s*\(pin\s+"?([^")\s]+)"?', block
+        )
+        for r, p in nodes:
+            if not r.startswith("#"):
+                pins.add(f"{r}.x" if r in symmetric_refs else f"{r}.{p}")
+    return pins
+
+
 # KiCad Device-library symbols whose two pins are electrically interchangeable.
 # Polarized/directional parts (C_Polarized, CP, LED, D, diodes, ...) are deliberately
 # excluded so their pin identity (and thus polarity) is still verified exactly.
@@ -96,12 +119,12 @@ def _symmetric_refs():
 
 
 def export_from_schematic(name):
-    """Export the netlist FROM <name>.kicad_sch, or return ``None`` on failure.
+    """Export the netlist FROM <name>.anvil_sch, or return ``None`` on failure.
 
     A failed export must never reuse a previous ``*_fromsch.net`` file: that
     would compare the *old* schematic and falsely approve the current one.
     """
-    sch = name + ".kicad_sch"
+    sch = name + ".anvil_sch"
     out = name + "_fromsch.net"
     if not os.path.exists(sch) or not os.path.exists(KICAD_CLI):
         return None
@@ -132,7 +155,12 @@ def verify(name, intended_net=None):
     Returns (ok, message, unwanted, missing):
       unwanted = pin-groups present in the SCHEMATIC but NOT intended (an unwanted short).
       missing  = intended pin-groups absent from the schematic (a broken wire).
-    If kicad-cli is unavailable, returns ok=True with a 'skipped' note. If
+    Besides the group comparison, every pin the intended netlist mentions must
+    appear SOMEWHERE in the schematic-extracted netlist (pin coverage) -- this
+    catches a dropped symbol or a 1-pin net the group check is blind to.
+    kicad-cli is REQUIRED: without it the schematic cannot be proven correct, so
+    its absence fails the verify (set ANVIL_ALLOW_UNVERIFIED=1 to accept
+    unverified output on a machine that genuinely has no kicad-cli). If
     kicad-cli is available but cannot export the schematic, returns ok=False:
     approving an unverified schematic would hide an unwanted short or broken wire.
     """
@@ -140,20 +168,25 @@ def verify(name, intended_net=None):
     if not os.path.exists(intended_net):
         return True, "verify skipped (no intended netlist)", [], []
     if not os.path.exists(KICAD_CLI):
-        return True, "verify skipped (kicad-cli unavailable)", [], []
+        if os.environ.get("ANVIL_ALLOW_UNVERIFIED"):
+            return True, "verify skipped (kicad-cli unavailable; ANVIL_ALLOW_UNVERIFIED set)", [], []
+        return False, ("verify FAILED -- kicad-cli unavailable, cannot prove the "
+                       "schematic matches the netlist (install the CAD app, or set "
+                       "ANVIL_ALLOW_UNVERIFIED=1 to knowingly accept unverified output)"), [], []
     out = export_from_schematic(name)
     if not out:
         return False, "verify failed (kicad-cli could not export schematic netlist)", [], []
     sym = _symmetric_refs()
     intended = _partition(intended_net, sym)
     drawn = _partition(out, sym)
+    lost = sorted(_pins(intended_net, sym) - _pins(out, sym))
     try:
         os.remove(out)
     except OSError:
         pass
     unwanted = sorted(sorted(g) for g in (drawn - intended))
     missing = sorted(sorted(g) for g in (intended - drawn))
-    ok = not unwanted and not missing
+    ok = not unwanted and not missing and not lost
     if ok:
         msg = "OK -- schematic connectivity == intended (no unwanted/missing wires)"
     else:
@@ -161,6 +194,9 @@ def verify(name, intended_net=None):
             f"MISMATCH -- {len(unwanted)} unwanted (short) + "
             f"{len(missing)} missing net-group(s)"
         )
+        if lost:
+            shown = ", ".join(lost[:8]) + ("..." if len(lost) > 8 else "")
+            msg += f" + {len(lost)} lost pin(s) not rendered at all: {shown}"
     return ok, msg, unwanted, missing
 
 

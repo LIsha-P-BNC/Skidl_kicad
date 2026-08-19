@@ -119,12 +119,12 @@ def _run_erc(schematic_path):
     """Run kicad-cli ERC on a schematic file and return the report path.
 
     Args:
-        schematic_path: Path to the .kicad_sch file.
+        schematic_path: Path to the .anvil_sch file.
 
     Returns:
         str: Path to the ERC report file, or None if kicad-cli is unavailable.
     """
-    report_path = schematic_path.replace(".kicad_sch", "-erc.rpt")
+    report_path = schematic_path.replace(".anvil_sch", "-erc.rpt")
     try:
         subprocess.run(
             [
@@ -489,6 +489,74 @@ def _classify_and_stub_complex_nets(circuit, node, **options):
         )
 
 
+def _relax_label_collisions(node, iters=200):
+    """M6: label-direction-aware collision relaxation after post-placement stubs.
+
+    _classify_and_stub_complex_nets stubs nets AFTER placement, so their labels
+    were invisible to every placement bbox (lbl_bbox/place_bbox are computed at
+    preprocess time from the stubs known THEN). Such a label can land on a
+    neighbouring part, its ref/value text, or another label ("connection &
+    label overlapping"). Routing has not run yet, so parts may still move:
+    recompute each part's VISUAL bbox -- its placement bbox plus a
+    direction-aware hier-label bbox at every stubbed connected pin -- and push
+    overlapping parts apart (fewer-pin part moves, steps snapped to GRID,
+    deterministic ref-ordered sweep). Recurses into child nodes; each child is
+    its own sheet page, so per-node relaxation cannot collide across sheets.
+    """
+
+    def vbox(part):
+        bb = BBox()
+        bb.add(part.bbox)
+        for pin in part:
+            try:
+                if pin.stub and pin.is_connected():
+                    lb = calc_hier_label_bbox(pin.net.name, pin.orientation)
+                    lb *= Tx().move(pin.pt)
+                    bb.add(lb)
+            except Exception:
+                pass
+        return bb * part.tx
+
+    for child in node.children.values():
+        _relax_label_collisions(child, iters=iters)
+
+    parts = sorted(node.parts, key=lambda p: str(getattr(p, "ref", "") or ""))
+    if len(parts) < 2:
+        return
+    pad = GRID  # one grid cell of air between visual boxes
+    moved_any = False
+    for _ in range(iters):
+        moved = False
+        boxes = [(p, vbox(p)) for p in parts]
+        for i in range(len(boxes)):
+            pi, bi = boxes[i]
+            for j in range(i + 1, len(boxes)):
+                pj, bj = boxes[j]
+                ox = min(bi.max.x, bj.max.x) - max(bi.min.x, bj.min.x) + pad
+                oy = min(bi.max.y, bj.max.y) - max(bi.min.y, bj.min.y) + pad
+                if ox <= 0 or oy <= 0:
+                    continue  # no overlap
+                ki = (len(getattr(pi, "pins", []) or []), str(getattr(pi, "ref", "")))
+                kj = (len(getattr(pj, "pins", []) or []), str(getattr(pj, "ref", "")))
+                mover, other = (pi, pj) if ki <= kj else (pj, pi)
+                mb, ob = vbox(mover), vbox(other)
+                if ox <= oy:
+                    step = GRID * int(-(-ox // GRID))
+                    step = step if mb.ctr.x >= ob.ctr.x else -step
+                    mover.tx = mover.tx * Tx().move(Point(step, 0))
+                else:
+                    step = GRID * int(-(-oy // GRID))
+                    step = step if mb.ctr.y >= ob.ctr.y else -step
+                    mover.tx = mover.tx * Tx().move(Point(0, step))
+                moved = moved_any = True
+                boxes[i] = (pi, vbox(pi))
+                boxes[j] = (pj, vbox(pj))
+        if not moved:
+            break
+    if moved_any:
+        node.calc_bbox()
+
+
 class LabelsOnlyWarning(UserWarning):
     """Warning raised when schematic falls back to labels-only output."""
 
@@ -824,6 +892,7 @@ def gen_schematic(
             node.place(expansion_factor=expansion_factor, **options)
             if options.get("auto_stub", False):
                 _classify_and_stub_complex_nets(circuit, node, **options)
+                _relax_label_collisions(node)
             node.route(**options)
 
         except PlacementFailure as e:
@@ -893,6 +962,7 @@ def gen_schematic(
                         node.place(expansion_factor=erc_expansion, **options)
                         if options.get("auto_stub", False):
                             _classify_and_stub_complex_nets(circuit, node, **options)
+                            _relax_label_collisions(node)
                         node.route(**options)
                         output_file = write_top_schematic(
                             circuit, node, filepath, top_name, title, version=20230409

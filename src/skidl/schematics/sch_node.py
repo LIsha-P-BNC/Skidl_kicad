@@ -186,8 +186,16 @@ class SchNode(Placer, Router):
                     break
             else:
                 if len(net.pins) == 1:
-                    # Single pin on net and not stubbed, so add a terminal to it below.
-                    pass
+                    # A 1-pin net gains NOTHING from a NetTerminal: the label
+                    # ties to no other pin, so it renders as a dangling
+                    # "port" floating next to the part (QA flagged these as
+                    # unwanted port labels). Stub the pin instead so the net
+                    # name appears as ONE label attached AT the pin -- intent
+                    # stays documented without a floating twin.
+                    net._stub = True
+                    for p in net.pins:
+                        p.stub = True
+                    continue
                 elif not net.is_implicit():
                     # The net has a user-assigned name, so add a terminal to it below.
                     pass

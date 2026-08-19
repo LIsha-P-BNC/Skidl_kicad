@@ -1,8 +1,8 @@
 """open_anvilcad.py -- open a generated design in the Anvil CAD application.
 
-    python open_anvilcad.py <name|path>          # open <name>.kicad_pro (project view)
-    python open_anvilcad.py <name|path> --sch     # open <name>.kicad_sch (schematic editor)
-    python open_anvilcad.py <name|path> --pcb     # open <name>.kicad_pcb (board editor)
+    python open_anvilcad.py <name|path>          # open <name>.anvil_pro (project view)
+    python open_anvilcad.py <name|path> --sch     # open <name>.anvil_sch (schematic editor)
+    python open_anvilcad.py <name|path> --pcb     # open <name>.anvil_pcb (board editor)
 
 or import it from a circuit script:
 
@@ -20,7 +20,7 @@ import os
 import subprocess
 import sys
 
-_EXTS = (".kicad_pro", ".kicad_sch", ".kicad_pcb", ".net", ".py")
+_EXTS = (".anvil_pro", ".anvil_sch", ".anvil_pcb", ".net", ".py")
 # Project-manager exe names, most-preferred first (branding changed over versions).
 _PM_NAMES = ("anvilcad.exe", "envilcad.exe", "kicad.exe")
 
@@ -82,7 +82,7 @@ def _exe(*names):
 
 
 def _base(name):
-    """Strip any known extension so 'foo', 'foo.py', 'foo.kicad_pro' all become 'foo'."""
+    """Strip any known extension so 'foo', 'foo.py', 'foo.anvil_pro' all become 'foo'."""
     for e in _EXTS:
         if name.endswith(e):
             return name[: -len(e)]
@@ -102,15 +102,15 @@ def _launch(exe, target):
 
 
 def open_project(name):
-    return _launch(_exe(*_PM_NAMES), _base(name) + ".kicad_pro")
+    return _launch(_exe(*_PM_NAMES), _base(name) + ".anvil_pro")
 
 
 def open_schematic(name):
-    return _launch(_exe("eeschema.exe", *_PM_NAMES), _base(name) + ".kicad_sch")
+    return _launch(_exe("eeschema.exe", *_PM_NAMES), _base(name) + ".anvil_sch")
 
 
 def open_pcb(name):
-    return _launch(_exe("pcbnew.exe", *_PM_NAMES), _base(name) + ".kicad_pcb")
+    return _launch(_exe("pcbnew.exe", *_PM_NAMES), _base(name) + ".anvil_pcb")
 
 
 def main():

@@ -167,9 +167,17 @@ Result: `<name>.net` + `<name>.kicad_sch` + `<name>.kicad_pro`.
 
 # E. Pipeline 2 — PCB generation
 
-MCP `create_pcb(name, layers, route, force)` *[MCP server]* spawns `board/pcb_job.py:run_pcb_job()`
-as a **detached background process** *[pcb_job subprocess]* (immune to MCP timeouts). That calls
-`board/pipeline.py:30` — `build_pcb()`, the real engine. Failures land in `OUT/<base>.pcb_build.log`.
+MCP `create_pcb(name, route, force, accept_defaults)` *[MCP server]* first runs the
+**requirements gate**: a project the user never initialized returns `status:'requirements_needed'`
+with a design-aware questionnaire (`board/requirements.py`) — the client must ask the USER,
+submit answers via `initialize_pcb_project` (whose return carries a `resolved_configuration`
+summary with per-value source/status for a soft 'Proceed?' confirmation), then call
+`create_pcb` again. There is deliberately NO `layers` argument: board requirements live in the
+sidecar/ladder only (`rule_discovery.resolve_board_config` is the one canonical resolution), so
+no build-time input can shadow what the user confirmed. Past the gate it spawns
+`board/pcb_job.py:run_pcb_job()` as a **detached background process** *[pcb_job subprocess]*
+(immune to MCP timeouts). That calls `board/pipeline.py:30` — `build_pcb()`, the real engine.
+Failures land in `OUT/<base>.pcb_build.log`.
 
 ### E1. Read input netlist + learn setup
 - Input read: the `.net` from Pipeline 1.

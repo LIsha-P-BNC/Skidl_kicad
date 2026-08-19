@@ -6,7 +6,7 @@
     },
     "anvilcad": {
       "command": "C:\\Users\\Admin\\AppData\\Local\\Programs\\Python\\Python311\\python.exe",
-      "args": ["f:\\skidl\\skidl_mcp_server.py"]
+      "args": ["f:\\Ki_CAD\\skidl\\skidl_mcp_server.py"]
     }
   }
 }

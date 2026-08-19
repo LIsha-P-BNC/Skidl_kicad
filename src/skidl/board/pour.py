@@ -20,8 +20,11 @@ ties the pads, so it is NOT the pour gate.
 
 from __future__ import annotations
 
+import math
+
 from skidl.board.model import BoardModel, Net, Zone, Via, PadConnectOverride
-from skidl.board.geom import point_in_polygon, bbox_of, bbox_contains
+from skidl.board.geom import (point_in_polygon, bbox_of, bbox_contains,
+                              point_segment_distance)
 from skidl.schematics.net_classify import classify_net_role
 from skidl.board.width_engine import estimate_net_current, required_width
 
@@ -280,10 +283,15 @@ def plan_stitching_vias(board: BoardModel, assignments: dict,
     return-path integrity. Only nets poured on >= 2 layers are stitched --
     a single-layer pour has nothing to tie (and a via to one layer is a DRC
     error). Vias land on a grid inside the outline, kept clear of courtyards,
-    keepouts and each other by the via's FINISHED outer diameter (via_size,
-    not drill). `spacing_mm` default 5 mm suits return-path inductance at
-    typical board frequencies; drop to 2-3 mm for RF / high-speed digital.
-    Returns (vias, warnings)."""
+    keepouts, each other AND every piece of OTHER-net copper -- routed tracks,
+    routed vias and pads -- by the via's finished radius + that copper's own
+    half-size + the clearance rule. Same-net (the pour net) copper is NOT an
+    obstacle: the via is meant to bond to it. Call this AFTER routing so the
+    routed geometry is present; a via placed blind (pre-route) gets stamped on
+    top of a signal track and shows up as a short + a dangling via (the pour
+    then carves around the signal and strands the via). `spacing_mm` default
+    5 mm suits return-path inductance at typical board frequencies; drop to
+    2-3 mm for RF / high-speed digital. Returns (vias, warnings)."""
     outline = board.outline or []
     vias, warnings = [], []
     if not outline:
@@ -293,8 +301,11 @@ def plan_stitching_vias(board: BoardModel, assignments: dict,
     via_size = float(default.get("via_size", 0.8))     # FINISHED outer diameter
     via_drill = float(default.get("via_drill", 0.4))
     clearance = float(default.get("clearance", 0.15))
-    margin = via_size / 2.0 + clearance                # via edge -> obstacle
+    via_r = via_size / 2.0
+    margin = via_r + clearance                         # via edge -> obstacle
 
+    # Coarse obstacles (whole part / keepout) -- keep a via out of any
+    # footprint's courtyard and every rule area, regardless of net.
     obstacles = []
     for fp in board.footprints:
         bb = fp.courtyard_world_bbox()
@@ -309,6 +320,7 @@ def plan_stitching_vias(board: BoardModel, assignments: dict,
 
     minx, miny, maxx, maxy = bbox_of(outline)
     min_via_gap = spacing_mm * 0.5
+
     for name, layers in assignments.items():
         if len(layers) < 2:
             continue                                   # nothing to stitch
@@ -321,7 +333,8 @@ def plan_stitching_vias(board: BoardModel, assignments: dict,
                 pt = (x, y)
                 if (point_in_polygon(pt, outline)
                         and not any(bbox_contains(bb, pt, margin) for bb in obstacles)
-                        and not _too_close(pt, vias, min_via_gap)):
+                        and not _too_close(pt, vias, min_via_gap)
+                        and _via_clears_copper(board, pt, name, via_r, clearance)):
                     vias.append(Via(net=name, at=pt, size=via_size,
                                     drill=via_drill, layers=via_layers))
                     placed += 1
@@ -334,6 +347,18 @@ def plan_stitching_vias(board: BoardModel, assignments: dict,
     return vias, warnings
 
 
+def plan_stitching_vias_for(board: BoardModel, currents: dict = None,
+                            spacing_mm: float = 5.0) -> tuple:
+    """Recompute pour-layer assignments and plan collision-aware stitching
+    vias against the board's CURRENT geometry. Call AFTER routing (so
+    board.tracks / board.vias exist) to place vias that avoid every signal
+    trace/via -- the fix for the post-route 'stamp vias on top' shorts and
+    dangling vias. Returns (vias, warnings)."""
+    decisions = plan_pours(board, currents)
+    assignments, _reroute, _warns = assign_pour_layers(board, decisions)
+    return plan_stitching_vias(board, assignments, spacing_mm)
+
+
 def _too_close(pt, vias, min_d) -> bool:
     md2 = min_d * min_d
     for v in vias:
@@ -342,6 +367,137 @@ def _too_close(pt, vias, min_d) -> bool:
         if dx * dx + dy * dy < md2:
             return True
     return False
+
+
+def _via_clears_copper(board, pt, net, via_r, clearance) -> bool:
+    """True if a via of radius `via_r` on `net` at `pt` keeps `clearance` from
+    every OTHER-net copper -- routed tracks, routed vias and pads. Same-net
+    copper is fine (the via bonds to it). Shared by the grid stitcher and the
+    ground-island healer."""
+    px, py = pt
+    for tr in board.tracks:
+        if tr.net == net:
+            continue
+        need = via_r + tr.width / 2.0 + clearance
+        if point_segment_distance(px, py, tr.start[0], tr.start[1],
+                                  tr.end[0], tr.end[1]) < need:
+            return False
+    for ov in board.vias:
+        if ov.net == net:
+            continue
+        need = via_r + ov.size / 2.0 + clearance
+        if (px - ov.at[0]) ** 2 + (py - ov.at[1]) ** 2 < need * need:
+            return False
+    for fp in board.footprints:
+        for pad in fp.pads:
+            if pad.net is None or pad.net == net:
+                continue
+            cx, cy = fp.pad_world_xy(pad)
+            need = via_r + max(pad.size_x, pad.size_y) / 2.0 + clearance
+            if (px - cx) ** 2 + (py - cy) ** 2 < need * need:
+                return False
+    return True
+
+
+def find_ground_islands(pcb_path, kicad_cli, gnd_nets) -> list:
+    """Refill the board and return the (x, y) points where a GROUND pour has
+    split into copper regions the fill did not tie together. Each is a KiCad
+    'unconnected_items' ratsnest whose endpoints are ALL Zone copper of a
+    ground net (no pad -> every pin is still connected; it is floating pour).
+    Returns a de-duplicated list of positions to stitch."""
+    import subprocess, json as _j, tempfile, os
+    rpt = str(pcb_path) + ".island.drc.json"
+    try:
+        subprocess.run([str(kicad_cli), "pcb", "drc", "--format", "json",
+                        "--severity-all", "--refill-zones", "--save-board",
+                        "--output", rpt, str(pcb_path)],
+                       stdin=subprocess.DEVNULL, capture_output=True,
+                       text=True, timeout=300)
+        rep = _j.loads(open(rpt, encoding="utf-8", errors="replace").read())
+    except Exception:
+        return []
+    finally:
+        try:
+            os.remove(rpt)
+        except OSError:
+            pass
+    gset = set(gnd_nets)
+    pts, seen = [], set()
+    for u in rep.get("unconnected_items", []):
+        items = u.get("items", [])
+        if not items:
+            continue
+        descs = [it.get("description") or "" for it in items]
+        if not all("Zone" in d for d in descs):
+            continue                                   # a real pad ratsnest
+        if not any(f"[{g}]" in d for d in descs for g in gset):
+            continue                                   # not a ground net
+        for it in items:
+            p = it.get("pos") or {}
+            if "x" in p:
+                key = (round(p["x"], 2), round(p["y"], 2))
+                if key not in seen:
+                    seen.add(key)
+                    pts.append((float(p["x"]), float(p["y"])))
+    return pts
+
+
+def plan_island_vias(board, positions, gnd_net, layers,
+                     search_mm=6.0, step_mm=0.5, edge_mm=1.0) -> list:
+    """For each islanded-ground position, find a nearby spot that clears all
+    other-net copper AND the board edge, and return a ground via there tying
+    the island to the plane. The DRC point itself sits on the island BOUNDARY
+    (against a signal / the edge -- exactly why no stitch via landed), so we
+    spiral outward for the first clear spot. Skips a position when the whole
+    neighbourhood is blocked (reported to the caller, not forced)."""
+    outline = board.outline or []
+    if not outline or len(layers) < 2:
+        return []
+    default = (board.net_classes or {}).get("Default", {})
+    via_size = float(default.get("via_size", 0.8))
+    via_drill = float(default.get("via_drill", 0.4))
+    clearance = float(default.get("clearance", 0.15))
+    via_r = via_size / 2.0
+    via_layers = (layers[0], layers[-1])
+    new = []
+    # concentric ring offsets, nearest first
+    rings = [(0.0, 0.0)]
+    r = step_mm
+    while r <= search_mm:
+        k = max(8, int(2 * math.pi * r / step_mm))
+        for i in range(k):
+            a = 2 * math.pi * i / k
+            rings.append((r * math.cos(a), r * math.sin(a)))
+        r += step_mm
+    for (ox, oy) in positions:
+        for (dx, dy) in rings:
+            pt = (ox + dx, oy + dy)
+            if not _point_inside_with_margin(pt, outline, via_r + edge_mm):
+                continue
+            if _too_close(pt, board.vias, via_r * 2 + clearance):
+                continue
+            if _too_close(pt, new, via_r * 2 + clearance):
+                continue
+            if _via_clears_copper(board, pt, gnd_net, via_r, clearance):
+                new.append(Via(net=gnd_net, at=pt, size=via_size,
+                               drill=via_drill, layers=via_layers))
+                break
+    return new
+
+
+def _point_inside_with_margin(pt, outline, margin) -> bool:
+    """Inside the outline AND at least `margin` from every edge (keeps a via
+    off the board edge -> no copper_edge_clearance error)."""
+    if not point_in_polygon(pt, outline):
+        return False
+    px, py = pt
+    n = len(outline)
+    for i in range(n):
+        x1, y1 = outline[i]
+        x2, y2 = outline[(i + 1) % n]
+        if point_segment_distance(px, py, x1, y1, x2, y2) < margin:
+            return False
+    return True
 
 
 def _dedicated_planes(all_cu: list) -> dict:

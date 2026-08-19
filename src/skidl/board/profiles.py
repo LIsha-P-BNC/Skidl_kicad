@@ -7,7 +7,7 @@ them (tool argument, project files, the user's own KiCad defaults, a
 previous AI choice) supplies a value.
 
 Each profile carries:
-  * board design-rule minimums (-> .kicad_pro board.design_settings.rules)
+  * board design-rule minimums (-> .anvil_pro board.design_settings.rules)
   * per-net-class defaults    (-> net classes / DSN routing rules)
   * physical defaults (thickness, copper weight)
 

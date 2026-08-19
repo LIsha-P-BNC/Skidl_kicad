@@ -53,7 +53,7 @@ class BoardBackend(ABC):
 
     @abstractmethod
     def write_pcb(self, board: BoardModel, out_path: Path) -> Path:
-        """Serialize `board` to a KiCad .kicad_pcb file at out_path."""
+        """Serialize `board` to a KiCad .anvil_pcb file at out_path."""
 
     @abstractmethod
     def export_dsn(self, board: BoardModel, out_path: Path) -> Path:

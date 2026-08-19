@@ -9,7 +9,7 @@
 #     2) Check its pins:     python find_parts.py --show Lib Name   e.g.  --show Device R
 #     3) Fill the circuit below using ONLY the Lib/Name/pins you saw.
 #     4) Run it:             python led_blinker.py
-#        -> makes  <name>.net + <name>.kicad_sch + <name>.kicad_pro  and opens Anvil CAD.
+#        -> makes  <name>.net + <name>.anvil_sch + <name>.anvil_pro  and opens Anvil CAD.
 #     5) In Anvil CAD: open the schematic; for the board open Pcbnew ->
 #        "Update PCB from Schematic" (F8)  (footprints are already assigned).
 # ============================================================================
@@ -52,7 +52,7 @@ led = Part("Device", "LED", ref="D1", tag="D1",
 vcc & r & led & gnd
 
 # ---------- 4) GENERATE everything + OPEN in Anvil CAD ----------
-# smart_schematic.build() runs ERC, writes <name>.net, <name>.kicad_sch and <name>.kicad_pro.
+# smart_schematic.build() runs ERC, writes <name>.net, <name>.anvil_sch and <name>.anvil_pro.
 sch, pro = smart_schematic.build()
 open_anvilcad.open_project(pro)      # <- comment this line out if you don't want the GUI to pop up
 print("\n>>> DONE. netlist + schematic + project ready, Anvil CAD opening. <<<")

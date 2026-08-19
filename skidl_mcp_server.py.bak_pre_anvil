@@ -9,13 +9,13 @@ Point Claude Desktop (claude_desktop_config.json -> mcpServers) at this file:
 
 It uses ONLY this repo's SKiDL (f:\\skidl\\src\\skidl) + its bundled `skidl.anvil`
 engine + plain KiCad symbol libraries.  No proprietary app, no 3D-CAD MCP, no GUI:
-every build produces .net + .anvil_sch + .anvil_pro files and returns their paths.
+every build produces .net + .kicad_sch + .kicad_pro files and returns their paths.
 
 Tools (call build(mode='rules') FIRST, then follow its workflow):
   build(mode='rules')               - the mandatory design workflow + circuit template
   parts(action='search')(queries)            - batch part search: exact match + candidates per query
   parts(action='describe')(parts)             - pins/description/datasheet for a list of parts
-  build(name, code, mode)          - generate .net/.anvil_sch/.anvil_pro (body or full script)
+  build(name, code, mode)          - generate .net/.kicad_sch/.kicad_pro (body or full script)
   build(mode='status')(name, include_log)  - poll the background build; lists generated files
   build(mode='open')(name, view)     - open the finished project in the Anvil CAD app
   build(name, mode='bom')               - Bill of Materials from the generated netlist
@@ -42,7 +42,7 @@ if SRC.is_dir() and str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
 # Root under which generated circuits land. Each project gets its OWN subfolder:
-#   <OUT>/<project>/<project>.anvil_pro  (+ .py/.net/.anvil_sch/.anvil_pcb/logs).
+#   <OUT>/<project>/<project>.kicad_pro  (+ .py/.net/.kicad_sch/.kicad_pcb/logs).
 # Override the ROOT with env SKIDL_MCP_OUT, or a single project with build(folder=...).
 OUT = Path(os.environ.get("SKIDL_MCP_OUT", r"F:/Anvil"))
 OUT.mkdir(parents=True, exist_ok=True)
@@ -54,7 +54,7 @@ _PROJECT_DIRS: dict = {}
 
 def pdir(base: str) -> Path:
     """Per-project output folder (created on demand). Everything for one
-    project -- <base>.py/.net/.anvil_sch (+ sub-sheets)/.anvil_pro/.anvil_pcb
+    project -- <base>.py/.net/.kicad_sch (+ sub-sheets)/.kicad_pro/.kicad_pcb
     and all logs -- lives together here. Default <OUT>/<base>; a custom path
     registered via build(folder=...) wins. Generic scratch (pre-check temp,
     diagnostics) stays in the OUT root, not in any project folder."""
@@ -92,15 +92,15 @@ server = FastMCP(
         "the package's real footprint or parts(action='add_footprint') it, never "
         "skip the build over it.\n"
         "4. A design is DONE only after build(mode='status') returns status:'done' with a "
-        "generated .anvil_sch -- cite the produced file paths. NEVER claim a build "
+        "generated .kicad_sch -- cite the produced file paths. NEVER claim a build "
         "succeeded (or describe a schematic as generated) without them.\n"
         "5. ALWAYS show the user the generated file NAME and its FULL PATH (from "
-        "build(mode='status') 'generated' -> the .anvil_sch and .anvil_pro) so they can "
+        "build(mode='status') 'generated' -> the .kicad_sch and .kicad_pro) so they can "
         "find/open it, THEN call build(name, mode='open') to open it. If "
         "build(mode='open') reports it did NOT open, STILL give the user the file "
         "path and tell them to open it manually -- NEVER say the schematic 'can't "
         "be rendered/exported here', 'the file-open step isn't available', or that "
-        "a tool is unavailable when the .anvil_sch already exists on disk.\n"
+        "a tool is unavailable when the .kicad_sch already exists on disk.\n"
         "6. If ANY tool errors, times out, or returns a failure, report the actual "
         "error (and the file path if one was already produced), then STOP -- never "
         "substitute a hand-written schematic, pinout, or BOM as a 'fallback'.\n"
@@ -256,7 +256,7 @@ _MAX_BUILD_S = 900    # kill runaway builds after 15 min
 
 def _gather_files(base: str) -> dict:
     files = {}
-    for ext in (".net", ".anvil_sch", ".anvil_pro"):
+    for ext in (".net", ".kicad_sch", ".kicad_pro"):
         f = pdir(base) / (base + ext)
         if f.is_file():
             files[ext.lstrip(".")] = str(f)
@@ -276,7 +276,7 @@ def _start_build(base: str, script_text: str) -> dict:
         except Exception:
             pass
     # stale outputs must not be mistaken for this build's result
-    for ext in (".net", ".anvil_sch", ".anvil_pro"):
+    for ext in (".net", ".kicad_sch", ".kicad_pro"):
         try:
             (pdir(base) / (base + ext)).unlink(missing_ok=True)
         except OSError:
@@ -322,19 +322,19 @@ def _finish_build(base: str) -> dict:
         except OSError:
             pass
     files = _gather_files(base)
-    ok = bool(files.get("net") and files.get("anvil_sch")) and rc == 0
+    ok = bool(files.get("net") and files.get("kicad_sch")) and rc == 0
     # Script-mode hierarchical builds may emit schematic+netlist WITHOUT a
-    # .anvil_pro (plain generate_schematic path) -- the app then refuses
+    # .kicad_pro (plain generate_schematic path) -- the app then refuses
     # to open the project ("does not appear to be a KiCad project file",
     # measured on the 7-sheet tracker). Seed the standard skeleton.
-    if ok and not (pdir(base) / (base + ".anvil_pro")).is_file():
+    if ok and not (pdir(base) / (base + ".kicad_pro")).is_file():
         skeleton = {
             "board": {"design_settings": {"defaults": {}, "rules": {},
                                           "track_widths": [], "via_dimensions": []},
                       "layer_presets": [], "viewports": []},
             "boards": [], "cvpcb": {"equivalence_files": []},
             "libraries": {"pinned_footprint_libs": [], "pinned_symbol_libs": []},
-            "meta": {"filename": base + ".anvil_pro", "version": 1},
+            "meta": {"filename": base + ".kicad_pro", "version": 1},
             "net_settings": {"classes": [{"name": "Default"}],
                              "meta": {"version": 3}},
             "pcbnew": {"last_paths": {}, "page_layout_descr_file": ""},
@@ -342,7 +342,7 @@ def _finish_build(base: str) -> dict:
                           "meta": {"version": 1}},
             "sheets": [], "text_variables": {},
         }
-        (pdir(base) / (base + ".anvil_pro")).write_text(
+        (pdir(base) / (base + ".kicad_pro")).write_text(
             json.dumps(skeleton, indent=2) + "\n", encoding="utf-8")
         files = _gather_files(base)
     # How was the schematic actually drawn? (printed by smart_schematic)
@@ -372,7 +372,7 @@ def _finish_build(base: str) -> dict:
         res["status"] = "failed"
         res["error"] = (
             "schematic connectivity MISMATCH: " + mism.group(0).split("-> ", 1)[-1]
-            + " -- the .anvil_sch is WRONG (do not use or show it); the .net "
+            + " -- the .kicad_sch is WRONG (do not use or show it); the .net "
               "netlist is still valid for PCB layout. Tell the user exactly this."
         )
     # Non-blocking design review of the finished output: netlist-level checks
@@ -396,13 +396,13 @@ def _finish_build(base: str) -> dict:
                     res["connectivity_matrix"] = {
                         nm: sorted(bs) for nm, bs in v.net_to_blocks.items()}
                 expected_sheets = 1 + sum(len(c) for c in v.subcircuit_call_lines.values())
-            # Phase 10 GOLDEN VERIFICATION: cross-check produced .net <-> .anvil_sch
+            # Phase 10 GOLDEN VERIFICATION: cross-check produced .net <-> .kicad_sch
             # (dropped parts, missing symbols, duplicate UUIDs). Sets res['verified'];
             # a failure must not report as success even though the files exist.
-            if files.get("net") and files.get("anvil_sch"):
-                sch_paths = [str(p) for p in sorted(pdir(base).glob(base + "*.anvil_sch"))]
+            if files.get("net") and files.get("kicad_sch"):
+                sch_paths = [str(p) for p in sorted(pdir(base).glob(base + "*.kicad_sch"))]
                 gv = mod.golden_verify(files["net"], sch_paths,
-                                       pro_path=str(pdir(base) / (base + ".anvil_pro")),
+                                       pro_path=str(pdir(base) / (base + ".kicad_pro")),
                                        expected_sheets=expected_sheets)
                 gv_err = [f for f in gv if f.severity == mod.ERROR]
                 res["verified"] = not gv_err
@@ -412,7 +412,7 @@ def _finish_build(base: str) -> dict:
                         for f in gv]
                 if gv_err:
                     res["verification_note"] = (
-                        "GOLDEN VERIFICATION FAILED -- the .anvil_sch does not match the "
+                        "GOLDEN VERIFICATION FAILED -- the .kicad_sch does not match the "
                         "netlist (dropped part / missing symbol / duplicate UUID). Do NOT "
                         "report this build as successful; see golden_verification[].")
     except Exception:
@@ -924,8 +924,8 @@ def _list_window_titles() -> list:
 
 def _known_projects() -> list:
     """Every project folder we can see: each <OUT>/<name> (or a custom dir
-    registered via build(folder=)) that holds a <name>.anvil_pro OR
-    <name>.anvil_sch. Returns [(base, dir_path)], newest first by mtime."""
+    registered via build(folder=)) that holds a <name>.kicad_pro OR
+    <name>.kicad_sch. Returns [(base, dir_path)], newest first by mtime."""
     seen, found = set(), []
     dirs = list(_PROJECT_DIRS.values())
     if OUT.is_dir():
@@ -935,11 +935,11 @@ def _known_projects() -> list:
             base = d.name
             if base in seen:
                 continue
-            if (d / (base + ".anvil_pro")).is_file() or \
-               (d / (base + ".anvil_sch")).is_file():
+            if (d / (base + ".kicad_pro")).is_file() or \
+               (d / (base + ".kicad_sch")).is_file():
                 seen.add(base)
                 mt = 0.0
-                for ext in (".anvil_sch", ".anvil_pcb", ".anvil_pro"):
+                for ext in (".kicad_sch", ".kicad_pcb", ".kicad_pro"):
                     f = d / (base + ext)
                     if f.is_file():
                         mt = max(mt, f.stat().st_mtime)
@@ -966,7 +966,7 @@ def _design_counts(base: str, pdir_path: Path) -> tuple:
         pass
     parts = 0
     try:
-        for sch in pdir_path.glob(base + "*.anvil_sch"):
+        for sch in pdir_path.glob(base + "*.kicad_sch"):
             parts += len(re.findall(r"\(lib_id ", sch.read_text(
                 encoding="utf-8", errors="replace")))
     except OSError:
@@ -978,15 +978,15 @@ def _owner_of(base: str, pdir_path: Path, parts: int) -> str:
     """WHO owns this project's design.
       'ai'      -> we generated the schematic ((generator "skidl")) and it has
                    not been re-saved by the user's editor
-      'user'    -> a .anvil_sch made or SAVED by the KiCad/Anvil editor
+      'user'    -> a .kicad_sch made or SAVED by the KiCad/Anvil editor
                    ((generator "eeschema") -- hand-made, or ours then hand-edited)
-      'empty'   -> .anvil_sch exists but holds no real part yet
+      'empty'   -> .kicad_sch exists but holds no real part yet
       'unknown' -> nothing readable
     We key off the schematic's own (generator ...) tag, NOT mtime: our build
-    writes .py first and the .anvil_sch later, so mtime always looks 'edited'.
+    writes .py first and the .kicad_sch later, so mtime always looks 'edited'.
     When the user opens our sheet and SAVES, the editor rewrites the tag to
     'eeschema' -- that flip, not the clock, is the ownership signal."""
-    sch = pdir_path / (base + ".anvil_sch")
+    sch = pdir_path / (base + ".kicad_sch")
     py = pdir_path / (base + ".py")
     if sch.is_file():
         if parts == 0:
@@ -1008,8 +1008,8 @@ def _owner_of(base: str, pdir_path: Path, parts: int) -> str:
 
 def _summarize_project(base: str, pdir_path: Path) -> dict:
     """WHAT is inside: cheap counts from the netlist (preferred) or schematic."""
-    sch = pdir_path / (base + ".anvil_sch")
-    pcb = pdir_path / (base + ".anvil_pcb")
+    sch = pdir_path / (base + ".kicad_sch")
+    pcb = pdir_path / (base + ".kicad_pcb")
     parts, nets = _design_counts(base, pdir_path)
     return {"has_schematic": sch.is_file(), "has_pcb": pcb.is_file(),
             "has_python": (pdir_path / (base + ".py")).is_file(),
@@ -1036,24 +1036,22 @@ def _try_open(base: str, view: str = "project") -> str:
 
 
 def _find_kicad_cli_path() -> str:
-    """The CAD app's CLI (anvil-cli.exe, with kicad-cli.exe as the legacy name) from the
-    installed app (NOT on PATH here), via the same install-bin detector open/verify
-    already use; PATH as fallback."""
+    """kicad-cli.exe from the installed CAD app (NOT on PATH here), via the
+    same install-bin detector open/verify already use; PATH as fallback."""
     try:
         b = _open_anvilcad_mod()._find_bin()
         if b:
-            for name in ("anvil-cli.exe", "kicad-cli.exe"):
-                p = os.path.join(b, name)
-                if os.path.isfile(p):
-                    return p
+            p = os.path.join(b, "kicad-cli.exe")
+            if os.path.isfile(p):
+                return p
     except Exception:
         pass
     import shutil
-    return shutil.which("anvil-cli") or shutil.which("kicad-cli") or ""
+    return shutil.which("kicad-cli") or ""
 
 
 def _board_drc_gate(pcb_path: Path, refill: bool = False) -> dict:
-    """The board gate: prove the .anvil_pcb PARSES in the installed KiCad
+    """The board gate: prove the .kicad_pcb PARSES in the installed KiCad
     and DRC it. refill=True additionally fills copper zones and saves the
     board (kicad-cli --refill-zones --save-board) in the same call; if the
     installed CLI doesn't know those flags it gracefully retries without
@@ -1121,10 +1119,10 @@ def _board_fingerprint_path(base: str) -> Path:
 
 
 def _stamp_board_fingerprint(base: str) -> None:
-    """Record the generated .anvil_pcb's hash so later runs can tell
+    """Record the generated .kicad_pcb's hash so later runs can tell
     'still exactly what the pipeline wrote' from 'a human changed it'."""
     import hashlib
-    pcb = pdir(base) / (base + ".anvil_pcb")
+    pcb = pdir(base) / (base + ".kicad_pcb")
     if pcb.is_file():
         digest = hashlib.sha256(pcb.read_bytes()).hexdigest()
         _board_fingerprint_path(base).write_text(
@@ -1132,7 +1130,7 @@ def _stamp_board_fingerprint(base: str) -> None:
 
 
 def _detect_manual_edits(base: str):
-    """Returns a human-readable reason string if <base>.anvil_pcb shows
+    """Returns a human-readable reason string if <base>.kicad_pcb shows
     MANUAL edits (saved from the PCB editor, or changed outside the
     pipeline), else None.
 
@@ -1148,7 +1146,7 @@ def _detect_manual_edits(base: str):
     regardless of the generator token. The generator check only decides
     when no fingerprint exists."""
     import hashlib
-    pcb = pdir(base) / (base + ".anvil_pcb")
+    pcb = pdir(base) / (base + ".kicad_pcb")
     if not pcb.is_file():
         return None
     fp = _board_fingerprint_path(base)
@@ -1183,7 +1181,7 @@ out = Path({json.dumps(str(pdir(base)))})
 base = {json.dumps(base)}
 cli = {json.dumps(_find_kicad_cli_path())}
 try:
-    v = _vb(out / (base + ".anvil_pcb"), out / (base + ".net"), cli)
+    v = _vb(out / (base + ".kicad_pcb"), out / (base + ".net"), cli)
     info = {{"ok": True, "verify": v}}
 except Exception as exc:
     info = {{"ok": False, "verify_error": repr(exc)}}
@@ -1338,7 +1336,7 @@ def _resolve_project(name: str) -> tuple:
         if base == name:
             return base, d
     p = Path(name)
-    if p.suffix.lower() in (".anvil_sch", ".anvil_pro", ".anvil_pcb", ".net"):
+    if p.suffix.lower() in (".kicad_sch", ".kicad_pro", ".kicad_pcb", ".net"):
         return p.stem, p.parent
     if p.is_dir():
         return p.name, p
@@ -1355,22 +1353,22 @@ def adopt_project(name: str) -> dict:
     the user drew the board in Anvil CAD, there is no .py, and they now ask to
     change it. Steps performed:
       1. find/export a netlist  (uses <base>.net, else kicad-cli exports it
-         from <base>.anvil_sch)
+         from <base>.kicad_sch)
       2. netlist_to_skidl        -> writes <base>.py (its OWN backup is kept if
          one already exists)
       3. reports parts/nets + whether a PCB is present
 
     After this, edit the returned python and rebuild with build(), OR make a
-    surgical change. NEVER overwrite the user's .anvil_sch from the fresh build
+    surgical change. NEVER overwrite the user's .kicad_sch from the fresh build
     without warning -- their drawn layout is the truth."""
     base, d = _resolve_project(name)
-    sch = d / (base + ".anvil_sch")
+    sch = d / (base + ".kicad_sch")
     net = d / (base + ".net")
-    pcb = d / (base + ".anvil_pcb")
+    pcb = d / (base + ".kicad_pcb")
     py = d / (base + ".py")
 
     if not sch.is_file() and not net.is_file():
-        return {"ok": False, "error": f"no .anvil_sch or .net found for '{base}' "
+        return {"ok": False, "error": f"no .kicad_sch or .net found for '{base}' "
                 f"in {d} -- nothing to adopt."}
 
     steps = []
@@ -1460,7 +1458,7 @@ print("\\n" + {json.dumps(_MARK)} + json.dumps(res))
         "has_pcb": pcb.is_file(),
         "steps": steps,
         "note": ("Adopted. main.py + one module per sheet were written -- run/edit "
-                 "main.py to rebuild. The user's .anvil_sch layout is the truth; "
+                 "main.py to rebuild. The user's .kicad_sch layout is the truth; "
                  "warn before overwriting it." + (
                  " A PCB exists; read its stackup/pours via the board tools before "
                  "changing layers." if pcb.is_file() else "")),
@@ -1472,7 +1470,7 @@ _LABEL_TAGS = ("label", "global_label", "hierarchical_label")
 
 def _sch_files(base: str, d: Path) -> list:
     """All schematic sheets for a project (root + sub-sheets), newest first."""
-    return sorted(d.glob(base + "*.anvil_sch"))
+    return sorted(d.glob(base + "*.kicad_sch"))
 
 
 def _sym_prop(sym: list, key: str):
@@ -1534,7 +1532,7 @@ def _backup_file(f: Path) -> str:
 @_quiet
 def edit_schematic(name: str, op: str, ref: str = "", value: str = "",
                    net: str = "", new_name: str = "") -> dict:
-    """SURGICAL edit of a project's .anvil_sch -- touch ONE thing, leave the
+    """SURGICAL edit of a project's .kicad_sch -- touch ONE thing, leave the
     user's layout otherwise byte-for-byte intact (never a full regenerate).
 
     ops:
@@ -1557,7 +1555,7 @@ def edit_schematic(name: str, op: str, ref: str = "", value: str = "",
     base, d = _resolve_project(name)
     files = _sch_files(base, d)
     if not files:
-        return {"ok": False, "error": f"no .anvil_sch found for '{base}' in {d}"}
+        return {"ok": False, "error": f"no .kicad_sch found for '{base}' in {d}"}
 
     # ---- list: read-only inventory across all sheets ----------------------
     if op == "list":
@@ -2114,7 +2112,7 @@ def build_status(name: str, include_log: bool = False) -> dict:
     if info is None:
         files = _gather_files(base)
         logfile = pdir(base) / (base + ".build.log")
-        if files.get("net") and files.get("anvil_sch"):
+        if files.get("net") and files.get("kicad_sch"):
             res = {"ok": True, "status": "done", "generated": files,
                    "note": "build finished earlier; results read from disk"}
             if include_log and logfile.is_file():
@@ -2464,7 +2462,7 @@ def _generic_requirements_questionnaire(error: str) -> dict:
 @_quiet
 def create_pcb(name: str, route: bool = True,
                force: bool = False, accept_defaults: bool = False) -> dict:
-    """Create a placed AND routed .anvil_pcb from a finished build's netlist.
+    """Create a placed AND routed .kicad_pcb from a finished build's netlist.
     STEP ZERO: if you haven't analyzed this machine yet this session, call
     analyze_pcb_environment first -- every user's system and Board Setup
     differs, and user-set values are always detected and kept.
@@ -2481,7 +2479,7 @@ def create_pcb(name: str, route: bool = True,
     "Lib:Name") -> rule placement (anchor IC centered, decaps beside their IC,
     connectors on the edge, zero courtyard overlaps) -> INVISIBLE FreeRouting
     autorouting (headless -- the user NEVER sees a routing window; they only
-    see the result in KiCad) -> <name>.anvil_pcb + net classes in .anvil_pro
+    see the result in KiCad) -> <name>.kicad_pcb + net classes in .kicad_pro
     -> kicad-cli DRC gate -> board-vs-netlist connectivity verification.
     Report status honestly: 'routed' only when routing completed AND the board
     matches the netlist pin-for-pin; otherwise say exactly what is missing.
@@ -2613,7 +2611,7 @@ def create_pcb(name: str, route: bool = True,
         return {
             "ok": False,
             "status": "manual_edits_detected",
-            "error": f"REFUSED to overwrite {base}.anvil_pcb: {manual}",
+            "error": f"REFUSED to overwrite {base}.kicad_pcb: {manual}",
             "manual_changes": manual_changes,
             "adopted": adopted,
             "instruction": ("The user's board-setup-level edits (layers/"
@@ -2711,7 +2709,7 @@ def analyze_pcb_environment(name: str = "") -> dict:
     - routing engines (java, freerouting jars)
     - the user's own app-level Board Setup defaults (APPDATA pcbnew.json)
     - when `name` is given, that project's state: net classes and design
-      rules the USER already set in .anvil_pro, existing board setup
+      rules the USER already set in .kicad_pro, existing board setup
       (stackup/mask edits), custom .kicad_dru rules, manual-edit status.
     READ-ONLY: changes nothing. Values found here are the user's own --
     later steps keep them and only fill what's missing."""
@@ -2981,12 +2979,12 @@ def initialize_pcb_project(name: str, layers: "int | None" = None,
     """LEARN-FIRST PCB project setup. Call analyze_pcb_environment FIRST
     (step zero) and show the user what their system already has -- then
     this tool discovers what THIS system and THIS
-    user already configured (project .anvil_pro Board Setup + net classes,
+    user already configured (project .kicad_pro Board Setup + net classes,
     .kicad_dru custom rules, existing board edits, the user's own KiCad
     app defaults under APPDATA, the installed application and its real
     capabilities) and only fills in what's missing from the manufacturer
     profile. Auto-assigns net classes (power rails -> Power/wider tracks,
-    USB D+/D- -> USB), writes design rules + classes into .anvil_pro and
+    USB D+/D- -> USB), writes design rules + classes into .kicad_pro and
     board-level choices into <name>.board_config.json. EVERY setting in
     the returned report carries its source (argument/project-user/
     board-user/system-user/ai/profile) AND the reason it was chosen --
@@ -3166,13 +3164,13 @@ print("\\n::RESULT::" + json.dumps(info))
 @server.tool()
 @_quiet
 def run_drc(name: str) -> dict:
-    """Run KiCad's Design Rules Check on <name>.anvil_pcb (created by
+    """Run KiCad's Design Rules Check on <name>.kicad_pcb (created by
     create_pcb). Returns violation counts + the JSON report path. On a routed
     board expect 0 errors and 0 unconnected; silk/lib warnings are cosmetic.
     Any ERROR-severity violation or unconnected item must be reported to the
     user verbatim -- never described as passing."""
     base = _safe_name(name)
-    pcb = pdir(base) / (base + ".anvil_pcb")
+    pcb = pdir(base) / (base + ".kicad_pcb")
     if not pcb.is_file():
         return {"ok": False, "error": f"board not found: {pcb} -- run create_pcb first"}
     res = _board_drc_gate(pcb)
@@ -3199,13 +3197,13 @@ def run_drc(name: str) -> dict:
 @_quiet
 def verify_board(name: str) -> dict:
     """Board<->schematic consistency proof: extract the as-routed copper
-    netlist from <name>.anvil_pcb (IPC-D-356) and compare its pin-partition to
+    netlist from <name>.kicad_pcb (IPC-D-356) and compare its pin-partition to
     the intended <name>.net. ok:true = every net groups the same pins on the
     board as in the netlist (no short, no broken connection). ok:false =
     MISMATCH -- the board must NOT be manufactured; report 'missing' (broken
     nets) and 'extra' (shorts) to the user verbatim."""
     base = _safe_name(name)
-    if not (pdir(base) / (base + ".anvil_pcb")).is_file():
+    if not (pdir(base) / (base + ".kicad_pcb")).is_file():
         return {"ok": False, "error": "board not found -- run create_pcb first"}
     if not (pdir(base) / (base + ".net")).is_file():
         return {"ok": False, "error": "netlist not found -- run build first"}
@@ -3256,7 +3254,7 @@ def review_design(name: str) -> dict:
     verified. Manufacturing export requires the human to read this and
     then approve_design."""
     base = _safe_name(name)
-    if not (pdir(base) / (base + ".anvil_pcb")).is_file():
+    if not (pdir(base) / (base + ".kicad_pcb")).is_file():
         return {"ok": False, "error": "no board -- run create_pcb first"}
     stale = _stale_outputs(base)
     if stale:
@@ -3323,13 +3321,13 @@ print("\\n::RESULT::" + json.dumps(
 @server.tool()
 @_quiet
 def export_manufacturing(name: str, formats: list[str] = None) -> dict:
-    """Export manufacturing files for <name>.anvil_pcb: Gerbers + drill +
+    """Export manufacturing files for <name>.kicad_pcb: Gerbers + drill +
     pick-and-place by default (optionally 'pdf', 'step'), zipped into
     <name>_fab.zip a fab house accepts. REFUSES to export a board that fails
     DRC (error-severity) or the board<->netlist check -- manufacturing a
     known-bad board is never acceptable; report what failed instead."""
     base = _safe_name(name)
-    pcb = pdir(base) / (base + ".anvil_pcb")
+    pcb = pdir(base) / (base + ".kicad_pcb")
     if not pcb.is_file():
         return {"ok": False, "error": f"board not found: {pcb} -- run create_pcb first"}
 
@@ -3382,7 +3380,7 @@ sys.path.insert(0, {json.dumps(str(SRC))})
 from pathlib import Path
 from skidl.board.manufacture import export_manufacturing as _em
 out = Path({json.dumps(str(pdir(base)))})
-info = _em(out / ({json.dumps(base)} + ".anvil_pcb"),
+info = _em(out / ({json.dumps(base)} + ".kicad_pcb"),
            {json.dumps(_find_kicad_cli_path())},
            formats={json.dumps(formats) if formats else "None"})
 print("\\n::RESULT::" + json.dumps(info))
@@ -3410,7 +3408,7 @@ def package_project(name: str) -> dict:
     netlist, board, BOM, DRC report and the manufacturing zip -- everything a
     reviewer or fab needs in one file. Run export_manufacturing first."""
     base = _safe_name(name)
-    exts = [".anvil_pro", ".anvil_sch", ".anvil_pcb", ".net",
+    exts = [".kicad_pro", ".kicad_sch", ".kicad_pcb", ".net",
             "_bom.csv", ".drc.json", "_fab.zip",
             "_review.md", ".approval.json"]
     import zipfile
@@ -3419,9 +3417,9 @@ def package_project(name: str) -> dict:
         p = pdir(base) / (base + ext)
         if p.is_file():
             files.append(p)
-    # child schematic sheets (<base>_*.anvil_sch)
-    files += [p for p in pdir(base).glob(base + "_*.anvil_sch") if p.is_file()]
-    if not any(f.suffix == ".anvil_pcb" for f in files):
+    # child schematic sheets (<base>_*.kicad_sch)
+    files += [p for p in pdir(base).glob(base + "_*.kicad_sch") if p.is_file()]
+    if not any(f.suffix == ".kicad_pcb" for f in files):
         return {"ok": False, "error": "no board found -- run create_pcb first"}
     zip_path = pdir(base) / (base + "_project.zip")
     with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
@@ -3493,7 +3491,7 @@ _MCP_ADDENDUM = (
     "  error). build(mode='status')(name, include_log=True) adds the build-log tail\n"
     "  (failed builds always include it).\n"
     "* env sanity (wrong skidl / no symbol dir) -> diagnostics().\n"
-    "* this MCP's builder DOES produce a .anvil_pro project (smart_schematic),\n"
+    "* this MCP's builder DOES produce a .kicad_pro project (smart_schematic),\n"
     "  unlike plain SKiDL described in the skill text.\n"
     "* EVERY pin of every part must be either CONNECTED or explicitly marked\n"
     "  no-connect in the body (u1[4,6,8] += NC). There is NO auto-NC: a pin\n"
@@ -3525,16 +3523,16 @@ _MCP_ADDENDUM = (
     "  library candidates. Apply those EXACT strings and rebuild ONCE. Never\n"
     "  guess a second time.\n"
     "* IF build(mode='status') ends 'failed' with 'connectivity MISMATCH': the\n"
-    "  .anvil_sch is WRONG (shorts/missing nets) -- tell the user NOT to open\n"
+    "  .kicad_sch is WRONG (shorts/missing nets) -- tell the user NOT to open\n"
     "  it; the .net netlist is still valid for PCB layout. NEVER present that\n"
     "  build as a success. schematic_mode='labels' with status 'done' is FINE\n"
     "  (labels connect by name -- normal practice for dense circuits).\n"
     "* SUCCESS GATE (GEN-3, spec section 10): a build is SUCCESSFUL only when\n"
-    "  build(mode='status') returns status:'done' AND 'generated' lists a .anvil_sch\n"
-    "  (plus .anvil_pro). Until then it is 'building' or INCOMPLETE. NEVER say\n"
+    "  build(mode='status') returns status:'done' AND 'generated' lists a .kicad_sch\n"
+    "  (plus .kicad_pro). Until then it is 'building' or INCOMPLETE. NEVER say\n"
     "  'schematic generated' / 'verified' / 'Build Successful' from ERC + netlist\n"
     "  alone -- ERC-clean + .net is only the pre-check. If you cannot confirm the\n"
-    "  .anvil_sch file exists, the build is NOT done; keep polling build(mode='status').\n"
+    "  .kicad_sch file exists, the build is NOT done; keep polling build(mode='status').\n"
     "* DENSE FLAT SHEETS FAIL TO RENDER (spec section 10.6): a flat mode='body'\n"
     "  design above ~12 parts can pass ERC + netlist yet FAIL to publish a\n"
     "  schematic -- on one dense sheet the renderer geometrically shorts nets\n"
@@ -3543,7 +3541,7 @@ _MCP_ADDENDUM = (
     "  (power / MCU / clock / reset / comms / I/O / test-points), passing shared\n"
     "  nets as arguments. Decomposition de-densifies each region and lets it\n"
     "  route with wires. A clean pre-check does NOT guarantee the schematic\n"
-    "  renders -- only status:'done' with a .anvil_sch + verified:true does.\n"
+    "  renders -- only status:'done' with a .kicad_sch + verified:true does.\n"
     "  WHILE writing: nets first; every Part() gets ref= tag= value=\n"
     "  footprint=; connections pin-by-pin from the verified pinouts.\n"
     "  BEFORE calling build, SELF-AUDIT the body line by line:\n"
@@ -3667,133 +3665,6 @@ def get_design_rules() -> str:
         "automatically):\n\n"
         + _TEMPLATE
     )
-
-
-# ======================================================================================
-# LIVE EDITOR TOOLS — drive the OPEN Anvil CAD editors through the app's
-# ANVIL_AI_TOOL_SERVER (line-delimited JSON on 127.0.0.1:5571; started from the app's
-# "AnvilCAD MCP" menu). 4 consolidated tools, not one-per-op: a user request holding
-# several changes travels as ONE call with an ops ARRAY, executed in order with per-op
-# results. Everything below is a thin relay — the actual editing runs inside the app.
-# ======================================================================================
-
-_LIVE_HOST = "127.0.0.1"
-_LIVE_PORT = int(os.environ.get("ANVIL_MCP_PORT", "5571"))
-
-# op name -> which editor executes it (must match the app's AnvilIsBoardTool split)
-_LIVE_SCH_OPS = {
-    "add_component", "add_wire", "add_label", "add_junction", "add_no_connect",
-    "edit_value", "move_component", "delete_component", "delete_at", "snap_to_grid",
-    "annotate",
-}
-_LIVE_PCB_OPS = {
-    "add_footprint", "move_footprint", "add_track", "add_via", "delete_track_at",
-    "set_text_variable", "capture_footprints",
-}
-
-
-def _live_call(tool: str, input_: dict, timeout: float = 60.0) -> dict:
-    """One request line to the app's tool server; one reply line back."""
-    import socket
-
-    try:
-        with socket.create_connection( ( _LIVE_HOST, _LIVE_PORT ), timeout=timeout ) as s:
-            s.sendall( ( json.dumps( { "tool": tool, "input": input_ or {} } ) + "\n" )
-                       .encode( "utf-8" ) )
-            s.settimeout( timeout )
-            buf = b""
-            while not buf.endswith( b"\n" ):
-                chunk = s.recv( 65536 )
-                if not chunk:
-                    break
-                buf += chunk
-        return json.loads( buf.decode( "utf-8", "replace" ).strip() or "{}" )
-    except ( ConnectionRefusedError, TimeoutError, OSError ) as exc:
-        return { "ok": False, "not_reachable": True,
-                 "message": f"Anvil CAD tool server not reachable on "
-                            f"{_LIVE_HOST}:{_LIVE_PORT} ({exc.__class__.__name__}). "
-                            "Open Anvil CAD and click AnvilCAD MCP -> Start in the app "
-                            "menu, then retry." }
-    except Exception as exc:                      # noqa: BLE001 — surface, never raise
-        return { "ok": False, "message": f"live tool error: {exc!r}" }
-
-
-def _live_run_ops(ops, allowed: set, side: str) -> dict:
-    """Run an ordered ops array against the app; aggregate per-op results honestly."""
-    if not isinstance( ops, list ) or not ops:
-        return { "ok": False, "results": [],
-                 "message": "ops must be a non-empty list of {\"op\": name, ...params}" }
-
-    results, all_ok = [], True
-
-    for i, op in enumerate( ops ):
-        if not isinstance( op, dict ) or "op" not in op:
-            results.append( { "index": i, "op": None, "ok": False,
-                              "message": "each item needs an 'op' name" } )
-            all_ok = False
-            continue
-
-        name = str( op["op"] )
-
-        if name not in allowed:
-            results.append( { "index": i, "op": name, "ok": False,
-                              "message": f"unknown {side} op; allowed: {sorted(allowed)}" } )
-            all_ok = False
-            continue
-
-        params = { k: v for k, v in op.items() if k != "op" }
-        r = _live_call( name, params )
-        results.append( { "index": i, "op": name, "ok": bool( r.get( "ok" ) ),
-                          "message": r.get( "message", "" ) } )
-
-        if not r.get( "ok" ):
-            all_ok = False
-
-            if r.get( "not_reachable" ):
-                # The app/server is down: every further op would fail identically.
-                results[-1]["aborted_remaining_ops"] = True
-                break
-
-    return { "ok": all_ok, "results": results }
-
-
-@server.tool()
-def read_live(target: str = "schematic") -> dict:
-    """LIVE state of the OPEN editor in the running Anvil CAD app (NOT files on disk).
-    target='schematic' (components/nets of the open schematic) or 'board' (footprints/
-    tracks of the open board). Needs the app running with AnvilCAD MCP -> Start."""
-    tool = "get_board" if str( target ).lower().startswith( "b" ) else "get_schematic"
-    return _live_call( tool, {} )
-
-
-@server.tool()
-def edit_schematic_live(ops: list) -> dict:
-    """Batch-edit the OPEN schematic in the running Anvil CAD app. ops = ORDERED list,
-    each {"op": <name>, ...params} with op one of: add_component, add_wire, add_label,
-    add_junction, add_no_connect, edit_value, move_component, delete_component,
-    delete_at, snap_to_grid, annotate. One user request with several changes = ONE call
-    with several ops (never one call per op). Params pass straight to the editor (e.g.
-    add_component: lib_id/ref/value/x/y in mils; edit_value: ref+value; add_wire:
-    x1/y1/x2/y2). Returns per-op ok/message so partial success is visible."""
-    return _live_run_ops( ops, _LIVE_SCH_OPS, "schematic" )
-
-
-@server.tool()
-def edit_board_live(ops: list) -> dict:
-    """Batch-edit the OPEN board in the running Anvil CAD app. ops = ORDERED list, each
-    {"op": <name>, ...params} with op one of: add_footprint, move_footprint, add_track,
-    add_via, delete_track_at, set_text_variable, capture_footprints. One call per user
-    request; per-op results returned."""
-    return _live_run_ops( ops, _LIVE_PCB_OPS, "board" )
-
-
-@server.tool()
-def check_live(target: str = "erc") -> dict:
-    """Run the check inside the OPEN editor: target='erc' (schematic) or 'drc' (board).
-    Complements run_drc (which checks the .anvil_pcb FILE via anvil-cli): this one asks
-    the live editor itself."""
-    tool = "run_drc" if str( target ).lower().startswith( "d" ) else "run_erc"
-    return _live_call( tool, {} )
 
 
 if __name__ == "__main__":

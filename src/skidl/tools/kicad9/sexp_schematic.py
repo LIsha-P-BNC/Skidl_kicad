@@ -5,7 +5,7 @@
 """
 Shared S-expression schematic generation for KiCad 6/8/9.
 
-Converts placed+routed SchNode trees into .kicad_sch files.
+Converts placed+routed SchNode trees into .anvil_sch files.
 Used by kicad6, kicad8, and kicad9 gen_schematic thin wrappers.
 
 Sources:
@@ -51,6 +51,10 @@ _pwr_counter = [0]
 # spot, and each pin's independently-computed label doesn't otherwise
 # know about the others.
 _placed_power_points = []
+# Pin->symbol stub segments already drawn, as (net_name, start, end) -- used
+# to keep one net's stub from overlapping another net's collinear stub (a
+# rail-to-rail short when different power pins share a placement column/row).
+_placed_power_segments = []
 
 # Stub wire length (mm) between a pin and the power symbol stamped on it.
 # KiCad power symbols position their Value-text label a fixed distance
@@ -335,6 +339,23 @@ def _power_symbol_to_sexp(pin, net_name, tx):
         final_dir_len = math.hypot(final_dir.x, final_dir.y)
         if final_dir_len > 0:
             final_dir = Point(final_dir.x / final_dir_len, final_dir.y / final_dir_len)
+        # SNAP the stub to the PIN'S OWN EXIT AXIS. origin->pin is a valid
+        # away-from-body proxy only for compact symmetric parts; on a WIDE
+        # part (a 144-pin module) a bottom-corner pin's origin->pin vector is
+        # mostly HORIZONTAL, so the stub ran ALONG the pin row -- straight
+        # through every neighbouring pin/label on that edge, fusing their
+        # nets (verified: a 202-pin merged blob on an EC200U sheet). Keep
+        # only the away-from-body SIGN from the projection on the pin axis.
+        try:
+            axis = "x" if calc_pin_dir(pin) in ("L", "R") else "y"
+        except Exception:
+            axis = "x" if abs(final_dir.x) >= abs(final_dir.y) else "y"
+        if axis == "x" and final_dir.x != 0:
+            final_dir = Point(1.0 if final_dir.x > 0 else -1.0, 0.0)
+        elif axis == "y" and final_dir.y != 0:
+            final_dir = Point(0.0, 1.0 if final_dir.y > 0 else -1.0)
+        # else: zero projection on the pin axis (pin dead-on the origin
+        # line) -- keep the legacy direction rather than guess a side.
         pt = pin_at + final_dir * POWER_SYMBOL_STUB_LEN_MM
     else:
         pt = pin_at
@@ -348,7 +369,8 @@ def _power_symbol_to_sexp(pin, net_name, tx):
     for _ in range(6):
         if not any(
             math.hypot(pt.x - p.x, pt.y - p.y) < MIN_POWER_LABEL_SEPARATION_MM
-            for p in _placed_power_points
+            for n, p in _placed_power_points
+            if n == net_name
         ):
             break
         if final_dir.x == 0 and final_dir.y == 0:
@@ -365,9 +387,45 @@ def _power_symbol_to_sexp(pin, net_name, tx):
     else:
         pt = Point(pt.x, pin_at.y)   # ~horizontal pin -> share pin Y -> horizontal stub
 
+    # CLAMP against foreign collinear power stubs: different rails stacked on
+    # one placement column/row otherwise ladder outward until their stubs
+    # overlap -- a hard rail-to-rail short the schematic ships with
+    # (verified: +3.3V/+1.8V fused via overlapping column stubs). Stop this
+    # stub one grid short of any OTHER net's stub on the same line.
+    _ux, _uy = pt.x - pin_at.x, pt.y - pin_at.y
+    _L = math.hypot(_ux, _uy)
+    if _L > 1e-9:
+        _ux, _uy = _ux / _L, _uy / _L
+        _newL = _L
+        for _onet, _a, _b in _placed_power_segments:
+            if _onet == net_name:
+                continue
+            _da = abs((_a.x - pin_at.x) * _uy - (_a.y - pin_at.y) * _ux)
+            _db = abs((_b.x - pin_at.x) * _uy - (_b.y - pin_at.y) * _ux)
+            if _da > 0.05 or _db > 0.05:
+                continue                      # not on our stub's line
+            _ta = (_a.x - pin_at.x) * _ux + (_a.y - pin_at.y) * _uy
+            _tb = (_b.x - pin_at.x) * _ux + (_b.y - pin_at.y) * _uy
+            _t0, _t1 = min(_ta, _tb), max(_ta, _tb)
+            # clamp unless the foreign stub is fully behind our pin or starts
+            # a CLEAR grid past our end -- an exact endpoint-to-endpoint touch
+            # is a connection in KiCad, so touching is overlap here.
+            if _t1 <= 0.01 or _t0 >= _newL + 1.26:
+                continue
+            _newL = min(_newL, _t0 - 1.27)
+        if _newL < _L - 0.01:
+            if _newL < 1.27:
+                # can't clear the foreign stub at all -> stamp the symbol
+                # DIRECTLY on the pin: visually crowded, never shorted.
+                _newL = 0.0
+            pt = Point(pin_at.x + _ux * _newL, pin_at.y + _uy * _newL)
+    _placed_power_segments.append(
+        (net_name, Point(pin_at.x, pin_at.y), Point(pt.x, pt.y))
+    )
+
     # ROBUSTNESS: never stamp a power symbol at a non-finite position (an
     # unplaced part / degenerate net) -- "(at nan nan)" makes the whole
-    # .kicad_sch unloadable. Returning None lets the caller fall through (and the
+    # .anvil_sch unloadable. Returning None lets the caller fall through (and the
     # net_label path, also NaN-guarded, then skips too), so the pin is simply
     # left unlabeled rather than poisoning the sheet.
     if not (math.isfinite(pt.x) and math.isfinite(pt.y)):
@@ -379,7 +437,7 @@ def _power_symbol_to_sexp(pin, net_name, tx):
         )
         return None
 
-    _placed_power_points.append(pt)
+    _placed_power_points.append((net_name, pt))
 
     x = _round_mm(pt.x)
     y = _round_mm(pt.y)
@@ -491,7 +549,11 @@ def _power_symbol_to_sexp(pin, net_name, tx):
     )
 
     # Stub wire connecting the part's actual pin to the (offset) symbol.
+    # A clamped-to-pin symbol (foreign-stub avoidance) needs no wire -- a
+    # zero-length wire confuses KiCad's connectivity highlighting.
     x0, y0 = _round_mm(pin_at.x), _round_mm(pin_at.y)
+    if x0 == x and y0 == y:
+        return [symbol]
     wire = Sexp(
         [
             "wire",
@@ -504,12 +566,42 @@ def _power_symbol_to_sexp(pin, net_name, tx):
     return [wire, symbol]
 
 
+def _collect_sheet_power_pins(node, tx):
+    """Pre-register EVERY stubbed connected pin of this sheet (signal label
+    anchors AND power pins) as zero-length obstacles for power-stub clamping.
+    Power stub wires are the only free-moving geometry in label mode; forcing
+    them to stop short of every foreign pin/label anchor makes an accidental
+    bridge geometrically impossible, independent of emission order (placement
+    varies run to run with id() ordering). Also clears the per-sheet stub
+    bookkeeping: each sheet is its own coordinate space, so cross-sheet
+    'collisions' are meaningless."""
+    _placed_power_points.clear()
+    _placed_power_segments.clear()
+    for part in node.parts:
+        if isinstance(part, NetTerminal):
+            continue
+        for pin in part:
+            try:
+                if not getattr(pin, "stub", False) or not pin.is_connected():
+                    continue
+                net_name = pin.net.name
+                part_tx = getattr(pin.part, "tx", Tx())
+                pin_pt = getattr(pin, "pt", Point(pin.x, pin.y))
+                p = pin_pt * part_tx * tx
+                _placed_power_segments.append(
+                    (net_name, Point(p.x, p.y), Point(p.x, p.y))
+                )
+            except Exception:
+                pass
+
+
 def _reset_power_symbol_state():
     """Reset power symbol state between schematic generations."""
     global _used_power_symbols
     _used_power_symbols = set()
     _pwr_counter[0] = 0
     _placed_power_points.clear()
+    _placed_power_segments.clear()
 
 
 def _gen_uuid(name=""):
@@ -1036,7 +1128,7 @@ def net_label_to_sexp(pin, tx=Tx(), force=False):
 
     # ROBUSTNESS: an unplaced part or a degenerate (dangling, single-pin) net can
     # yield a non-finite position here. Emitting "(at nan nan ...)" makes the
-    # ENTIRE .kicad_sch unloadable in KiCad ("Failed to load schematic"), which
+    # ENTIRE .anvil_sch unloadable in KiCad ("Failed to load schematic"), which
     # poisons an otherwise-correct sheet. Such a net has fewer than two pins, so
     # a label adds no connectivity -- skip it rather than break the whole file.
     if not (math.isfinite(pt.x) and math.isfinite(pt.y)):
@@ -1088,8 +1180,15 @@ def no_connect_to_sexp(pin, tx=Tx()):
         Sexp, or None if the pin isn't tied only to a no-connect net.
     """
     from skidl.net import NCNet
+    from skidl.pin import pin_types
 
-    if not pin.nets or not all(isinstance(n, NCNet) for n in pin.nets):
+    if pin.nets:
+        if not all(isinstance(n, NCNet) for n in pin.nets):
+            return None
+    elif getattr(pin, "func", None) != pin_types.NOCONNECT:
+        # A netless pin gets the glyph ONLY when the library symbol itself
+        # declares it no-connect -- anything else floating is a design error
+        # the build gates stop upstream, never something to quietly decorate.
         return None
 
     pin_pt = getattr(pin, "pt", Point(pin.x, pin.y))
@@ -1466,9 +1565,9 @@ def _calc_sheet_tx(bbox):
 
 
 def _fix_sheet_filename(node):
-    """Ensure node.sheet_filename uses .kicad_sch extension (SchNode defaults to .sch)."""
+    """Ensure node.sheet_filename uses .anvil_sch extension (SchNode defaults to .sch)."""
     if node.sheet_filename and node.sheet_filename.endswith(".sch"):
-        node.sheet_filename = node.sheet_filename[:-4] + ".kicad_sch"
+        node.sheet_filename = node.sheet_filename[:-4] + ".anvil_sch"
 
 
 @export_to_all
@@ -1477,7 +1576,7 @@ def node_to_sexp_schematic(node, sheet_tx=Tx(), version=20230409, circuit=None):
 
     Follows the same recursive pattern as kicad5's node_to_eeschema():
     - Flattened nodes: return elements for inclusion in the parent sheet.
-    - Unflattened nodes: write a separate .kicad_sch file and return a
+    - Unflattened nodes: write a separate .anvil_sch file and return a
       sheet reference for the parent.
 
     Args:
@@ -1541,6 +1640,7 @@ def node_to_sexp_schematic(node, sheet_tx=Tx(), version=20230409, circuit=None):
 
     # Generate net labels for stubbed pins, and no-connect markers for pins
     # tied to skidl's NC net.
+    _collect_sheet_power_pins(node, tx)
     bus_points = defaultdict(list)  # bus -> [(pt, ...)] raw pin points.
     for part in node.parts:
         if isinstance(part, NetTerminal):
@@ -1582,7 +1682,7 @@ def node_to_sexp_schematic(node, sheet_tx=Tx(), version=20230409, circuit=None):
         # Return elements for inclusion in the parent sheet.
         return elements
 
-    # --- Unflattened node: write a separate .kicad_sch file. ---
+    # --- Unflattened node: write a separate .anvil_sch file. ---
 
     # Add hierarchical labels for boundary nets (nets that cross the sheet boundary).
     if hasattr(node, "get_boundary_nets"):
@@ -1702,6 +1802,7 @@ def write_top_schematic(circuit, node, filepath, top_name, title, version=202304
 
     # Generate net labels for stubbed pins, and no-connect markers for pins
     # tied to skidl's NC net.
+    _collect_sheet_power_pins(node, sheet_tx)
     bus_points = defaultdict(list)  # bus -> [(pt, ...)] raw pin points.
     for part in node.parts:
         if isinstance(part, NetTerminal):
@@ -1768,7 +1869,7 @@ def write_top_schematic(circuit, node, filepath, top_name, title, version=202304
         schematic.append(elem)
 
     # Write root schematic.
-    output_file = os.path.join(filepath, f"{top_name}.kicad_sch")
+    output_file = os.path.join(filepath, f"{top_name}.anvil_sch")
     os.makedirs(filepath, exist_ok=True)
     _write_sexp_schematic(schematic, output_file)
 

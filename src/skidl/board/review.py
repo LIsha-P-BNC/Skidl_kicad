@@ -55,6 +55,20 @@ def review_design(base: str, out_dir, kicad_cli: str) -> dict:
     sections["design_intent"] = _intent_checks(base, out_dir)
     sections["thermal_advisory"] = _thermal_advisory(base, out_dir)
 
+    # Built board vs configured setup (layers/size/holes/widths/pour):
+    # a mismatch with no recorded engine override is a FAILED gate.
+    try:
+        from skidl.board.conformance import check_config_conformance
+        conf = check_config_conformance(base, out_dir)
+        sections["config_conformance"] = {
+            "status": (VERIFIED if conf.get("ok")
+                       else FAILED if conf.get("mismatches") else WARNING),
+            "evidence": conf,
+        }
+    except Exception as exc:
+        sections["config_conformance"] = {"status": WARNING,
+                                          "evidence": {"error": repr(exc)}}
+
     sections["decided_behaviors"] = {
         "status": OK,
         "items": [
@@ -85,7 +99,8 @@ def review_design(base: str, out_dir, kicad_cli: str) -> dict:
 
     gate_statuses = [sections["schematic"]["status"],
                      sections["board_gates"]["status"],
-                     sections["bom"]["status"]]
+                     sections["bom"]["status"],
+                     sections["config_conformance"]["status"]]
     intent = sections["design_intent"]["status"]
     # Gate FAILED -> FAILED. Intent findings (advisory heuristics) cap
     # the overall at WARNING -- including intent FAILED, which must
@@ -147,7 +162,7 @@ def _load_validate_design():
 
 def _board_gates(base, out_dir, kicad_cli) -> dict:
     out = {"status": VERIFIED, "evidence": {}}
-    pcb = out_dir / f"{base}.kicad_pcb"
+    pcb = out_dir / f"{base}.anvil_pcb"
     if not pcb.is_file():
         return {"status": FAILED, "evidence": {"error": "no board file"}}
 
@@ -306,7 +321,7 @@ def _intent_checks(base, out_dir) -> dict:
         add("decoupling_distance", OK, "no decoupling caps detected on this design")
 
     # -- width vs current (ADVISORY estimate) --------------------------------
-    txt = (out_dir / f"{base}.kicad_pcb").read_text(encoding="utf-8",
+    txt = (out_dir / f"{base}.anvil_pcb").read_text(encoding="utf-8",
                                                     errors="replace")
     for net in board.nets.values():
         if net.net_class.lower() not in ("power",):
@@ -359,7 +374,7 @@ def _intent_checks(base, out_dir) -> dict:
 
 
 def _board_from_files(base, out_dir):
-    """BoardModel with REAL positions from the current .kicad_pcb (works
+    """BoardModel with REAL positions from the current .anvil_pcb (works
     for both our writer's format and kicad-cli's canonical rewrite)."""
     from skidl.board.model import BoardModel
     from skidl.board.adapter.pymodel import PyModelBackend
@@ -367,7 +382,7 @@ def _board_from_files(base, out_dir):
     board = BoardModel(name=base)
     PyModelBackend().populate(board, out_dir / f"{base}.net")
 
-    txt = (out_dir / f"{base}.kicad_pcb").read_text(encoding="utf-8",
+    txt = (out_dir / f"{base}.anvil_pcb").read_text(encoding="utf-8",
                                                     errors="replace")
     # footprint blocks: (footprint "lib" ... (at X Y [R]) ... "REF"
     for m in re.finditer(
@@ -427,20 +442,11 @@ def _decap_distance(board, decap_ref, ic_ref):
 
 
 def _edge_cuts_extents(board_text):
-    """(minx, miny, maxx, maxy) of the REAL board outline from Edge.Cuts
-    graphics; None when the board has no outline drawn."""
-    xs, ys = [], []
-    for m in re.finditer(
-            r'\(gr_(?:line|rect|arc|circle)\b(.*?)\n\t?\)', board_text, re.S):
-        blk = m.group(1)
-        if "Edge.Cuts" not in blk:
-            continue
-        for pm in re.finditer(r'\((?:start|end|center|mid)\s+([\d.-]+)\s+([\d.-]+)\)', blk):
-            xs.append(float(pm.group(1)))
-            ys.append(float(pm.group(2)))
-    if not xs:
-        return None
-    return (min(xs), min(ys), max(xs), max(ys))
+    """(minx, miny, maxx, maxy) of the REAL board outline -- the single
+    implementation lives in board_setup (shared with config resolution
+    and conformance checks)."""
+    from skidl.board.board_setup import edge_cuts_extents
+    return edge_cuts_extents(board_text)
 
 
 def _net_track_widths(board_text, net_name):
@@ -469,7 +475,7 @@ def _net_track_widths(board_text, net_name):
 # ---------------------------------------------------------------------------
 
 def _board_sha(base, out_dir):
-    p = Path(out_dir) / f"{base}.kicad_pcb"
+    p = Path(out_dir) / f"{base}.anvil_pcb"
     return hashlib.sha256(p.read_bytes()).hexdigest() if p.is_file() else None
 
 

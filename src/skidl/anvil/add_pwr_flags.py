@@ -11,7 +11,7 @@ DYNAMICALLY for any circuit:
   1. Read the intended netlist (<name>.net) and find every net that has a
      POWER-IN pin but no POWER-OUT pin -- those are the rails ERC will flag.
   2. For each such net, find one of its power symbols (power:<net>) in the
-     generated .kicad_sch and drop a PWR_FLAG at the exact same origin -- the
+     generated .anvil_sch and drop a PWR_FLAG at the exact same origin -- the
      two pins coincide, so they connect with no extra wire.
 
 Adds nothing when a rail is genuinely driven (e.g. a regulator VOUT pin typed
@@ -19,7 +19,7 @@ power-out), so it can never create a "two power outputs" conflict.
 
 Use:
     import add_pwr_flags
-    n = add_pwr_flags.add("myboard")     # processes <name>.kicad_sch [+ <name>_*.kicad_sch]
+    n = add_pwr_flags.add("myboard")     # processes <name>.anvil_sch [+ <name>_*.anvil_sch]
 """
 import glob
 import os
@@ -137,6 +137,13 @@ def _close_of(text, start):
     raise ValueError("unbalanced s-expression")
 
 
+def _junction_instance(x, y, uuid):
+    """A junction dot at (x,y) -- forces KiCad to bond a pin that lands on a
+    wire mid-segment (a flag slid onto the stub midpoint for visual de-dup)."""
+    return (f'  (junction\n    (at {x} {y})\n    (diameter 0)\n'
+            f'    (color 0 0 0 0)\n    (uuid {uuid})\n  )\n')
+
+
 def _flag_instance(x, y, ref, proj, path, u_sym, u_pin):
     return f'''  (symbol
     (lib_id "power:PWR_FLAG")
@@ -227,11 +234,43 @@ def _add_to_file(sch_path, nets, driven=frozenset(), already=frozenset()):
         if not m:
             continue  # net not represented on this sheet
         x, y = float(m.group(1)), float(m.group(2))
+        # Visual de-dup: a flag stamped exactly ON the power symbol reads as a
+        # DOUBLED symbol (QA: "duplicate component"). If this anchor has its
+        # pin->symbol stub wire, put the flag at the stub's MIDPOINT instead --
+        # a pin anywhere on a wire connects identically in KiCad, and the
+        # result is the standard "PWR_FLAG on the wire" idiom. H/V stubs keep
+        # the shared axis coordinate exact, so the midpoint stays on the wire.
+        wm = re.search(
+            r'\(wire\s*\(pts\s*\(xy\s+([\d.\-]+)\s+([\d.\-]+)\)\s*\(xy\s+'
+            + re.escape(m.group(1)) + r"\s+" + re.escape(m.group(2)) + r"\)\)",
+            text,
+        ) or re.search(
+            r'\(wire\s*\(pts\s*\(xy\s+' + re.escape(m.group(1)) + r"\s+"
+            + re.escape(m.group(2)) + r"\)\s*\(xy\s+([\d.\-]+)\s+([\d.\-]+)\)\)",
+            text,
+        )
+        moved_to_midpoint = False
+        if wm:
+            ox, oy = float(wm.group(1)), float(wm.group(2))
+            if abs(ox - x) < 0.001:
+                y = round((y + oy) / 2.0, 2)   # vertical stub: keep exact x
+                moved_to_midpoint = True
+            elif abs(oy - y) < 0.001:
+                x = round((x + ox) / 2.0, 2)   # horizontal stub: keep exact y
+                moved_to_midpoint = True
         ref = f"#FLG{nxt:02d}"
         nxt += 1
         u_sym = _uuid.uuid5(_uuid.NAMESPACE_URL, f"pwr-flag:{sch_path}:{net}")
         u_pin = _uuid.uuid5(_uuid.NAMESPACE_URL, f"pwr-flag-pin:{sch_path}:{net}")
         inserts.append(_flag_instance(x, y, ref, proj, path, u_sym, u_pin))
+        # A flag on a wire ENDPOINT connects there directly; a flag on a wire
+        # MID-SEGMENT does NOT unless a junction marks the node (KiCad only
+        # bonds a pin to a wire at an endpoint or a junction). So whenever the
+        # de-dup above slides the flag onto the stub midpoint, drop a junction
+        # at that exact point -- the standard "PWR_FLAG taps the wire" idiom.
+        if moved_to_midpoint:
+            u_j = _uuid.uuid5(_uuid.NAMESPACE_URL, f"pwr-flag-junc:{sch_path}:{net}")
+            inserts.append(_junction_instance(x, y, u_j))
         done.append(net)
 
     if not done:
@@ -256,11 +295,11 @@ def _add_to_file(sch_path, nets, driven=frozenset(), already=frozenset()):
 
 def add(name, netlist=None):
     """Flag every undriven power rail of project <name>. Returns count of flags added."""
-    base = name[:-10] if name.endswith(".kicad_sch") else name
+    base = name[:-10] if name.endswith(".anvil_sch") else name
     nets, driven = _nets_needing_flag(netlist or base + ".net")
     remaining, flagged = list(nets), set()
     total = 0
-    for sch in glob.glob(base + ".kicad_sch") + glob.glob(base + "_*.kicad_sch"):
+    for sch in glob.glob(base + ".anvil_sch") + glob.glob(base + "_*.anvil_sch"):
         placed = _add_to_file(sch, remaining, driven, flagged)
         total += len(placed)
         flagged.update(placed)

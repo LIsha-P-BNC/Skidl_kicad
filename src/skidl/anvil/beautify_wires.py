@@ -1,6 +1,6 @@
 """Wire Beautification Pass -- Phase G / SCHEMATIC_ENGINE_RULES S5 (safe subset).
 
-A CONNECTIVITY-PRESERVING post-route cleanup on a .kicad_sch:
+A CONNECTIVITY-PRESERVING post-route cleanup on a .anvil_sch:
   * diagonal wire segment  -> Manhattan L (two H/V segments via a corner)
   * merge COLLINEAR segments that meet at a plain 2-way breakpoint
     (never at a junction dot -> real taps are preserved)
@@ -11,7 +11,7 @@ wire ENDPOINT that could sit on a pin/junction is deleted -- a straight line
 that passes through a point still connects a pin there -- so the drawn
 connectivity is identical (the caller re-runs the connectivity check to prove
 it). DYNAMIC: pure geometry, no circuit-specific assumptions -> works on any
-.kicad_sch. Fail-safe: on any error it leaves the file untouched, returns 0.
+.anvil_sch. Fail-safe: on any error it leaves the file untouched, returns 0.
 
 NOT handled here (needs router-level re-routing, not a post-pass): equal
 pin-exit length, parallel-wire spacing, wire-to-body clearance. Those move
@@ -248,7 +248,7 @@ def _beautify(sch_path):
 if __name__ == "__main__":
     import sys
 
-    name = sys.argv[1] if len(sys.argv) > 1 else "circuit.kicad_sch"
-    if not name.endswith(".kicad_sch"):
-        name += ".kicad_sch"
+    name = sys.argv[1] if len(sys.argv) > 1 else "circuit.anvil_sch"
+    if not name.endswith(".anvil_sch"):
+        name += ".anvil_sch"
     print("wire segments removed:", beautify(name))

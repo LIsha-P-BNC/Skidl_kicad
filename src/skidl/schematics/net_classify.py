@@ -238,12 +238,15 @@ def placement_weight(net) -> float:
 
 
 # Functional categories that must ALWAYS render as a wire (never a label).
-_ALWAYS_WIRE_FUNCTIONS = frozenset({"clock", "reset", "decoupling", "usb_diff"})
+# "rf" is here because an antenna/feed net split into labels reads as N
+# duplicate net names on the sheet AND hides the feed path the RF reviewer
+# must see contiguously (QA: GSM_ANT/ANT4G_x flagged as duplicates).
+_ALWAYS_WIRE_FUNCTIONS = frozenset({"clock", "reset", "decoupling", "usb_diff", "rf"})
 
 
 @export_to_all
 def is_always_wire_net(net):
-    """True if the net's function (clock/reset/decoupling/usb_diff) means it
+    """True if the net's function (clock/reset/decoupling/usb_diff/rf) means it
     should be drawn as a WIRE regardless of distance/fanout (power is handled
     separately as a symbol)."""
     return classify_net_function(net) in _ALWAYS_WIRE_FUNCTIONS

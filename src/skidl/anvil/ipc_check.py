@@ -1,6 +1,6 @@
 """IPC-2612 / IPC-2611 schematic compliance check (read-only).
 
-Reports, on every build, how the generated .kicad_sch scores against the
+Reports, on every build, how the generated .anvil_sch scores against the
 *enforceable* IPC diagramming rules. Never modifies the schematic -- it only
 looks. DYNAMIC: pure geometry/text checks, works for any circuit.
 
@@ -20,7 +20,7 @@ _NW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
 
 def check(name, kicad_cli=""):
-    sch = name + ".kicad_sch"
+    sch = name + ".anvil_sch"
     if not os.path.exists(sch):
         return {}
     t = open(sch, encoding="utf-8", errors="replace").read()
@@ -117,13 +117,15 @@ if __name__ == "__main__":
     from open_anvilcad import _find_bin
 
     nm = sys.argv[1] if len(sys.argv) > 1 else "circuit"
-    if nm.endswith(".kicad_sch"):
+    if nm.endswith(".anvil_sch"):
         nm = nm[:-10]
     cli = ""
     try:
         b = _find_bin()
         if b:
-            cli = os.path.join(b, "kicad-cli.exe")
+            cli = os.path.join(b, "anvil-cli.exe")
+            if not os.path.exists(cli):
+                cli = os.path.join(b, "kicad-cli.exe")
     except Exception:
         pass
     report(nm, cli)

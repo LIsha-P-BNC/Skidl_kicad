@@ -63,14 +63,21 @@ class MechPlan:
 
 def build_mech_plan(sidecar: dict, board: BoardModel):
     """MechPlan from the sidecar's `mechanical` section; None when the
-    project has no mechanical spec (fully auto layout, as before)."""
+    project has no mechanical spec (fully auto layout, as before).
+
+    Board dimensions fall back to the sidecar's TOP-LEVEL board_width/
+    board_height: the questionnaire/update_board_setup path stores the
+    size there while connector edges live under mechanical -- without
+    the fallback an edge="right" pin was silently skipped ("needs a
+    fixed board dimension") and placement collided at the corner."""
     mech = (sidecar or {}).get("mechanical")
     if not mech:
         return None
     b = mech.get("board") or {}
     holes = mech.get("mounting_holes") or {}
     plan = MechPlan(
-        width=b.get("width"), height=b.get("height"),
+        width=b.get("width") or (sidecar or {}).get("board_width"),
+        height=b.get("height") or (sidecar or {}).get("board_height"),
         grow=bool(b.get("grow", False)),
         hole_size=str(holes.get("size") or "M3"),
         hole_positions=[tuple(p) for p in (holes.get("positions") or [])],
@@ -134,18 +141,28 @@ def apply_fixed(board: BoardModel, plan: MechPlan) -> list:
             notes.append(f"{ref}: rotation set to {fp.rotation:g} "
                          "(not position-locked)")
             continue
+        # No offset given -> CENTER along the edge (when the dimension is
+        # known), else sit flush inside the origin corner. offset=0 used
+        # to pin the part's ORIGIN at the corner, hanging half its
+        # courtyard outside the outline -- a guaranteed, size-independent
+        # overlap the placer could never resolve.
+        off_given = spec.get("offset") is not None
         off = float(spec.get("offset") or 0.0)
         if edge == "left":
             fp.x = EDGE_FLUSH - cx1
-            fp.y = off
+            fp.y = off if off_given else \
+                (H / 2.0 if H else EDGE_FLUSH - cy1)
         elif edge == "right" and W is not None:
             fp.x = W - EDGE_FLUSH - cx2
-            fp.y = off
+            fp.y = off if off_given else \
+                (H / 2.0 if H else EDGE_FLUSH - cy1)
         elif edge == "top":
-            fp.x = off
+            fp.x = off if off_given else \
+                (W / 2.0 if W else EDGE_FLUSH - cx1)
             fp.y = EDGE_FLUSH - cy1
         elif edge == "bottom" and H is not None:
-            fp.x = off
+            fp.x = off if off_given else \
+                (W / 2.0 if W else EDGE_FLUSH - cx1)
             fp.y = H - EDGE_FLUSH - cy2
         else:
             notes.append(f"connector {ref}: edge {edge!r} needs a fixed "

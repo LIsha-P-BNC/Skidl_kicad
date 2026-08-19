@@ -5,7 +5,7 @@ text (Reference / Value / ...) with the symbol's own angle, e.g. 180 or 270.
 KiCad renders such field text upside-down or reading downward -- IEEE 315 /
 IPC-2612 drawings only ever use 0 (horizontal) or 90 (vertical, reading up).
 
-This normalizes every property-text angle in a .kicad_sch:  180 -> 0,
+This normalizes every property-text angle in a .anvil_sch:  180 -> 0,
 270 -> 90.  Center-justified text (the generator's default) keeps its anchor,
 so the text stays in place -- it just becomes readable.  Properties that carry
 an explicit left/right (justify ...) are left untouched (flipping those needs
@@ -13,7 +13,7 @@ a justification swap too, and the generator never emits them).
 
 Use:
     import fix_text_orientation
-    n = fix_text_orientation.fix("myboard.kicad_sch")
+    n = fix_text_orientation.fix("myboard.anvil_sch")
 """
 import re
 
@@ -52,7 +52,7 @@ def fix(sch_path):
 if __name__ == "__main__":
     import sys
 
-    p = sys.argv[1] if len(sys.argv) > 1 else "circuit.kicad_sch"
-    if not p.endswith(".kicad_sch"):
-        p += ".kicad_sch"
+    p = sys.argv[1] if len(sys.argv) > 1 else "circuit.anvil_sch"
+    if not p.endswith(".anvil_sch"):
+        p += ".anvil_sch"
     print(f"text angles normalized: {fix(p)}")

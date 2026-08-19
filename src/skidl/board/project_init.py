@@ -2,7 +2,7 @@
 src/skidl/board/project_init.py
 
 initialize_pcb_project's engine: LEARN (rule_discovery) -> CHOOSE (with a
-source + reason per setting) -> WRITE (.kicad_pro + .board_config.json
+source + reason per setting) -> WRITE (.anvil_pro + .board_config.json
 sidecar) -> REPORT.
 
 Nothing user-configured is ever overwritten: the ladder in
@@ -27,11 +27,12 @@ class _NetName:
         self.drive = None
 
 
-def initialize_project(base: str, out_dir, layers=2, board_width=None,
+def initialize_project(base: str, out_dir, layers=None, board_width=None,
                         board_height=None, mounting_holes=None,
-                        manufacturer="jlcpcb", ground_pour=True,
+                        manufacturer=None, ground_pour=True,
                         kicad_cli: str = "", mechanical: dict = None,
-                        ipc_class: int = None) -> dict:
+                        ipc_class: int = None,
+                        requirements_asked: list = None) -> dict:
     """Run the full init: discovery -> choices -> writes -> tagged report.
     Raises FileNotFoundError if the netlist doesn't exist yet."""
     out_dir = Path(out_dir)
@@ -39,8 +40,15 @@ def initialize_project(base: str, out_dir, layers=2, board_width=None,
     if not net_path.is_file():
         raise FileNotFoundError(f"netlist not found: {net_path} -- run build first")
 
-    profile = get_profile(manufacturer)
     disc = discover_rules(base, out_dir)
+    # manufacturer: None means "not specified this call" -- sticky via the
+    # sidecar (like ipc_class), so a re-init never silently resets a
+    # chosen fab back to the default. Provenance is recorded honestly.
+    manufacturer_from_arg = manufacturer is not None
+    if manufacturer is None:
+        manufacturer = (disc.get("sidecar", {}) or {}).get("manufacturer") \
+            or "jlcpcb"
+    profile = get_profile(manufacturer)
     app = discover_application(kicad_cli)
 
     # IPC product class: ONE parameter derives annular ring, spacing and
@@ -48,6 +56,7 @@ def initialize_project(base: str, out_dir, layers=2, board_width=None,
     # the PROFILE rung of the ladder only -- every user source above
     # still wins. Sticky via the sidecar across re-inits.
     ipc_report = None
+    ipc_from_arg = ipc_class is not None
     ipc_class = ipc_class if ipc_class is not None else \
         (disc.get("sidecar", {}) or {}).get("ipc_class")
     if ipc_class:
@@ -75,10 +84,10 @@ def initialize_project(base: str, out_dir, layers=2, board_width=None,
             v, src, why = argument, "argument", "explicitly requested in this call"
         elif project_val is not None:
             v, src, why = project_val, "project-user", \
-                "found in the project's .kicad_pro (user's Board Setup / net-class dialogs)"
+                "found in the project's .anvil_pro (user's Board Setup / net-class dialogs)"
         elif board_val is not None:
             v, src, why = board_val, "board-user", \
-                "found in the existing .kicad_pcb (user edited the board)"
+                "found in the existing .anvil_pcb (user edited the board)"
         elif system_val is not None:
             v, src, why = system_val, "system-user", \
                 f"this user's own app defaults ({disc['system_user']['config_file']})"
@@ -94,6 +103,15 @@ def initialize_project(base: str, out_dir, layers=2, board_width=None,
         return v
 
     sidecar_prev = disc.get("sidecar", {})
+    settings["manufacturer"] = {
+        "value": manufacturer,
+        "source": ("argument" if manufacturer_from_arg
+                   else "ai" if sidecar_prev.get("manufacturer")
+                   else "profile"),
+        "reason": ("explicitly requested in this call" if manufacturer_from_arg
+                   else "kept from this project's previous choice (sticky)"
+                   if sidecar_prev.get("manufacturer")
+                   else "no manufacturer chosen -> jlcpcb default")}
     sys_rules = disc["system_user"]["defaults"].get("rules", {})
     proj_rules = disc["project"]["design_rules"]
 
@@ -110,7 +128,7 @@ def initialize_project(base: str, out_dir, layers=2, board_width=None,
                        disc["board"].get("thickness"),
                        None, sidecar_prev.get("thickness"),
                        profile["thickness"])
-    layers = choose("layers", layers if layers != 2 else None, None, None,
+    layers = choose("layers", layers, None, None,
                     None, sidecar_prev.get("layers"), 2)
 
     # ---- outline / holes / pour / origin -------------------------------
@@ -154,7 +172,7 @@ def initialize_project(base: str, out_dir, layers=2, board_width=None,
     net_classes, assignments = _auto_net_classes(
         net_path, disc, profile, design_rules, settings)
 
-    # ---- write .kicad_pro ---------------------------------------------
+    # ---- write .anvil_pro ---------------------------------------------
     _write_project(disc["paths"]["pro"], net_classes, assignments, design_rules)
 
     # ---- write sidecar (AI-owned board-level params) -------------------
@@ -174,6 +192,11 @@ def initialize_project(base: str, out_dir, layers=2, board_width=None,
     if ipc_class and ipc_report:
         sidecar["ipc_class"] = int(ipc_class)
         sidecar["mask_expansion"] = ipc_report["mask_expansion"]
+        settings["ipc_class"] = {
+            "value": int(ipc_class),
+            "source": "argument" if ipc_from_arg else "ai",
+            "reason": ("explicitly requested in this call" if ipc_from_arg
+                       else "kept from this project's previous choice (sticky)")}
         report["ipc"] = {
             "class": int(ipc_class), "note": ipc_report["note"],
             "raised": ipc_report["raised"],
@@ -186,6 +209,37 @@ def initialize_project(base: str, out_dir, layers=2, board_width=None,
                 "(<0.65 mm) on this design -- routing may be impossible; "
                 "a user rule override is required, nothing is silently "
                 "downgraded")
+    # Any successful init = the requirements conversation happened (or the
+    # user accepted defaults) -- create_pcb's requirements gate keys on this.
+    sidecar["requirements_confirmed"] = True
+    if requirements_asked:
+        sidecar["requirements_asked"] = list(requirements_asked)
+    # Persist per-key provenance so a later file-only re-read (resolver,
+    # summary, questionnaire) still knows HOW each value arrived. A value
+    # carried unchanged through the sidecar rung keeps WHO originally
+    # chose it (a user's update_board_setup choice must not degrade to
+    # "ai" on re-init).
+    prev_srcs = sidecar_prev.get("_sources") or {}
+    srcs = {}
+    for k, v in settings.items():
+        s = v["source"]
+        if s == "ai" and prev_srcs.get(k) in ("user", "argument", "board-user"):
+            s = prev_srcs[k]
+        srcs[k] = s
+    for k, v in prev_srcs.items():
+        srcs.setdefault(k, v)
+    sidecar["_sources"] = srcs
+    # The sidecar is rebuilt from scratch here -- carry forward the keys
+    # other writers own (server post-init writes, update_board_setup,
+    # engine overrides), else a re-init silently drops them.
+    # currents_meta source:"user" means "arrived via the tool call", NOT
+    # verified human input; never treat "confirmed" as ground truth for
+    # safety-relevant logic.
+    for k in ("currents", "currents_meta", "requirements_asked",
+              "copper_oz", "pad_to_mask_clearance", "engine_overrides",
+              "user_edge_cuts"):
+        if sidecar_prev.get(k) is not None and k not in sidecar:
+            sidecar[k] = sidecar_prev[k]
     Path(disc["paths"]["sidecar"]).write_text(
         json.dumps(sidecar, indent=2) + "\n", encoding="utf-8")
 
@@ -245,7 +299,7 @@ def _validate_mechanical(mech: dict, net_path) -> list:
 
 def _auto_net_classes(net_path, disc, profile, design_rules, settings):
     """Assign nets to classes. Author/user-set classes (from the netlist's
-    (class ...) or the user's .kicad_pro) pass through untouched; only
+    (class ...) or the user's .anvil_pro) pass through untouched; only
     Default-class nets are auto-classified by the schematic engine's
     net_classify regexes. Returns (classes, {net_name: class_name})."""
     from skidl.board.pcb_writer import _read_netlist
@@ -291,7 +345,7 @@ def _auto_net_classes(net_path, disc, profile, design_rules, settings):
     min_c = design_rules.get("min_clearance", 0.1)
     for cls in sorted(used):
         base_rules = dict(profile["classes"].get(cls, profile["classes"]["Default"]))
-        # user's .kicad_pro class rules WIN over profile
+        # user's .anvil_pro class rules WIN over profile
         user_set = cls in user_classes
         base_rules.update(user_classes.get(cls, {}))
         if cls == "Power" and fine_pitch and not user_set:
@@ -307,7 +361,7 @@ def _auto_net_classes(net_path, disc, profile, design_rules, settings):
         src = "project-user" if cls in user_classes else "profile"
         settings[f"class.{cls}"] = {
             "value": base_rules, "source": src,
-            "reason": ("rules found in .kicad_pro (user-set), fab-minimum clamped"
+            "reason": ("rules found in .anvil_pro (user-set), fab-minimum clamped"
                        if src == "project-user" else
                        "profile defaults for this class, fab-minimum clamped")}
 
@@ -318,13 +372,16 @@ def _auto_net_classes(net_path, disc, profile, design_rules, settings):
     # helps nobody; the tension is recorded, not hidden.
     try:
         from skidl.board.width_engine import net_width_plan, bucket_classes
-        currents = (disc.get("sidecar", {}) or {}).get("currents") or {}
+        sc_prev = disc.get("sidecar", {}) or {}
+        currents = sc_prev.get("currents") or {}
         nets_by_class = {}
         for net_name, cls in assignments.items():
             nets_by_class.setdefault(cls, []).append(net_name)
-        plan = net_width_plan(nets_by_class, {"classes": classes,
-                                              "copper_oz": profile.get("copper_oz", 1),
-                                              "rules": design_rules},
+        plan = net_width_plan(nets_by_class,
+                              {"classes": classes,
+                               "copper_oz": sc_prev.get("copper_oz")
+                               or profile.get("copper_oz", 1),
+                               "rules": design_rules},
                               currents=currents)
         if plan and not fine_pitch:
             for cname, spec in bucket_classes(plan).items():
@@ -383,7 +440,7 @@ def _has_fine_pitch_parts(net_path, threshold=0.65) -> bool:
 
 
 def _write_project(pro_path, net_classes, assignments, design_rules):
-    """Fold classes + patterns + rules into .kicad_pro, preserving every
+    """Fold classes + patterns + rules into .anvil_pro, preserving every
     user key (same discipline as update_project_net_classes)."""
     pro_path = Path(pro_path)
     if pro_path.is_file():
