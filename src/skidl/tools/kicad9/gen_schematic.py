@@ -80,6 +80,20 @@ def auto_stub_nets(circuit, **options):
     # This is only an early routing safety valve. Let the post-placement
     # classifier decide ordinary 2-3 pin local connections from geometry.
     fanout_threshold = options.get("auto_stub_fanout", 8)
+    # On a SMALL sheet (few parts, nearly every net is a rail) a power rail touching
+    # only a few pins reads better as a short WIRED chain (input connector ->
+    # regulator VIN -> bulk cap) than as N disconnected-looking stubs. Both gates are
+    # sized by the DESIGN, not hardcoded to a circuit: the small-circuit gate counts
+    # real parts, and rails above the pin threshold still stub (a GND touching
+    # everything must never snake around the sheet as copper). On a big sheet the
+    # standard all-stub style stays. Connectivity is unaffected either way -- the
+    # publish gate verifies the drawn schematic against the netlist, so a wired
+    # rail that fails to route falls back exactly like any other net.
+    power_wire_max = options.get("auto_stub_power_max_wire_pins", 3)
+    n_real_parts = sum(
+        1 for p in circuit.parts if not str(getattr(p, "ref", "") or "").startswith("#")
+    )
+    small_circuit = n_real_parts <= options.get("auto_stub_power_wire_max_parts", 12)
     stubbed_power = []
     stubbed_fanout = []
 
@@ -91,6 +105,18 @@ def auto_stub_nets(circuit, **options):
 
         # Power nets: anything starting with "+" or matching common power names.
         if net.name.startswith("+") or _POWER_NET_RE.match(net.name):
+            if small_circuit and len(net.pins) <= power_wire_max:
+                # Wire the chain ONLY when no pin on the rail is a power INPUT:
+                # a wired rail carries no power symbol, and a power-in pin on a
+                # symbol-less rail trips KiCad's power_pin_not_driven ERC.
+                # (Stubbing just one pin instead was tried and is WRONG -- the
+                # stubbed pin drops out of the routed chain, splitting the net
+                # geometrically and failing connectivity on every seed.)
+                from skidl.pin import pin_types
+                pins = net.get_pins()
+                if not any(getattr(p, "func", None) == pin_types.PWRIN
+                           for p in pins):
+                    continue    # small circuit, small passive rail: wire it
             net._stub = True
             net._stub_explicit = False
             for pin in net.get_pins():

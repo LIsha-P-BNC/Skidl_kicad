@@ -181,7 +181,7 @@ if _floating:
         print("  " + _f)
     sys.exit(2)
 
-sch, pro = smart_schematic.build()
+sch, pro = smart_schematic.build({build_opts})
 print("::SCH::", sch)
 print("::PRO::", pro)
 '''
@@ -236,6 +236,25 @@ def _subprocess_env() -> dict:
                   "KICAD8_SYMBOL_DIR", "KICAD9_SYMBOL_DIR"):
             if _env_get_ci(env, v) is None:
                 env[v] = cache
+
+    # Last-resort FOOTPRINT dirs: the symbol fallback above has no footprint twin,
+    # so a routing subprocess spawned from a stripped environment (where anvil_libs
+    # can't find the install) had KICAD*_FOOTPRINT_DIR unset -> create_pcb failed with
+    # UnresolvedFootprintsError. Detect the install's footprint folder and set every
+    # KICAD*_FOOTPRINT_DIR when the current value is missing or not a real directory.
+    fpd = _env_get_ci(env, "KICAD9_FOOTPRINT_DIR")
+    if not fpd or not os.path.isdir(fpd):
+        try:
+            b = _open_anvilcad_mod()._find_bin()
+            if b:
+                fp = os.path.join(os.path.dirname(b), "share", "anvil", "footprints")
+                if os.path.isdir(fp):
+                    for v in ("KICAD6_FOOTPRINT_DIR", "KICAD7_FOOTPRINT_DIR",
+                              "KICAD8_FOOTPRINT_DIR", "KICAD9_FOOTPRINT_DIR"):
+                        env[v] = fp
+        except Exception:
+            pass
+
     return env
 
 
@@ -522,6 +541,10 @@ os.environ["PYTHONHASHSEED"] = "0"
 sys.path.insert(0, r"{src}")
 from skidl.anvil import anvil_libs          # noqa: F401
 from skidl import *
+from skidl.anvil import smart_schematic     # the canonical body template uses
+                                            # smart_schematic.block(...) -- without
+                                            # this import every rules-conformant
+                                            # body dies in precheck with NameError
 set_default_tool(KICAD9)
 
 # ===== circuit body (user) =====
@@ -1017,9 +1040,21 @@ def _summarize_project(base: str, pdir_path: Path) -> dict:
 
 
 def _try_open(base: str, view: str = "project") -> str:
-    """Open OUT/<base> in Anvil CAD. Launches even when the app is already
-    running with OTHER projects (a new window opens); only skips when a window
-    for THIS project already exists -- then the user just needs File > Revert."""
+    """Open OUT/<base> in Anvil CAD. Prefers loading into the ALREADY-OPEN window via
+    the app's tool server (no second window pops up); only falls back to launching a
+    fresh window when nothing is listening (e.g. the app isn't running)."""
+    pro = pdir(base) / (base + ".anvil_pro")
+
+    # 1) Load into the running window (in-app chat, or any client while the app is open).
+    if pro.is_file():
+        try:
+            r = _live_call("open_project", {"path": str(pro)}, timeout=8.0)
+            if r.get("ok"):
+                return "opened in the current Anvil CAD window"
+        except Exception:
+            pass   # nothing listening -> fall through to launching
+
+    # 2) Fallback: launch a window (app not running / external with no open app).
     try:
         if _project_window_open(base):
             return (f"'{base}' is already open in Anvil CAD -- do File > Revert "
@@ -1974,7 +2009,7 @@ print("\\n::RESULT::" + json.dumps(info))
 @_quiet
 def build(name: str, code: str = "", mode: str = "body",
           include_log: bool = False, view: str = "project",
-          folder: str = "") -> dict:
+          folder: str = "", layout: str = "auto") -> dict:
     """The schematic-lifecycle tool. `mode` selects the action:
 
     mode='rules'  -> returns the MANDATORY design workflow + canonical
@@ -1998,6 +2033,15 @@ def build(name: str, code: str = "", mode: str = "body",
         instead of the default <OUT>/<project>/. Use it when the user asks
         for a specific location; otherwise every project lands in its own
         <OUT>/<project>/ folder automatically.
+
+    `layout` (optional) -- how the schematic is drawn:
+        'single'    = ONE sheet with boxed functional blocks.
+        'hierarchy' = one child SHEET per @subcircuit page (each page itself
+                      laid out with boxed blocks). For 'hierarchy' the body
+                      MUST wrap each section in an @subcircuit page function
+                      (mode='script'); a flat body has no pages to split.
+        'auto' (default) = pick by design size. If the user asks for one
+        explicitly, pass it; otherwise leave 'auto'.
 
     Build flow: mode='rules' -> parts(action='search'/'describe') ->
     mode='body' -> mode='status' until done -> mode='open'."""
@@ -2069,7 +2113,18 @@ def build(name: str, code: str = "", mode: str = "body",
             if review["matrix"]:
                 res["connectivity_matrix"] = review["matrix"]
         return _await_short(base, res)
-    script = _HARNESS.format(src=str(SRC), body=code)
+    # LAYOUT choice -> flatness passed to smart_schematic.build():
+    #   'single'    -> ONE sheet with boxed functional blocks (flatness=1.0)
+    #   'hierarchy' -> one child SHEET per @subcircuit page      (flatness=0.0)
+    #   'auto'/else -> let smart_schematic pick by design size (default).
+    _layout = (layout or "auto").strip().lower()
+    if _layout in ("single", "single_sheet", "one_sheet", "blocks", "flat"):
+        _build_opts = "flatness=1.0"
+    elif _layout in ("hierarchy", "hierarchical", "sheets", "pages", "multi_sheet"):
+        _build_opts = "flatness=0.0"
+    else:
+        _build_opts = ""
+    script = _HARNESS.format(src=str(SRC), body=code, build_opts=_build_opts)
     # phase 0: instant syntax check (body line numbers reported relative to body)
     try:
         compile(script, base + ".py", "exec")
@@ -3438,19 +3493,47 @@ _SKILL_MD = REPO / ".claude" / "skills" / "skidl-circuit" / "SKILL.md"
 # The canonical circuit BODY pattern for build(mode='body') -- formerly the
 # get_template() tool; now embedded in the design-rules text.
 _TEMPLATE = (
-    '# 1) NETS (wires / signals)\n'
-    'vcc = Net("VCC")\n'
+    '# ============ HOW THE SHEET IS LAID OUT (you just write the circuit; the\n'
+    '# builder picks the layout automatically from its SIZE) ============\n'
+    '#   small / one function       -> ONE sheet, mostly WIRES.\n'
+    '#   medium, several functions  -> ONE sheet with boxed BLOCKS.\n'
+    '#   BIG (>~50 parts) with       -> HIERARCHY: one child SHEET per @subcircuit\n'
+    '#   @subcircuit pages             page; each page laid out with boxed blocks.\n'
+    '# You only decide the STRUCTURE (blocks + pages); the builder decides sheets.\n\n'
+    '# 1) NETS -- name POWER/GROUND canonically so they render as POWER SYMBOLS,\n'
+    '#    not repeated text labels:  +5V  +3V3  +12V  VBAT  GND  (NOT "5V_IN", "NET_GND").\n'
+    'p5v = Net("+5V")\n'
     'gnd = Net("GND")\n\n'
-    '# 2) PARTS -- Part("Lib","Name", ref=, tag=, value=, footprint=)\n'
-    '#    Lib/Name come from parts search; pins from parts describe. Never invent them.\n'
-    'r = Part("Device", "R", ref="R1", tag="R1", value="330",\n'
-    '         footprint="Resistor_SMD:R_0805_2012Metric")\n'
-    'led = Part("Device", "LED", ref="D1", tag="D1",\n'
-    '           footprint="LED_SMD:LED_0805_2012Metric")\n\n'
-    '# 3) CONNECT -- series:  vcc & r & led & gnd\n'
-    '#    or pin-by-pin:  r[1] += vcc ; r[2] += led[1] ; led[2] += gnd\n'
-    'vcc & r & led & gnd\n\n'
-    '# 4) UNUSED PINS -- mark with NC so the schematic draws no-connect crosses:\n'
+    '# 2) GROUP parts into FUNCTIONAL BLOCKS -- THIS is what makes a NEAT schematic.\n'
+    '#    One `with smart_schematic.block("<function>"):` per functional group; put\n'
+    '#    every part of that function inside it. Derive the names DYNAMICALLY from the\n'
+    '#    circuit function (Power In / Buck / LDO / Charger / MCU / Comms / LED ...) --\n'
+    '#    never a hardcoded list. The builder draws a labelled box around each block.\n'
+    'with smart_schematic.block("LED INDICATOR"):\n'
+    '    r = Part("Device", "R", ref="R1", tag="R1", value="330",\n'
+    '             footprint="Resistor_SMD:R_0805_2012Metric")\n'
+    '    led = Part("Device", "LED", ref="D1", tag="D1",\n'
+    '               footprint="LED_SMD:LED_0805_2012Metric")\n'
+    '    # 3) CONNECT -- series:  p5v & r & led & gnd   (or pin-by-pin:\n'
+    '    #    r[1] += p5v ; r[2] += led[1] ; led[2] += gnd)\n'
+    '    p5v & r & led & gnd\n\n'
+    '# WIRE vs LABEL -- do NOT try to wire everything. The builder WIRES only the\n'
+    '# short local links (a main IC to its 2-3 immediately-adjacent parts: a\n'
+    '# decoupling cap, a pull-up, a crystal) and LABELS everything else (rails, and\n'
+    '# any net crossing to another block/page). Fewer wires = fewer labels, nothing\n'
+    '# fails to route, and the sheet stays neat. You get this automatically just by\n'
+    '# grouping into blocks and naming power nets -- you never set wire-vs-label.\n\n'
+    '# 4) BIG DESIGN ONLY -- wrap each MAJOR section in an @subcircuit PAGE so it\n'
+    '#    becomes its OWN sheet; keep block()s INSIDE each page for sub-sections:\n'
+    '#        @subcircuit\n'
+    '#        def power_stage():\n'
+    '#            with smart_schematic.block("INPUT FILTER"):\n'
+    '#                ...\n'
+    '#            with smart_schematic.block("BULK CAPS"):\n'
+    '#                ...\n'
+    '#        power_stage(); mcu_stage(); comms_stage()\n'
+    '#    Small/medium circuits need NO @subcircuit -- just blocks on one sheet.\n'
+    '# 5) UNUSED PINS -- mark with NC so the schematic draws no-connect crosses:\n'
     '#    u1[4,6,8] += NC\n'
 )
 
@@ -3671,8 +3754,9 @@ def get_design_rules() -> str:
 
 # ======================================================================================
 # LIVE EDITOR TOOLS — drive the OPEN Anvil CAD editors through the app's
-# ANVIL_AI_TOOL_SERVER (line-delimited JSON on 127.0.0.1:5571; started from the app's
-# "AnvilCAD MCP" menu). 4 consolidated tools, not one-per-op: a user request holding
+# ANVIL_AI_TOOL_SERVER (line-delimited JSON on 127.0.0.1:5571; always started by the
+# Anvil app for its built-in chat; the "AnvilCAD MCP" menu is only for an external client).
+# 4 consolidated tools, not one-per-op: a user request holding
 # several changes travels as ONE call with an ops ARRAY, executed in order with per-op
 # results. Everything below is a thin relay — the actual editing runs inside the app.
 # ======================================================================================
@@ -3709,11 +3793,17 @@ def _live_call(tool: str, input_: dict, timeout: float = 60.0) -> dict:
                 buf += chunk
         return json.loads( buf.decode( "utf-8", "replace" ).strip() or "{}" )
     except ( ConnectionRefusedError, TimeoutError, OSError ) as exc:
+        if os.environ.get( "ANVIL_IN_APP_CHAT" ) == "1":
+            guidance = ( "Open the required Schematic or PCB Editor and retry. "
+                         "The in-app chat starts its local tool channel automatically." )
+        else:
+            guidance = ( "Open Anvil CAD and click AnvilCAD MCP -> Start in the app "
+                         "menu, then retry." )
+
         return { "ok": False, "not_reachable": True,
                  "message": f"Anvil CAD tool server not reachable on "
                             f"{_LIVE_HOST}:{_LIVE_PORT} ({exc.__class__.__name__}). "
-                            "Open Anvil CAD and click AnvilCAD MCP -> Start in the app "
-                            "menu, then retry." }
+                            + guidance }
     except Exception as exc:                      # noqa: BLE001 — surface, never raise
         return { "ok": False, "message": f"live tool error: {exc!r}" }
 
@@ -3761,7 +3851,8 @@ def _live_run_ops(ops, allowed: set, side: str) -> dict:
 def read_live(target: str = "schematic") -> dict:
     """LIVE state of the OPEN editor in the running Anvil CAD app (NOT files on disk).
     target='schematic' (components/nets of the open schematic) or 'board' (footprints/
-    tracks of the open board). Needs the app running with AnvilCAD MCP -> Start."""
+    tracks of the open board). The in-app chat connects automatically; an external MCP
+    client must start its own AnvilCAD MCP session."""
     tool = "get_board" if str( target ).lower().startswith( "b" ) else "get_schematic"
     return _live_call( tool, {} )
 

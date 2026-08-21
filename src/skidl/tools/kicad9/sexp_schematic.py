@@ -25,7 +25,7 @@ from collections import OrderedDict, defaultdict
 
 from simp_sexp import Sexp
 
-from skidl.geometry import Point, Tx
+from skidl.geometry import Point, Tx, Vector
 from skidl.pckg_info import __version__
 from skidl.schematics.net_terminal import NetTerminal
 from skidl.utilities import export_to_all
@@ -195,7 +195,22 @@ def _extract_power_lib_symbol_raw(name):
                 elif text[i] == ")":
                     depth -= 1
                     if depth == 0:
-                        return text[start:i + 1]
+                        raw = text[start:i + 1]
+                        # DERIVED symbols ("+3.3V" is `(extends "+3V3")` in the
+                        # stock power lib) carry NO graphics and NO pin: embedding
+                        # just the derived block leaves kicad-cli unable to resolve
+                        # the parent, so the power symbol contributes no pin and the
+                        # whole rail silently falls apart (observed: every pin of a
+                        # "+3.3V" net exported as unconnected-*, failing the
+                        # connectivity verify in every mode). Flatten: extract the
+                        # PARENT recursively and rename it, giving a standalone
+                        # symbol with the derived name on its value/pin/units.
+                        ext = re.search(r'\(extends\s+"?([^"\s\)]+)"?\s*\)', raw)
+                        if ext and ext.group(1) != name:
+                            parent_raw = _extract_power_lib_symbol_raw(ext.group(1))
+                            if parent_raw:
+                                return parent_raw.replace(ext.group(1), name)
+                        return raw
                 i += 1
 
 
@@ -1376,9 +1391,12 @@ def create_title_block_sexp(title):
     A professional title block carries revision + company/engineer for version
     tracking; unset fields stay blank. Extra metadata comes from _TITLE_META
     (see set_title_block_meta)."""
-    rev = _TITLE_META.get("rev", "")
+    # rev defaults to "A" -- a released schematic always carries a revision; a
+    # blank rev is what makes our output look unfinished vs a professional sheet.
+    rev = _TITLE_META.get("rev", "") or "A"
     company = _TITLE_META.get("company", "")
     engineer = _TITLE_META.get("engineer", "")
+    project = _TITLE_META.get("project", "")
     date = _TITLE_META.get("date", "") or datetime.date.today().isoformat()
     eng_comment = f"Engineer: {engineer}" if engineer else "Generated with SKiDL"
     # IMPORTANT: the s-expr serializer DROPS an empty string value, so
@@ -1386,14 +1404,15 @@ def create_title_block_sexp(title):
     # "Failed to load schematic". Only emit rev/company when non-empty (KiCad
     # defaults them to blank); the always-present title/date/comment fields are
     # safe because KiCad tolerates their absence-of-value form.
-    tb = ["title_block", ["title", title], ["date", date]]
-    if rev:
-        tb.append(["rev", rev])
+    tb = ["title_block", ["title", title], ["date", date], ["rev", rev]]
     if company:
         tb.append(["company", company])
     tb.append(["comment", 1, eng_comment])
-    if engineer:
-        tb.append(["comment", 2, "Generated with SKiDL"])
+    # comment 2 = generator tag, comment 3 = project name (previously accepted in
+    # _TITLE_META but silently never emitted -- the "project dropped" bug).
+    tb.append(["comment", 2, "Generated with SKiDL"])
+    if project:
+        tb.append(["comment", 3, f"Project: {project}"])
     return tb
 
 
@@ -1607,6 +1626,54 @@ def node_to_sexp_schematic(node, sheet_tx=Tx(), version=20230409, circuit=None):
         elements.extend(
             node_to_sexp_schematic(child, tx, version=version, circuit=circuit)
         )
+
+    # Draw a LABELLED BOX around THIS node when it is a flattened block (a
+    # functional group from smart_schematic.block()/auto-grouping, or a
+    # flattened @subcircuit) drawn inline on its parent's sheet. This is what
+    # makes the "single sheet with blocks" layout READ as blocks: a dashed
+    # rectangle around the block's parts plus its name at the top-left. Pure
+    # presentation -- no connectivity meaning -- so it can never break the
+    # netlist.
+    if node.flattened and any(not isinstance(p, NetTerminal) for p in node.parts):
+        try:
+            # pad = half the placer's internal block pad, so the box always stays
+            # inside the whitespace the placer reserved around this block and can
+            # never overlap a neighbouring block's box.
+            cbb = node.calc_bbox().resize(Vector(50, 50))
+            c1 = Point(cbb.min.x, cbb.min.y) * tx
+            c2 = Point(cbb.max.x, cbb.max.y) * tx
+            x1, y1 = _round_mm(min(c1.x, c2.x)), _round_mm(min(c1.y, c2.y))
+            x2, y2 = _round_mm(max(c1.x, c2.x)), _round_mm(max(c1.y, c2.y))
+            title = str(node.name or "").replace("_", " ").strip()
+            # Reading-order number from the role layout ("01. POWER INPUT"),
+            # like a professionally organised sheet.
+            _seq = getattr(node, "block_seq", 0)
+            if title and _seq:
+                title = "%02d. %s" % (_seq, title)
+            elements.append(Sexp([
+                "rectangle",
+                ["start", x1, y1],
+                ["end", x2, y2],
+                ["stroke", ["width", 0.254], ["type", "dash"]],
+                ["fill", ["type", "none"]],
+                ["uuid", _gen_uuid(f"blockbox:{title}:{x1}:{y1}")],
+            ]))
+            if title:
+                elements.append(Sexp([
+                    "text",
+                    '"%s"' % title,   # quote: titles contain spaces
+                    ["exclude_from_sim", "no"],
+                    ["at", x1, _round_mm(y1 - 1.0), 0],
+                    ["effects",
+                     ["font", ["size", 2.0, 2.0], ["bold", "yes"]],
+                     ["justify", "left", "bottom"]],
+                    ["uuid", _gen_uuid(f"blocktitle:{title}:{x1}:{y1}")],
+                ]))
+        except Exception as _bx:
+            # a box is cosmetic; never fail the build over it -- but do say why
+            import sys as _sys
+            print(f"blockbox skipped for '{getattr(node, 'name', '?')}': {_bx}",
+                  file=_sys.stderr)
 
     # Collect lib_symbols needed for this node's parts.
     lib_symbols = {}

@@ -291,6 +291,12 @@ class PartSearchDB:
                 "INSERT OR REPLACE INTO libraries(lib_file, mtime) VALUES(?, ?)",
                 (abs_fn, mtime),
             )
+            # Drop every previously-indexed part of this library before re-inserting.
+            # INSERT OR REPLACE alone only updates rows whose (part_name, lib_file)
+            # still exist in the file: a part REMOVED from the library would survive
+            # in the index forever, making search report parts that no longer exist
+            # (search said "found" while describe/build said "not found").
+            self._cur.execute("DELETE FROM parts WHERE lib_file = ?", (abs_fn,))
             # Bulk insert parts using INSERT OR REPLACE so entries keyed by
             # (part_name, lib_file) are replaced rather than duplicated.
             if parts_to_insert:
