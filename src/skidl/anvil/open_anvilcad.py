@@ -32,6 +32,25 @@ def _find_bin():
     LOCALAPPDATA / ProgramFiles are often missing -- which used to make the
     app un-findable and auto-open silently fail. So derive those roots from
     USERPROFILE / SystemDrive when they are absent (nothing hardcoded)."""
+    # A RUNNING app wins over any installed copy: on a dev box both an old
+    # installed "Anvil CAD" and the fresh build tree exist, and scanning the
+    # install roots picked the stale one -- auto-open then launched the wrong
+    # exe while the user's actual window sat untouched. Ask Windows which
+    # anvilcad.exe is live and use its own bin dir.
+    try:
+        import subprocess as _sp
+        out = _sp.run(
+            ["wmic", "process", "where", "name='anvilcad.exe'",
+             "get", "ExecutablePath", "/value"],
+            capture_output=True, text=True, timeout=10).stdout or ""
+        for line in out.splitlines():
+            if line.startswith("ExecutablePath=") and line.strip() != "ExecutablePath=":
+                b = os.path.dirname(line.split("=", 1)[1].strip())
+                if os.path.isdir(b):
+                    return b
+    except Exception:
+        pass
+
     home = os.environ.get("USERPROFILE") or os.path.expanduser("~")
     sysdrive = os.environ.get("SystemDrive") or "C:"
     localapp = os.environ.get("LOCALAPPDATA") or os.path.join(home, "AppData", "Local")
