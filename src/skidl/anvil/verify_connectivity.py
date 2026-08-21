@@ -17,17 +17,19 @@ import subprocess
 
 
 def _find_kicad_cli():
-    """Locate kicad-cli.exe in the installed CAD app -- path/username/branding agnostic."""
+    """Locate the CAD app's CLI (anvil-cli.exe, with kicad-cli.exe as the legacy name)
+    in the installed CAD app -- path/username/branding agnostic."""
     try:
         from open_anvilcad import _find_bin  # shared install-bin detector
         b = _find_bin()
         if b:
-            p = os.path.join(b, "kicad-cli.exe")
-            if os.path.isfile(p):
-                return p
+            for name in ("anvil-cli.exe", "kicad-cli.exe"):
+                p = os.path.join(b, name)
+                if os.path.isfile(p):
+                    return p
     except Exception:
         pass
-    return shutil.which("kicad-cli") or ""
+    return shutil.which("anvil-cli") or shutil.which("kicad-cli") or ""
 
 
 KICAD_CLI = _find_kicad_cli()

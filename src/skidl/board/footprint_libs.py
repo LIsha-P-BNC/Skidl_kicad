@@ -40,14 +40,21 @@ def _footprint_root() -> Path:
 
 def resolve_path(lib_colon_name: str) -> Path:
     """"Package_SO:SOIC-8_3.9x4.9mm_P1.27mm" ->
-    .../Package_SO.pretty/SOIC-8_3.9x4.9mm_P1.27mm.kicad_mod"""
+    .../Package_SO.pretty/SOIC-8_3.9x4.9mm_P1.27mm.anvil_mod
+
+    The Anvil footprint libraries use the native ".anvil_mod" extension; ".kicad_mod"
+    is accepted as a fallback for stock/imported libraries."""
     if ":" not in lib_colon_name:
         raise ValueError(f'expected "Lib:Name", got {lib_colon_name!r}')
     lib, name = lib_colon_name.split(":", 1)
-    path = _footprint_root() / f"{lib}.pretty" / f"{name}.kicad_mod"
-    if not path.is_file():
-        raise FootprintNotFoundError(lib_colon_name, path)
-    return path
+    pretty = _footprint_root() / f"{lib}.pretty"
+
+    for ext in (".anvil_mod", ".kicad_mod"):
+        path = pretty / f"{name}{ext}"
+        if path.is_file():
+            return path
+
+    raise FootprintNotFoundError(lib_colon_name, pretty / f"{name}.anvil_mod")
 
 
 def load_pads_and_courtyard(lib_colon_name: str) -> tuple:

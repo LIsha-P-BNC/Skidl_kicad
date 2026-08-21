@@ -65,7 +65,8 @@ def _find_install_symbols():
     # Prefer Anvil/Envil branding, then any dir that actually ships .kicad_symdir libs.
     def _score(item):
         nm = item[0].upper()
-        has = bool(glob.glob(os.path.join(item[1], "*" + _SYMDIR_EXT)))
+        has = bool(glob.glob(os.path.join(item[1], "*" + _SYMDIR_EXT))
+                   or glob.glob(os.path.join(item[1], "*.anvil_sym")))
         return (("ANVIL" in nm or "ENVIL" in nm), has)
     cands.sort(key=_score, reverse=True)
     return cands[0][1]
@@ -156,6 +157,26 @@ def _sync(src):
     # Copy any plain <Lib>.kicad_sym that sit directly in the install symbols dir.
     for f in glob.glob(os.path.join(src, "*.kicad_sym")):
         out = os.path.join(CACHE, os.path.basename(f))
+        if (not os.path.exists(out)) or os.path.getmtime(f) > os.path.getmtime(out):
+            try:
+                shutil.copy2(f, out)
+            except OSError:
+                pass
+
+    # Ingest the APP's own <Lib>.anvil_sym libraries (the store the running Anvil
+    # CAD app resolves symbols against -- same s-expr format as .kicad_sym, just a
+    # different extension). Without this the SKiDL build library and the app's
+    # library DIVERGE: a build embeds a symbol the app doesn't have under that
+    # exact name (observed: SKiDL had "ATmega328P-P" while the app ships
+    # "ATmega328P-PU"), so every part trips "doesn't match copy in library" and
+    # some trip "not found". The app store is the SINGLE SOURCE OF TRUTH here --
+    # a part added in the app lands in .anvil_sym, so the AI build must draw from
+    # the very same file. Map <Lib>.anvil_sym -> <Lib>.kicad_sym in the cache
+    # (KiCad/kicad-cli only read the .kicad_sym extension) and let it OVERWRITE
+    # any same-named cache lib so the app's copy always wins.
+    for f in glob.glob(os.path.join(src, "*.anvil_sym")):
+        lib = os.path.basename(f)[:-len(".anvil_sym")]
+        out = os.path.join(CACHE, lib + ".kicad_sym")
         if (not os.path.exists(out)) or os.path.getmtime(f) > os.path.getmtime(out):
             try:
                 shutil.copy2(f, out)

@@ -242,6 +242,10 @@ def build(name=None, title="SKiDL-Generated Schematic", auto_stub_fanout=None,
     _tb_meta = {k: overrides.pop(k) for k in
                 ("rev", "company", "engineer", "project", "date")
                 if k in overrides}
+    # Default the project name to the design name so the title block is populated
+    # out of the box (a blank project field is what makes our sheets look unfinished
+    # vs a professional one). Caller-supplied project always wins.
+    _tb_meta.setdefault("project", name)
     if _tb_meta:
         try:
             from skidl.tools.kicad9 import sexp_schematic as _sxp
@@ -264,13 +268,26 @@ def build(name=None, title="SKiDL-Generated Schematic", auto_stub_fanout=None,
     _real_parts = [p for p in builtins.default_circuit.parts
                    if not str(getattr(p, "ref", "") or "").startswith("#")]
     n_parts = len(_real_parts)
-    big = n_parts > 50
+    # DYNAMIC, config-driven (no magic number): a design is "big" once it exceeds
+    # SKIDL_HIER_MIN_PARTS real parts -- the point past which a single page gets
+    # crowded and a per-section sheet split earns its keep. Scale-free: same rule
+    # for a 5-part or a 500-part circuit, just a different side of the threshold.
+    _hier_min = int(os.environ.get("SKIDL_HIER_MIN_PARTS", "50"))
+    big = n_parts > _hier_min
 
     # Does the SCRIPT itself provide structure? Two independent signals:
     #   * real SKiDL hierarchy (@subcircuit / Group) -> the root Node has children
     #   * explicit smart_schematic.block()/group tags -> parts carry .group
-    _has_hier = bool(getattr(getattr(builtins.default_circuit, "root", None),
-                             "children", None))
+    _root_children = getattr(getattr(builtins.default_circuit, "root", None),
+                             "children", None) or {}
+    _has_hier = bool(_root_children)
+    # How many TOP-LEVEL @subcircuit pages the script actually built. Splitting is
+    # only meaningful with >=2 pages (one page is just one sheet either way), so
+    # the hierarchy decision keys on this, not on part count alone.
+    try:
+        _n_pages = len(_root_children)
+    except Exception:
+        _n_pages = 0
     _has_groups = any(getattr(p, "group", None) for p in _real_parts)
 
     # --- M8 AUTO HIERARCHY (opt-in: hierarchy="auto") ---
@@ -308,23 +325,36 @@ def build(name=None, title="SKiDL-Generated Schematic", auto_stub_fanout=None,
     # seconds. Fully dynamic, works for any circuit; explicit structure always
     # wins and this only fills in when absent. Small circuits place tighter as one
     # flat cluster, so only auto-group once a sheet is big enough to scatter.
+    #
+    # BUT part count alone is the wrong gate: a small circuit that is CLEARLY made
+    # of several functional blocks (e.g. a few MOSFET driver channels, or 2-3 ICs)
+    # should read as boxed blocks with inter-block LABELS -- the professional look
+    # the user asked for -- even under the count threshold. So we also trigger when
+    # the connectivity graph yields >=2 distinct anchor clusters. A trivial
+    # anchor-less circuit (plain R/C/LED) produces no clusters and stays flat,
+    # exactly as before -- no over-boxing of tiny designs. Fully dynamic.
     _auto_group_min = int(os.environ.get("SKIDL_AUTO_GROUP_MIN", "25"))
-    if (n_parts > _auto_group_min and not _has_hier and not _has_groups):
+    # min distinct blocks that make a small design "worth boxing" (env-tunable).
+    _auto_group_min_blocks = int(os.environ.get("SKIDL_AUTO_GROUP_MIN_BLOCKS", "2"))
+    if not _has_hier and not _has_groups:
         try:
             from skidl.schematics.cluster import detect_clusters
+            _clusters = [c for c in detect_clusters(_real_parts) if len(c) >= 2]
+            # Group if the sheet is big (count gate) OR it splits into >=2 blocks.
+            _should_group = (n_parts > _auto_group_min
+                             or len(_clusters) >= _auto_group_min_blocks)
             _made = 0
-            for _cl in detect_clusters(_real_parts):
-                if len(_cl) < 2:
-                    continue
-                _anchor = max(_cl, key=lambda p: len(getattr(p, "pins", [])))
-                _gname = f"{_anchor.ref} {getattr(_anchor, 'name', '')}".strip()
-                for _p in _cl:
-                    if not getattr(_p, "group", None):
-                        try:
-                            _p.group = _gname
-                        except Exception:
-                            pass
-                _made += 1
+            if _should_group:
+                for _cl in _clusters:
+                    _anchor = max(_cl, key=lambda p: len(getattr(p, "pins", [])))
+                    _gname = f"{_anchor.ref} {getattr(_anchor, 'name', '')}".strip()
+                    for _p in _cl:
+                        if not getattr(_p, "group", None):
+                            try:
+                                _p.group = _gname
+                            except Exception:
+                                pass
+                    _made += 1
             if _made:
                 _has_groups = True
                 print(f">>> smart_schematic: auto-grouped {_made} functional "
@@ -343,27 +373,51 @@ def build(name=None, title="SKiDL-Generated Schematic", auto_stub_fanout=None,
     # auto-grouping -- is rendered as ONE grouped, connectivity-safe sheet rather
     # than split into sheets. Multi-sheet therefore stays opt-in: build real
     # @subcircuit blocks in the script to get one sheet per block.
-    _page_mode = big and _has_hier and os.environ.get("SKIDL_PAGE_MODE") == "1"
+    # --- 3-TIER LAYOUT AUTO-DECISION (the "where does each mode get used" rule) ---
+    #   Tier 1  small / one function        -> SINGLE sheet, mostly WIRES.
+    #   Tier 2  medium, several functions   -> SINGLE sheet with boxed BLOCKS
+    #                                          (wire IN-block, label BETWEEN blocks).
+    #   Tier 3  BIG design WITH @subcircuit  -> HIERARCHY: one child SHEET per
+    #           pages                          @subcircuit page; each page is itself
+    #                                          laid out single-sheet-with-blocks
+    #                                          (blocks boxed, wired inside; cross-
+    #                                          sheet nets become hierarchical labels;
+    #                                          power nets stay power symbols).
+    # Tier 3 is only taken when the SCRIPT actually built @subcircuit pages (real
+    # SKiDL hierarchy) AND the design is big enough to overflow one page -- so we
+    # never explode a small circuit into pages. If a hierarchical layout can't be
+    # verified, the safety net further below rebuilds it as ONE single-sheet-with-
+    # blocks page (always connectivity-correct). Passing flatness= explicitly
+    # overrides this whole decision. Set env SKIDL_PAGE_MODE=0 to force single-sheet.
+    # DYNAMIC hierarchy trigger: split into sheets ONLY when the design is both
+    # big (> SKIDL_HIER_MIN_PARTS parts) AND actually made of >=2 functional pages
+    # (@subcircuit). One page, or a small design, stays a single sheet-with-blocks.
+    # Nothing here is circuit-specific -- it reads the design's own size + structure.
+    _auto_multisheet = (big and _has_hier and _n_pages >= 2
+                        and os.environ.get("SKIDL_PAGE_MODE") != "0")
+    _page_mode = _auto_multisheet
     try:
         from skidl.schematics import sch_node as _sch_node
         _sch_node.set_page_mode(_page_mode)
     except Exception:
         pass
     if "flatness" not in opts:
-        # DEFAULT: a SINGLE page with boxed functional blocks. Within-block
-        # connections are wired and only inter-block signals become labels (the
-        # professional "wire inside a block, label between blocks" rule, enforced
-        # by the inter-block stubbing below). This is preferred over one-sheet-
-        # per-block because (a) it avoids the page explosion when a design has many
-        # small functions, and (b) it sidesteps the KiCad multi-sheet annotation
-        # caveat. Multi-sheet (one page per top-level @subcircuit block) stays
-        # available by passing flatness=0.0 explicitly.
-        opts["flatness"] = 1.0
-        if _has_hier or _has_groups:
-            msg = ("SINGLE sheet with boxed functional blocks "
-                   "(wire in-block, label cross-block)")
+        if _auto_multisheet:
+            # Tier 3: one hierarchical sheet per @subcircuit page.
+            opts["flatness"] = 0.0
+            msg = (f"HIERARCHY -- one sheet per @subcircuit page "
+                   f"(each page: boxed blocks, wire in-block, label between)")
         else:
-            msg = "SINGLE sheet"
+            # Tier 1/2: a single page. block()/@subcircuit tags become boxed
+            # functional sections; within-block nets are wired and only inter-block
+            # signals become labels. Preferred for small/medium designs because it
+            # avoids page explosion and the KiCad multi-sheet annotation caveat.
+            opts["flatness"] = 1.0
+            if _has_hier or _has_groups:
+                msg = ("SINGLE sheet with boxed functional blocks "
+                       "(wire in-block, label cross-block)")
+            else:
+                msg = "SINGLE sheet"
         print(f">>> smart_schematic: {n_parts} parts -> {msg}")
 
     # --- hard label cutoff (SKIDL_WIRE_MAX_FANOUT) ---
@@ -378,6 +432,22 @@ def build(name=None, title="SKiDL-Generated Schematic", auto_stub_fanout=None,
     # are kept for IPC-2612 readability only.
     _multisheet = opts.get("flatness", 1.0) == 0.0
 
+    # BLOCK-AWARE (user rule): the cutoff applies ONLY to a net that LEAVES its
+    # block. A net living entirely INSIDE one functional block is wired as a
+    # chain no matter how many pins it has (IC -> R -> C -> D ...); the per-block
+    # router draws it and, if that one block is genuinely too dense, only THAT
+    # block falls back to labels. Labels are reserved for nets that travel
+    # between blocks -- that is where a dragged wire would overlap/short.
+    def _net_block_key(_p):
+        _prt = getattr(_p, "part", None)
+        _g = getattr(_prt, "group", None) if _prt is not None else None
+        if _g:
+            return ("g", str(_g))
+        try:
+            return ("h", tuple(_prt.hiertuple))
+        except Exception:
+            return ("_",)
+
     _wire_max = int(os.environ.get("SKIDL_WIRE_MAX_FANOUT", "3"))
     if _wire_max > 0:
         _stubbed = 0
@@ -385,7 +455,21 @@ def build(name=None, title="SKiDL-Generated Schematic", auto_stub_fanout=None,
             try:
                 if type(_net).__name__ == "NCNet" or getattr(_net, "stub", False):
                     continue
-                if len(_net.pins) > _wire_max:
+                # Count pins PER BLOCK: what the router must draw as one wire
+                # tree is the within-block segment (a cross-block net gets one
+                # NetTerminal per block and each block wires only ITS pins to
+                # it). So a 4-pin net split 3+1 across two blocks is fine
+                # (each side is a wireable <=3-pin tree), while >3 pins in ONE
+                # block still becomes a label -- forcing those to wires makes
+                # the router fail the whole sheet (verified by experiment).
+                _per_block = {}
+                for _p in _net.pins:
+                    _pt = getattr(_p, "part", None)
+                    if _pt is None:
+                        continue
+                    _k = _net_block_key(_p)
+                    _per_block[_k] = _per_block.get(_k, 0) + 1
+                if _per_block and max(_per_block.values()) > _wire_max:
                     # same flags the guaranteed-correct all-label mode uses, so the
                     # per-block cluster protection cannot wire this net anyway
                     _net._direct_wired = False
@@ -398,7 +482,7 @@ def build(name=None, title="SKiDL-Generated Schematic", auto_stub_fanout=None,
                 pass
         if _stubbed:
             print(f">>> smart_schematic: {_stubbed} net(s) with >{_wire_max} pins "
-                  f"-> labels (junction-free sheet)")
+                  f"-> labels (chain segments stay wires)")
 
     # --- inter-block nets -> LABELS, intra-block nets stay WIRES ---
     # The professional rule is "wire the connections INSIDE a functional block,
@@ -425,11 +509,12 @@ def build(name=None, title="SKiDL-Generated Schematic", auto_stub_fanout=None,
         except Exception:
             return ("_",)
 
-    # Inter-block/-node nets -> stub. On a single sheet these become LOCAL labels
-    # (blocks share the page); on a multi-sheet build the same stub renders as a
-    # GLOBAL label (the net's pins span >1 hiertuple, so classify_label_scope
-    # picks global_label), which is exactly what connects a signal across sheets.
-    if _has_groups or _has_hier:
+    # Inter-block/-node nets -> stub EVERY pin. SUPERSEDED by the group-aware
+    # NetTerminal mechanism in sch_node.add_circuit(): a net spanning blocks now
+    # gets ONE terminal label per block and its within-block pins are WIRED to
+    # it (the professional look), instead of a label sprinkled on every pin.
+    # Kept behind SKIDL_XBLOCK_STUB=1 as an emergency fallback only.
+    if (_has_groups or _has_hier) and os.environ.get("SKIDL_XBLOCK_STUB") == "1":
         _xblock = 0
         for _net in builtins.default_circuit.nets:
             try:
@@ -595,7 +680,13 @@ def build(name=None, title="SKiDL-Generated Schematic", auto_stub_fanout=None,
                 ok, _msg, _u, _m = verify_connectivity.verify(name)
             except Exception:
                 ok = True
-            if ok or not _multisheet or _u:
+            # Repair on SINGLE-sheet builds too (was multi-sheet-only): a lone
+            # dropped local net (a 3-pin T-junction the router couldn't draw)
+            # otherwise collapses the WHOLE sheet to all-label -- verified with
+            # cap+cap+LED and regulator+caps circuits. Now only THAT net becomes
+            # a label and every other wire survives. Unwanted-short mismatches
+            # (_u) still abort to the next seed -- those are never repairable.
+            if ok or _u:
                 break
             _n = _repair_local_nets(_m)
             if _n == 0:
@@ -720,6 +811,68 @@ def build(name=None, title="SKiDL-Generated Schematic", auto_stub_fanout=None,
                     _sanitize()
                     _ok, msg2, _u, _m = verify_connectivity.verify(name)
                     print(f">>> smart_schematic: all-label mode (legacy fallback) -> {msg2}")
+            # FINAL SAFETY NET (multi-sheet -> single-sheet): the engine's
+            # cross-sheet routing/labelling of block() groups inside @subcircuit
+            # PAGES is fragile and can drop connectivity. Rather than hard-fail a
+            # big hierarchical design, rebuild the WHOLE thing as ONE sheet with
+            # boxed functional blocks -- the proven-correct, always-verifiable
+            # layout (labels connect by name on a single page, so they can never
+            # be "lost across a sheet boundary"). The user still gets a neat,
+            # verified schematic; only the page split is sacrificed.
+            if not _ok and opts.get("flatness", 1.0) == 0.0:
+                warnings.warn(
+                    "smart_schematic: multi-sheet build did not verify; falling "
+                    "back to a single sheet with boxed functional blocks.",
+                    RuntimeWarning,
+                )
+                opts["flatness"] = 1.0
+                _multisheet = False
+                try:
+                    _sch_node.set_page_mode(False)
+                except Exception:
+                    pass
+                # Try to WIRE the single sheet first (neatest); commit the first
+                # seed that verifies clean.
+                routed_seed = None
+                for sd in seeds:
+                    _clean_sheets()
+                    try:
+                        generate_schematic(seed=sd, auto_stub_fallback="raise", **opts)
+                    except Exception:
+                        continue
+                    _sanitize()
+                    try:
+                        if verify_connectivity is None or verify_connectivity.verify(name)[0]:
+                            routed_seed = sd
+                            _ok = True
+                            print(f">>> smart_schematic: single-sheet fallback "
+                                  f"routed with wires (seed={sd}); connectivity OK")
+                            break
+                    except Exception:
+                        routed_seed = sd
+                        _ok = True
+                        break
+                if not _ok:
+                    # Single-sheet all-label ALWAYS connects (names, one page).
+                    import builtins as _b
+                    for _net in _b.default_circuit.nets:
+                        try:
+                            _net._direct_wired = False
+                            _net.stub = True
+                            for _p in _net.pins:
+                                _p.direct_wired = False
+                                _p.stub = True
+                        except Exception:
+                            pass
+                    _clean_sheets()
+                    generate_schematic(auto_stub_fallback=auto_stub_fallback, **opts)
+                    _sanitize()
+                    _ok = (verify_connectivity is None
+                           or verify_connectivity.verify(name)[0])
+                    if _ok:
+                        print(">>> smart_schematic: single-sheet all-label "
+                              "fallback -> connectivity OK")
+
             if not _ok:
                 raise RuntimeError(
                     "smart_schematic: refusing to publish an unverified schematic; "

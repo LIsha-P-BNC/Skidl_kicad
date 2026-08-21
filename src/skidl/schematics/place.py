@@ -1049,12 +1049,25 @@ def layout_blocks_by_role(blocks, roles, **options):
     """
     from skidl.schematics.cluster import order_blocks_by_role
 
-    distinct_roles = {r for r in roles.values() if r != "Other"}
-    if len(distinct_roles) < 2:
+    if len(blocks) < 2:
         return False
 
     pad = options.get("role_layout_pad", BLK_EXT_PAD)
-    ordered_blocks = order_blocks_by_role([(roles[blk], blk) for blk in blocks])
+    distinct_roles = {r for r in roles.values() if r != "Other"}
+    if len(distinct_roles) >= 2:
+        # Recognizable functional roles -> order the row by role (Power->MCU->...).
+        ordered_blocks = order_blocks_by_role([(roles[blk], blk) for blk in blocks])
+    else:
+        # No role differentiation (e.g. N identical driver channels, or a design
+        # with one anchor type). Previously we BAILED here and left the blocks
+        # wherever the force solver dropped them -- which reads as a staggered,
+        # unaligned scatter. Instead still run the deterministic row/grid wrap,
+        # just preserving the blocks' current left-to-right order, so repeated
+        # blocks line up on a clean baseline. Dynamic: works for any block count.
+        ordered_blocks = sorted(
+            blocks,
+            key=lambda b: (b.place_bbox.ll.x, b.place_bbox.ll.y),
+        )
 
     # Wrap the role-ordered sequence into page-shaped ROWS (reading order:
     # left->right then top->bottom, so the functional story is preserved).
@@ -1089,7 +1102,11 @@ def layout_blocks_by_role(blocks, roles, **options):
         # single role-ordered ROW (Power -> MCU -> Comms -> Memory -> ...
         # left-to-right, the block-diagram convention) rather than an
         # aspect-compact grid that scatters the flow into columns. A row of <=6
-        # equal boxes still fits a landscape page.
+        # equal boxes still fits a landscape page. NOTE: an aspect-fit grid was
+        # tried here to "fill the page" for same-role repeated blocks, but with
+        # unequal block widths it scatters them diagonally and reads worse than a
+        # clean row with honest whitespace -- reverted. Page-fill, if ever wanted,
+        # must scale content, not reflow the row.
         _W, _H, posns = _wrap(total_w + max(widths) + pad)
         best = (0.0, posns)
     else:
@@ -1100,9 +1117,23 @@ def layout_blocks_by_role(blocks, roles, **options):
             score = abs((W / max(H, 1)) - 1.414)
             if best is None or score < best[0]:
                 best = (score, posns)
-    for blk, (x, y) in zip(ordered_blocks, best[1]):
-        blk.tx = Tx().move(Point(x, y))
+    for seq, (blk, (x, y)) in enumerate(zip(ordered_blocks, best[1]), start=1):
+        # (x, y) is the slot where this block's LOWER-LEFT corner must land.
+        # blk.tx translates the block from its CURRENT position, and its bbox
+        # min corner is arbitrary (parts sit wherever the child placement left
+        # them) -- moving by (x, y) alone shifted every block by its own bbox
+        # offset, which is exactly what made role-ordered blocks OVERLAP on the
+        # sheet. Compensate so the bbox lower-left lands on the slot.
+        ll = blk.place_bbox.ll
+        blk.tx = Tx().move(Point(x - ll.x, y - ll.y))
         snap_to_grid(blk)
+        # Record the reading-order sequence on the block's source node so the
+        # writer can number the block titles ("01. POWER INPUT") like a
+        # professionally organised sheet.
+        try:
+            blk.src.block_seq = seq
+        except Exception:
+            pass
     return True
 
 
@@ -1163,7 +1194,11 @@ def push_and_pull(anchored_parts, mobile_parts, nets, force_func, **options):
     # roughly double this function's runtime. A lower cap just means the
     # alignment pass stops refining sooner; it doesn't affect correctness.
     DEFAULT_MAX_ITER = 1000
-    ALIGN_MAX_ITER = 100
+    # Alignment budget: 100 was fast but left 2-pin chains as diagonal
+    # staircases (the masked-axis passes stop long before parts settle into
+    # rows). 300 straightens most chains for a bounded extra cost; tune via
+    # options["align_max_iter"].
+    ALIGN_MAX_ITER = int(options.get("align_max_iter", 300))
 
     force_schedule = [
         (0.50, 0.0, 0.1, False, (1, 1), DEFAULT_MAX_ITER),  # Attractive forces only.
@@ -1175,6 +1210,12 @@ def push_and_pull(anchored_parts, mobile_parts, nets, force_func, **options):
         (0.25, 0.7, 0.1, True, (1, 0), ALIGN_MAX_ITER),  # Align parts horiz.
         (0.25, 0.7, 0.1, True, (0, 1), ALIGN_MAX_ITER),  # Align parts vert.
         (0.25, 1.0, 0.01, False, (1, 1), DEFAULT_MAX_ITER),  # Remove any part overlaps.
+        # Second alignment round AFTER overlap removal: de-overlapping knocks
+        # parts off the rows the first round formed; one more (cheap, capped)
+        # H+V pass re-straightens the chains, then a final overlap clean-up.
+        (0.25, 0.7, 0.1, True, (1, 0), ALIGN_MAX_ITER),  # Re-align horiz.
+        (0.25, 0.7, 0.1, True, (0, 1), ALIGN_MAX_ITER),  # Re-align vert.
+        (0.25, 1.0, 0.01, False, (1, 1), DEFAULT_MAX_ITER),  # Final overlap clean-up.
     ]
     # N = 7
     # force_schedule = [(0.50, i/N, 0.01, False, (1,1)) for i in range(N+1)]
@@ -1928,11 +1969,19 @@ class Placer:
         # O(n²) force-directed placement.
         if len(part_blocks) > node._ROW_PLACE_THRESHOLD:
             cols = max(1, int(len(part_blocks) ** 0.5))
+            # Column width / row height must fit the LARGEST block -- sizing each
+            # cell by its own block lets a big block bleed into its neighbour.
+            max_w = max((b.place_bbox.w for b in part_blocks if b.place_bbox.w > 0),
+                        default=500)
+            max_h = max((b.place_bbox.h for b in part_blocks if b.place_bbox.h > 0),
+                        default=500)
             for i, blk in enumerate(part_blocks):
                 row, col = divmod(i, cols)
-                w = blk.place_bbox.w if blk.place_bbox.w > 0 else 500
-                h = blk.place_bbox.h if blk.place_bbox.h > 0 else 500
-                blk.tx = Tx().move(Point(col * (w + BLK_EXT_PAD), row * (h + BLK_EXT_PAD)))
+                # Land the block's LOWER-LEFT corner on its grid slot (see the
+                # matching origin-compensation note in layout_blocks_by_role).
+                ll = blk.place_bbox.ll
+                blk.tx = Tx().move(Point(col * (max_w + BLK_EXT_PAD) - ll.x,
+                                         row * (max_h + BLK_EXT_PAD) - ll.y))
                 snap_to_grid(blk)
 
             # Apply the placement moves of the part blocks to their underlying sources.

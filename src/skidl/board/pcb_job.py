@@ -431,12 +431,32 @@ def run_pcb_job(base: str, out_dir, kicad_cli: str, layers: int = None,
         from skidl.board.conformance import check_config_conformance
         conf = check_config_conformance(base, out_dir)
         res["config_conformance"] = conf
+
         if res.get("ok") and res.get("status") == "routed" \
                 and conf.get("ok") is False:
-            res.update(ok=False, status="config_mismatch",
-                       error=("built board does not match the configured "
-                              f"setup ({', '.join(conf.get('mismatches', []))})"
-                              " -- pipeline bug, do not use"))
+            mism = list(conf.get("mismatches", []))
+
+            # A requested ground pour that the pour engine CORRECTLY declined to build
+            # (no ground net with enough pads to pour -- e.g. a trivial 2-part board) is
+            # not a pipeline bug: the board is right without one. Downgrade to an engine
+            # override instead of failing. zones==0 with no warnings = a clean decision.
+            pours = res.get("power_pours") or {}
+
+            if "ground_pour" in mism and pours.get("zones", 0) == 0 \
+                    and not pours.get("warnings"):
+                mism.remove("ground_pour")
+                conf.setdefault("overridden_user_values", []).append(
+                    {"ground_pour": "no ground net large enough to pour on this board; "
+                                    "the board is correct without one"})
+                conf["mismatches"] = mism
+
+                if not mism:
+                    conf["ok"] = True
+
+            if mism:   # any REAL mismatch remains -> still a pipeline bug
+                res.update(ok=False, status="config_mismatch",
+                           error=("built board does not match the configured "
+                                  f"setup ({', '.join(mism)}) -- pipeline bug, do not use"))
     except Exception as exc:
         res["config_conformance"] = {"ok": None, "error": repr(exc)}
 
