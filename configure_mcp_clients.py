@@ -26,6 +26,44 @@ import sys
 SERVER_KEY = "anvil-cad"
 
 
+def _update_user_path(bin_dir, remove):
+    """Add/remove <install>\\bin on the per-user PATH (HKCU\\Environment) so the
+    one-word `anvilcad-mcp` launcher works from ANY client with no path in its
+    config. Dedupes, preserves everything else, broadcasts the change."""
+    try:
+        import winreg
+        import ctypes
+    except ImportError:
+        return
+    try:
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, "Environment", 0,
+                            winreg.KEY_READ | winreg.KEY_SET_VALUE) as key:
+            try:
+                current, kind = winreg.QueryValueEx(key, "Path")
+            except FileNotFoundError:
+                current, kind = "", winreg.REG_EXPAND_SZ
+            parts = [p for p in current.split(";") if p.strip()]
+            has = any(p.strip().rstrip("\\/").lower()
+                      == bin_dir.rstrip("\\/").lower() for p in parts)
+            if remove:
+                if not has:
+                    return
+                parts = [p for p in parts
+                         if p.strip().rstrip("\\/").lower()
+                         != bin_dir.rstrip("\\/").lower()]
+            else:
+                if has:
+                    return
+                parts.append(bin_dir)
+            winreg.SetValueEx(key, "Path", 0, kind, ";".join(parts))
+        # Tell running shells/apps the environment changed (WM_SETTINGCHANGE).
+        ctypes.windll.user32.SendMessageTimeoutW(
+            0xFFFF, 0x1A, 0, "Environment", 0x0002, 5000, None)
+        print(("PATH removed:" if remove else "PATH added:"), bin_dir)
+    except OSError as e:
+        print(f"skip PATH update: {e}")
+
+
 def _targets():
     home = os.path.expanduser("~")
     appdata = os.environ.get("APPDATA", os.path.join(home, "AppData", "Roaming"))
@@ -65,6 +103,11 @@ def main():
         "args": [os.path.join(install, "share", "anvil", "ai",
                               "skidl_mcp_server.py")],
     }
+
+    # One-word launcher for every OTHER client: put <install>\bin on the user
+    # PATH so `anvilcad-mcp` (anvilcad-mcp.cmd, shipped in bin) works with no
+    # path at all in any client's config.
+    _update_user_path(os.path.join(install, "bin"), remove)
 
     for path, create in _targets():
         exists = os.path.isfile(path)
