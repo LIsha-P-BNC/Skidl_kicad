@@ -38,13 +38,29 @@ from mcp.server.fastmcp import FastMCP
 # --- make THIS repo's skidl win over any pip-installed copy --------------------
 REPO = Path(__file__).resolve().parent
 SRC = REPO / "src"
+if not (SRC / "skidl").is_dir() and (REPO / "skidl").is_dir():
+    # Installed layout tolerance: some payloads drop the src CONTENTS beside the
+    # server (<here>\skidl\...) instead of under <here>\src\skidl. Accept both --
+    # a missing skidl core here kills the whole AI tool server on a shared
+    # machine ("circuit tools aren't exposed") with no dev tree to fall back to.
+    SRC = REPO
 if SRC.is_dir() and str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
 # Root under which generated circuits land. Each project gets its OWN subfolder:
 #   <OUT>/<project>/<project>.anvil_pro  (+ .py/.net/.anvil_sch/.anvil_pcb/logs).
 # Override the ROOT with env SKIDL_MCP_OUT, or a single project with build(folder=...).
-OUT = Path(os.environ.get("SKIDL_MCP_OUT", r"F:/Anvil"))
+# Default is machine-relative, never a fixed drive letter: the dev box's F:\Anvil
+# is used only when that drive actually exists; every other machine (a shared
+# install) gets <home>\Anvil. A hardcoded F:\ default crashed the whole server at
+# import on machines without an F: drive.
+_out_env = os.environ.get("SKIDL_MCP_OUT", "")
+if _out_env:
+    OUT = Path(_out_env)
+elif Path("F:/").exists():
+    OUT = Path(r"F:/Anvil")
+else:
+    OUT = Path.home() / "Anvil"
 OUT.mkdir(parents=True, exist_ok=True)
 
 # base -> explicit project directory, set when build() is called with folder=.
