@@ -158,6 +158,23 @@ def _parse_courtyard(fp_expr) -> Optional[tuple]:
                 xs.append(float(xy[1]))
                 ys.append(float(xy[2]))
 
+    # fp_circle: round courtyards (radial/electrolytic caps like
+    # CP_Radial_D8.0mm, round parts) draw the courtyard as ONE circle, not
+    # line segments. Skipping it returned None -> the placer fell back to a
+    # 5 mm box and packed neighbors INTO the part (measured: 8 mm C2 overlapped
+    # Q1). center + a point on the rim (end) give the radius -> bbox.
+    import math
+    for entry in sexp.find_all(fp_expr, "fp_circle"):
+        if not _on_courtyard_layer(entry):
+            continue
+        c = sexp.find_one(entry, "center")
+        e = sexp.find_one(entry, "end")
+        if c and e:
+            cx, cy = float(c[1]), float(c[2])
+            r = math.hypot(float(e[1]) - cx, float(e[2]) - cy)
+            xs.extend([cx - r, cx + r])
+            ys.extend([cy - r, cy + r])
+
     if not xs:
         return None
     return (min(xs), min(ys), max(xs), max(ys))

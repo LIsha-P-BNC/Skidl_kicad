@@ -200,6 +200,15 @@ def get_board_setup(base: str, out_dir) -> dict:
                             if k not in ("board", "net_settings")},
     }
     raw["custom_dru"] = dru_path.is_file()
+    if raw["custom_dru"]:
+        # CONTENT hash, not just existence: editing a rule inside an
+        # existing .kicad_dru must flip setup_hash so a stale approval
+        # ("setup unchanged") cannot survive a silently changed rule set.
+        try:
+            raw["custom_dru_sha256"] = hashlib.sha256(
+                dru_path.read_bytes()).hexdigest()
+        except OSError:
+            raw["custom_dru_sha256"] = "unreadable"
 
     sidecar = {}
     if sidecar_path.is_file():

@@ -3169,6 +3169,82 @@ class Router:
                             count += 1
         return count
 
+    def find_cross_net_shorts(node):
+        """Find places where wires of DIFFERENT nets would be joined by KiCad.
+
+        A jumper/bridge crossing is CORRECT only when two different-net wires
+        pass fully THROUGH each other (each segment's crossing point is interior
+        to BOTH) with no junction dot -- KiCad leaves that unconnected. The
+        SILENT-SHORT cases, which KiCad auto-connects even without a dot, are:
+          1. T-junction: an ENDPOINT of one net's wire lands on the INTERIOR of
+             another net's wire.
+          2. Shared endpoint: two different nets' wire endpoints coincide.
+          3. Collinear overlap: two different nets' colinear wires overlap.
+        A pure 4-way crossing (interior/interior) is NOT flagged.
+
+        This is a geometry-only check (no kicad-cli needed): it catches a jumper
+        crossing that was drawn as a real connection so the seed sweep can pick a
+        clean route or fall back to labels (see verify_connectivity for the
+        exported-netlist backstop). Returns a list of (net_a, net_b, Point).
+
+        Args:
+            node: A routed SchNode with a `.wires` dict of net -> [Segment].
+
+        Returns:
+            List[Tuple[net, net, Point]]: one entry per cross-net short found.
+        """
+
+        def on_interior(pt, seg):
+            # pt lies strictly between seg's endpoints on the segment line.
+            if seg.p1.y == seg.p2.y:                       # horizontal
+                lo, hi = sorted((seg.p1.x, seg.p2.x))
+                return pt.y == seg.p1.y and lo < pt.x < hi
+            if seg.p1.x == seg.p2.x:                       # vertical
+                lo, hi = sorted((seg.p1.y, seg.p2.y))
+                return pt.x == seg.p1.x and lo < pt.y < hi
+            return False
+
+        def pt_eq(a, b):
+            return a.x == b.x and a.y == b.y
+
+        def collinear_overlap(a, b):
+            # Both horizontal, same Y, x-ranges overlap over a real length.
+            if a.p1.y == a.p2.y and b.p1.y == b.p2.y and a.p1.y == b.p1.y:
+                a_lo, a_hi = sorted((a.p1.x, a.p2.x))
+                b_lo, b_hi = sorted((b.p1.x, b.p2.x))
+                return max(a_lo, b_lo) < min(a_hi, b_hi)
+            # Both vertical, same X, y-ranges overlap over a real length.
+            if a.p1.x == a.p2.x and b.p1.x == b.p2.x and a.p1.x == b.p1.x:
+                a_lo, a_hi = sorted((a.p1.y, a.p2.y))
+                b_lo, b_hi = sorted((b.p1.y, b.p2.y))
+                return max(a_lo, b_lo) < min(a_hi, b_hi)
+            return False
+
+        shorts = []
+        items = list(node.wires.items())
+        for i, (net_a, segs_a) in enumerate(items):
+            for net_b, segs_b in items[i + 1 :]:
+                for sa in segs_a:
+                    for sb in segs_b:
+                        # (1) endpoint of one net on the interior of the other.
+                        touch = next(
+                            (p for p in (sa.p1, sa.p2) if on_interior(p, sb)), None
+                        ) or next(
+                            (p for p in (sb.p1, sb.p2) if on_interior(p, sa)), None
+                        )
+                        # (2) coincident endpoints of the two nets.
+                        if touch is None:
+                            for pa in (sa.p1, sa.p2):
+                                if any(pt_eq(pa, pb) for pb in (sb.p1, sb.p2)):
+                                    touch = pa
+                                    break
+                        # (3) colinear overlap of the two nets.
+                        if touch is None and collinear_overlap(sa, sb):
+                            touch = sa.p1
+                        if touch is not None:
+                            shorts.append((net_a, net_b, touch))
+        return shorts
+
     def rmv_routing_stuff(node):
         """Remove attributes added to parts/pins during routing."""
 
@@ -3322,6 +3398,26 @@ class Router:
             # Now clean-up the wires and add junctions.
             node.cleanup_wires()
             node.add_junctions()
+
+            # JUMPER/BRIDGE GUARD: reject a route that drew two DIFFERENT nets
+            # touching (a crossing rendered as a real connection). Raising here
+            # makes the seed sweep pick a clean route, and a child that can't be
+            # routed cleanly is collapsed to labels by its parent (labels never
+            # short) -- exactly how a correct jumper must be handled. Default ON;
+            # set SKIDL_CROSS_NET_SHORT_GUARD=0 to disable.
+            import os as _os
+            if _os.environ.get("SKIDL_CROSS_NET_SHORT_GUARD", "1") != "0":
+                shorts = node.find_cross_net_shorts()
+                if shorts:
+                    from skidl.logger import active_logger
+                    _s = shorts[0]
+                    active_logger.warning(
+                        f"cross-net short at a wire crossing: nets "
+                        f"'{_s[0]}' and '{_s[1]}' touch "
+                        f"({len(shorts)} point(s)) -- re-routing to keep the "
+                        f"crossing unconnected."
+                    )
+                    raise RoutingFailure
 
             # If enabled, draw the global and detailed routing for debug purposes.
             if options.get("draw_switchbox_routing"):

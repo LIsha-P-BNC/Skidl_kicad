@@ -23,13 +23,26 @@ from pathlib import Path
 _REPO = Path(__file__).resolve().parents[4]
 
 
+def _app_freerouting_dir() -> Path:
+    """The app-owned FreeRouting resource the C++ build installs
+    (<stock-data>/freerouting). When shipped, skidl lives at
+    <stock-data>/ai, so this is _REPO.parent/freerouting. This is the
+    SINGLE canonical copy both the native app and the AI share -- no
+    duplicate 56 MB bundle."""
+    return _REPO.parent / "freerouting"
+
+
 def find_java() -> str:
-    """Locate a java.exe: env JAVA_EXE, the repo's portable tools/jre,
-    PATH, JAVA_HOME, then Adoptium/Temurin install dirs. Empty string if
-    none found."""
+    """Locate a java.exe: env JAVA_EXE, the app-owned freerouting/jre, the
+    repo's portable tools/jre, PATH, JAVA_HOME, then Adoptium/Temurin install
+    dirs. Empty string if none found."""
     env_exe = os.environ.get("JAVA_EXE")
     if env_exe and Path(env_exe).is_file():
         return env_exe
+
+    app_jre = sorted(_app_freerouting_dir().glob("jre/**/bin/java.exe"))
+    if app_jre:
+        return str(app_jre[0])
 
     portable = sorted(_REPO.glob("tools/jre/**/bin/java.exe"))
     if portable:
@@ -71,6 +84,11 @@ def find_freerouting_jars() -> list:
     env_jar = os.environ.get("FREEROUTING_JAR")
     if env_jar and Path(env_jar).is_file():
         jars.append(env_jar)
+    # app-owned single copy first (what the shipped exe installs), then the
+    # dev-tree tools/ dir.
+    app_main = _app_freerouting_dir() / "freerouting.jar"
+    if app_main.is_file():
+        jars.append(str(app_main))
     tools = _REPO / "tools"
     main = tools / "freerouting.jar"
     if main.is_file():

@@ -270,6 +270,29 @@ def build_pcb(netlist_path, out_dir=None, name=None, layers=None,
         place_report["outline_note"] = (
             f"requested {want_w}x{want_h} mm; parts need {auto_w:.1f}x{auto_h:.1f} -> "
             f"final {W:.1f}x{H:.1f}")
+        # CENTER the placed cluster inside the grown board. The placer packs
+        # parts tight at the origin corner; growing the outline to the user's
+        # size left them hugging the bottom-left, where the corner mounting
+        # holes / edge then collide with them (PTH-inside-courtyard, hole
+        # clearance). A rigid group shift to center can NEVER add a courtyard
+        # overlap (relative positions unchanged). Generic -- every circuit.
+        _cbx = [fp.courtyard_world_bbox() or
+                (fp.x - 2.5, fp.y - 2.5, fp.x + 2.5, fp.y + 2.5)
+                for fp in board.footprints]
+        if _cbx:
+            _cminx = min(b[0] for b in _cbx); _cminy = min(b[1] for b in _cbx)
+            _cmaxx = max(b[2] for b in _cbx); _cmaxy = max(b[3] for b in _cbx)
+            _cw, _ch = _cmaxx - _cminx, _cmaxy - _cminy
+            # Only center on an axis where the cluster actually fits with a
+            # margin; clamp so nothing is pushed off the board.
+            _sx = max(0.0, (W - _cw) / 2.0) - _cminx if _cw <= W else -_cminx
+            _sy = max(0.0, (H - _ch) / 2.0) - _cminy if _ch <= H else -_cminy
+            _sx, _sy = round(_sx, 2), round(_sy, 2)
+            if _sx or _sy:
+                for fp in board.footprints:
+                    fp.x = round(fp.x + _sx, 2)
+                    fp.y = round(fp.y + _sy, 2)
+                place_report["centered_in_board"] = [_sx, _sy]
 
     holes_size = sidecar.get("mounting_holes")
     if holes_size and not (mech and mech.hole_positions):
@@ -372,7 +395,20 @@ def build_pcb(netlist_path, out_dir=None, name=None, layers=None,
     # single ad-hoc B.Cu GND pour). kicad-cli computes the actual fill on
     # refill; the DRC gate in pcb_job proves unconnected == 0.
     board.zones.extend(pour_zones)
-    board.vias.extend(pour_vias)
+    # Stitching vias are only valid AFTER routing -- the block above REPLANS
+    # them against real copper. In placement-only mode (route=False) the
+    # pre-route plan (component courtyards only) would stamp GND vias on top
+    # of other-net pads -> phantom "hole clearance 0.0" + "shorting two nets"
+    # DRC errors on a board that is simply not routed yet. Skip them; routing
+    # adds the correct replanned set. Generic -- every place-then-ask board.
+    if route:
+        board.vias.extend(pour_vias)
+    elif report.get("power_pours"):
+        report["power_pours"]["stitch_vias"] = 0
+        report["power_pours"]["note"] = (
+            "stitching vias deferred to routing (placement-only board; "
+            "pre-route vias would create phantom hole-clearance/short DRC "
+            "errors)")
 
     pcb = write_pcb(board, out_dir / f"{base}.anvil_pcb", carry_forward=carry_forward,
                     mask_clearance=mask_clearance)

@@ -1541,6 +1541,39 @@ def hierarchical_label_to_sexp(net_name, pt_x, pt_y, angle=180):
 
 MILS_TO_MM = 0.0254
 
+# Keep content off the page border and the title-block frame. Every symbol and
+# every wire endpoint stays at least this far inside the sheet edge.
+PAGE_MARGIN_MM = 10.0
+
+
+def _fit_paper(bbox):
+    """Choose a page that is GUARANTEED to contain *bbox* (mils) plus a margin
+    on every side, and return (paper_tail, pw_mm, ph_mm).
+
+    ``paper_tail`` is the tail of the KiCad ``(paper ...)`` sexp:
+      * a standard name -> ``["A3"]``
+      * content larger than A0 -> a custom page ``["User", w_mm, h_mm]`` sized
+        to the content, so a part or wire is NEVER drawn outside the border.
+
+    The page grows to the content (dynamic, no fixed size); content is never
+    scaled, so pin/wire grid alignment and connectivity are untouched."""
+    import math
+
+    w = abs(bbox.w) if bbox.w and not math.isinf(bbox.w) else 0
+    h = abs(bbox.h) if bbox.h and not math.isinf(bbox.h) else 0
+    need_w = w * MILS_TO_MM + 2 * PAGE_MARGIN_MM
+    need_h = h * MILS_TO_MM + 2 * PAGE_MARGIN_MM
+
+    for name, (pw, ph) in A_SIZES.items():
+        if need_w <= pw and need_h <= ph:
+            return ([name], pw, ph)
+
+    # Bigger than A0: emit a custom 'User' page that fits content + margin,
+    # rounded up to whole mm so nothing clips at the very edge.
+    uw = float(math.ceil(need_w))
+    uh = float(math.ceil(need_h))
+    return (["User", uw, uh], uw, uh)
+
 
 def _calc_sheet_tx(bbox):
     """Calculate transformation matrix for placing circuitry in a sheet.
@@ -1548,13 +1581,15 @@ def _calc_sheet_tx(bbox):
     Mirrors the kicad5 calc_sheet_tx pattern:
       1. Y-flip via d=-1 (placement engine is Y-up, KiCad is Y-down)
       2. Mils-to-mm conversion via a/d scaling (KiCad 9 uses mm)
-      3. Center content on the chosen paper size
+      3. Center content on a page sized to CONTAIN it (see _fit_paper)
 
     The Y-flip is built into this transform so callers must NOT apply
     tx_flip_y separately (that would double-flip and cancel it out).
+
+    Returns (tx, paper_tail) where paper_tail is the ``(paper ...)`` sexp tail
+    (splice with ``*paper_tail``).
     """
-    paper = _pick_paper_size(bbox)
-    pw, ph = A_SIZES[paper]  # mm
+    paper, pw, ph = _fit_paper(bbox)  # mm; page always contains bbox + margin
 
     # Apply Y-flip + mils→mm in one transform, then center on page.
     page_bbox = bbox * Tx(a=MILS_TO_MM, d=-MILS_TO_MM)
@@ -1675,13 +1710,28 @@ def node_to_sexp_schematic(node, sheet_tx=Tx(), version=20230409, circuit=None):
             print(f"blockbox skipped for '{getattr(node, 'name', '?')}': {_bx}",
                   file=_sys.stderr)
 
-    # Collect lib_symbols needed for this node's parts.
+    # Collect lib_symbols needed for this node's parts -- INCLUDING every
+    # flattened descendant (functional-group blocks drawn INLINE on this sheet).
+    # A grouped part lives in a child group-node, so collecting only node.parts
+    # left its symbol UNDEFINED in this sheet's lib_symbols; the symbol instance
+    # was still emitted (the recursion above returns its sexp), but kicad-cli
+    # cannot resolve an instance with no lib_symbol definition, so every pin of
+    # every blocked part vanished from the exported netlist ("lost pins not
+    # rendered at all") and multi-sheet-with-blocks always failed verification.
+    # Unflattened children are separate sheets writing their own lib_symbols.
     lib_symbols = {}
-    for part in node.parts:
-        if not isinstance(part, NetTerminal):
-            lib_id = f"{part.lib.filename}:{part.name}"
-            if lib_id not in lib_symbols:
-                lib_symbols[lib_id] = part
+
+    def _collect_lib_symbols(n):
+        for part in n.parts:
+            if not isinstance(part, NetTerminal):
+                lib_id = f"{part.lib.filename}:{part.name}"
+                if lib_id not in lib_symbols:
+                    lib_symbols[lib_id] = part
+        for ch in n.children.values():
+            if getattr(ch, "flattened", False):
+                _collect_lib_symbols(ch)
+
+    _collect_lib_symbols(node)
 
     # Generate part S-expressions.
     for part in node.parts:
@@ -1786,7 +1836,10 @@ def node_to_sexp_schematic(node, sheet_tx=Tx(), version=20230409, circuit=None):
             ["generator", "skidl"],
             ["generator_version", __version__],
             ["uuid", _gen_uuid(f"sheet:{node.sheet_filename}")],
-            ["paper", paper if not node.flattened else "A3"],
+            # A flattened node draws onto the parent page, so size its own file
+            # to its content too (never a fixed A3 that its content can overrun).
+            ["paper", *(paper if not node.flattened
+                        else _fit_paper(node.internal_bbox())[0])],
         ]
     )
     schematic.append(Sexp(create_title_block_sexp(node.title)))
@@ -1926,7 +1979,7 @@ def write_top_schematic(circuit, node, filepath, top_name, title, version=202304
             ["generator", "skidl"],
             ["generator_version", __version__],
             ["uuid", root_uuid],
-            ["paper", paper],
+            ["paper", *paper],
         ]
     )
     schematic.append(Sexp(create_title_block_sexp(title)))

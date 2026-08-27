@@ -189,14 +189,19 @@ def _flag_instance(x, y, ref, proj, path, u_sym, u_pin):
 '''
 
 
-def _add_to_file(sch_path, nets, driven=frozenset(), already=frozenset()):
+def _add_to_file(sch_path, nets, driven=frozenset(), already=frozenset(), flag_start=1):
     """Add PWR_FLAG for each net in `nets` whose power symbol lives in this sheet,
     PLUS every power-symbol rail on the sheet not driven by a POWER-OUT pin
     (a rail used only through power symbols shows no POWER-IN in the netlist,
     but KiCad still errors on the symbol's own power-input pin). Nets in
     `already` were flagged on another sheet -- global rails need exactly ONE
     flag per project (two PWR_FLAGs on a net is itself an ERC conflict).
-    Returns list of net names flagged here."""
+
+    `flag_start` is the first #FLG number this sheet may use. #FLG references are
+    annotated GLOBALLY across the whole hierarchy, so each sheet must continue the
+    project-wide counter rather than restart at #FLG01 -- otherwise two sheets each
+    stamp their first flag #FLG01 and KiCad reports a duplicate-reference error.
+    Returns (list of net names flagged here, next free #FLG number)."""
     text = open(sch_path, encoding="utf-8", errors="replace").read()
 
     rails = set(re.findall(r'\(lib_id\s+"power:([^"]+)"\)', text))
@@ -204,15 +209,17 @@ def _add_to_file(sch_path, nets, driven=frozenset(), already=frozenset()):
     nets = list(nets) + sorted(rails - set(nets) - set(driven))
     nets = [n for n in nets if n not in already]
     if not nets:
-        return []
+        return [], flag_start
 
     # instance-path metadata copied from any existing symbol on this sheet
     pm = re.search(r'\(instances\s*\(project\s+"([^"]*)"\s*\(path\s+"([^"]+)"', text)
     proj, path = (pm.group(1), pm.group(2)) if pm else ("", "/")
 
-    # next free #FLG number (KiCad numbers them #FLG01, #FLG02, ...)
+    # next free #FLG number (KiCad numbers them #FLG01, #FLG02, ...). Continue the
+    # project-wide counter (flag_start) so numbers stay unique ACROSS sheets, and
+    # also step over any #FLG already present on THIS sheet (idempotent re-runs).
     used = [int(n) for n in re.findall(r'"#FLG0*(\d+)"', text)]
-    nxt = max(used) + 1 if used else 1
+    nxt = max([flag_start - 1] + used) + 1
 
     done, inserts = [], []
     for net in nets:
@@ -274,13 +281,13 @@ def _add_to_file(sch_path, nets, driven=frozenset(), already=frozenset()):
         done.append(net)
 
     if not done:
-        return []
+        return [], nxt
 
     # embed the PWR_FLAG lib symbol once
     if '"power:PWR_FLAG"' not in text:
         ls = re.search(r"\(lib_symbols", text)
         if not ls:
-            return []
+            return [], nxt
         end = _close_of(text, ls.start())
         text = text[:end] + "\n" + _PWR_FLAG_LIB + text[end:]
 
@@ -290,7 +297,7 @@ def _add_to_file(sch_path, nets, driven=frozenset(), already=frozenset()):
 
     with open(sch_path, "w", encoding="utf-8") as f:
         f.write(text)
-    return done
+    return done, nxt
 
 
 def add(name, netlist=None):
@@ -298,9 +305,9 @@ def add(name, netlist=None):
     base = name[:-10] if name.endswith(".anvil_sch") else name
     nets, driven = _nets_needing_flag(netlist or base + ".net")
     remaining, flagged = list(nets), set()
-    total = 0
+    total, next_flag = 0, 1
     for sch in glob.glob(base + ".anvil_sch") + glob.glob(base + "_*.anvil_sch"):
-        placed = _add_to_file(sch, remaining, driven, flagged)
+        placed, next_flag = _add_to_file(sch, remaining, driven, flagged, next_flag)
         total += len(placed)
         flagged.update(placed)
     return total

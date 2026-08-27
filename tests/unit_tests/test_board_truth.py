@@ -25,7 +25,7 @@ from skidl.board.rule_discovery import resolve_board_config
 
 def _pcb(tmp, base, generator="skidl_board", copper=("F.Cu", "B.Cu"),
          thickness=1.6, mask=None, edge=None):
-    """Minimal .kicad_pcb with a layer table, general block, setup block
+    """Minimal .anvil_pcb with a layer table, general block, setup block
     and (optionally) a rectangular Edge.Cuts outline."""
     layer_rows = "".join(f'\n\t\t({i} "{n}" signal)'
                          for i, n in enumerate(copper))
@@ -43,7 +43,7 @@ def _pcb(tmp, base, generator="skidl_board", copper=("F.Cu", "B.Cu"),
             f'\t(layers{layer_rows}\n\t)\n'
             f'\t(setup{mask_txt}\n\t\t(pad_to_paste_clearance 0)\n\t)\n'
             f'{edge_txt}\n)\n')
-    (tmp / f"{base}.kicad_pcb").write_text(text, encoding="utf-8")
+    (tmp / f"{base}.anvil_pcb").write_text(text, encoding="utf-8")
     return text
 
 
@@ -56,7 +56,7 @@ def _pcb_extra(tmp, base, extra, **kw):
     """Fixture board with extra content blocks appended before the close."""
     text = _pcb(tmp, base, **kw)
     text = text.rstrip()[:-1] + extra + "\n)\n"
-    (tmp / f"{base}.kicad_pcb").write_text(text, encoding="utf-8")
+    (tmp / f"{base}.anvil_pcb").write_text(text, encoding="utf-8")
     return text
 
 
@@ -75,7 +75,7 @@ def test_edit_status_matrix(tmp_path):
     assert bs.board_edit_status(base, tmp_path)["machine_generated"] is True
 
     # user edit: content changes after the stamp (even with our generator)
-    p = tmp_path / f"{base}.kicad_pcb"
+    p = tmp_path / f"{base}.anvil_pcb"
     p.write_text(p.read_text(encoding="utf-8").replace("1.6", "1.2"),
                  encoding="utf-8")
     st = bs.board_edit_status(base, tmp_path)
@@ -500,7 +500,7 @@ def test_server_detect_manual_edits_agrees(tmp_path):
     assert srv._detect_manual_edits(base) is None
     assert bs.board_edit_status(base, tmp_path)["machine_generated"] is True
 
-    p = tmp_path / f"{base}.kicad_pcb"
+    p = tmp_path / f"{base}.anvil_pcb"
     p.write_text(p.read_text(encoding="utf-8") + "\n", encoding="utf-8")
     assert srv._detect_manual_edits(base) is not None
     assert bs.board_edit_status(base, tmp_path)["machine_generated"] is False

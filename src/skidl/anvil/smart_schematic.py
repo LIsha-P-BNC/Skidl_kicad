@@ -79,7 +79,31 @@ _PRO_TEMPLATE = {
     "cvpcb": {"equivalence_files": []},
     "libraries": {"pinned_footprint_libs": [], "pinned_symbol_libs": []},
     "meta": {"filename": "", "version": 1},
-    "net_settings": {"classes": [{"name": "Default"}], "meta": {"version": 3}},
+    # The Default netclass MUST carry the full key set the app itself writes.
+    # A skeletal {"name": "Default"} loads in the CLI but leaves the GUI's
+    # NET_SETTINGS without a usable default class -- schematic connectivity
+    # then computes EVERY pin as unconnected (wires ignored, junction dots
+    # rendered at wire_width 0), which is exactly the "AI project: manual
+    # wires won't connect / no dots" bug. Values = the app's own defaults.
+    "net_settings": {"classes": [{
+        "bus_width": 12,
+        "clearance": 0.2,
+        "diff_pair_gap": 0.25,
+        "diff_pair_via_gap": 0.25,
+        "diff_pair_width": 0.2,
+        "line_style": 0,
+        "microvia_diameter": 0.3,
+        "microvia_drill": 0.1,
+        "name": "Default",
+        "pcb_color": "rgba(0, 0, 0, 0.000)",
+        "priority": 2147483647,
+        "schematic_color": "rgba(0, 0, 0, 0.000)",
+        "track_width": 0.2,
+        "tuning_profile": "",
+        "via_diameter": 0.6,
+        "via_drill": 0.3,
+        "wire_width": 6,
+    }], "meta": {"version": 3}},
     "pcbnew": {"last_paths": {}, "page_layout_descr_file": ""},
     "schematic": {"legacy_lib_dir": "", "legacy_lib_list": [], "meta": {"version": 1}},
     "sheets": [],
@@ -336,15 +360,38 @@ def build(name=None, title="SKiDL-Generated Schematic", auto_stub_fanout=None,
     _auto_group_min = int(os.environ.get("SKIDL_AUTO_GROUP_MIN", "25"))
     # min distinct blocks that make a small design "worth boxing" (env-tunable).
     _auto_group_min_blocks = int(os.environ.get("SKIDL_AUTO_GROUP_MIN_BLOCKS", "2"))
-    if not _has_hier and not _has_groups:
+    # HIERARCHICAL scripts get the SAME treatment PER PAGE: every @subcircuit
+    # child sheet is itself laid out "single-sheet-with-blocks", so its clusters
+    # must carry .group tags too (a group renders as a boxed section INSIDE its
+    # page -- it never splits sheets, so the multi-sheet netlist caveat below
+    # does not apply). On a page the bar is lower: even ONE anchor cluster is
+    # boxed (env SKIDL_PAGE_GROUP_MIN_BLOCKS) so each sheet reads as the boxed
+    # block(s) the single-sheet mode would have drawn. Anchor-less pages (bare
+    # connectors / test points) yield no clusters and stay flat. Fully dynamic:
+    # buckets come from the design's own hierarchy, nothing circuit-specific.
+    _page_group_min_blocks = int(os.environ.get("SKIDL_PAGE_GROUP_MIN_BLOCKS", "1"))
+    if not _has_groups:
         try:
             from skidl.schematics.cluster import detect_clusters
-            _clusters = [c for c in detect_clusters(_real_parts) if len(c) >= 2]
-            # Group if the sheet is big (count gate) OR it splits into >=2 blocks.
-            _should_group = (n_parts > _auto_group_min
-                             or len(_clusters) >= _auto_group_min_blocks)
+            # One bucket per @subcircuit page; a flat script = one top bucket,
+            # which reproduces the old whole-design behavior exactly.
+            _buckets = {}
+            for _p in _real_parts:
+                try:
+                    _key = tuple(_p.hiertuple)
+                except Exception:
+                    _key = ("top",)
+                _buckets.setdefault(_key, []).append(_p)
             _made = 0
-            if _should_group:
+            for _key, _bparts in _buckets.items():
+                _clusters = [c for c in detect_clusters(_bparts) if len(c) >= 2]
+                _min_blocks = (_page_group_min_blocks if len(_key) > 1
+                               else _auto_group_min_blocks)
+                # Group if the page is big (count gate) OR it yields enough blocks.
+                _should_group = (len(_bparts) > _auto_group_min
+                                 or len(_clusters) >= _min_blocks)
+                if not _should_group:
+                    continue
                 for _cl in _clusters:
                     _anchor = max(_cl, key=lambda p: len(getattr(p, "pins", [])))
                     _gname = f"{_anchor.ref} {getattr(_anchor, 'name', '')}".strip()
@@ -358,7 +405,8 @@ def build(name=None, title="SKiDL-Generated Schematic", auto_stub_fanout=None,
             if _made:
                 _has_groups = True
                 print(f">>> smart_schematic: auto-grouped {_made} functional "
-                      f"block(s) from the connectivity graph")
+                      f"block(s) from the connectivity graph "
+                      f"across {len(_buckets)} page(s)")
         except Exception as _e:
             warnings.warn(f"smart_schematic: auto-grouping skipped: {_e}",
                           RuntimeWarning)
@@ -974,6 +1022,19 @@ def build(name=None, title="SKiDL-Generated Schematic", auto_stub_fanout=None,
             print(f">>> smart_schematic: added {k} PWR_FLAG(s) -- power rails ERC-clean")
         return k
 
+    def _do_junctions(p):
+        # FINAL connectivity heal: the editor connects wires only at endpoint
+        # coincidences or explicit (junction) records -- a wire end touching
+        # another wire's interior with no junction record is electrically dead.
+        # The router's add_junctions() runs before the geometry passes above,
+        # so any strap/stub/merge they produce can ship a dotless T. Re-derive
+        # junctions from the final sheet text and add every missing record.
+        import ensure_junctions
+        j = ensure_junctions.ensure(p)
+        if j:
+            print(f">>> smart_schematic: added {j} missing wire junction(s)")
+        return j
+
     def _do_labeltaps(p):
         # a label connects by sitting ON a wire -- tap wires (and the junction
         # dot their T forces) are removable; fewer wires, zero fragile dots
@@ -992,6 +1053,9 @@ def build(name=None, title="SKiDL-Generated Schematic", auto_stub_fanout=None,
         _guarded(sheet_path, _do_beautify, "wire beautify")
         _guarded(sheet_path, _do_labeltaps, "label-tap removal")
         _guarded(sheet_path, _do_gridsnap, "grid snap")
+        # AFTER every wire-geometry pass: heal any dotless wire-T the passes
+        # above (or the router's ordering-sensitive add_junctions) left behind.
+        _guarded(sheet_path, _do_junctions, "junction heal")
         # The geometry passes above can detach a decorative net-name label from
         # its wire, so make one final guarded cleanup pass on every hierarchy page.
         _guarded(sheet_path, _do_strip, "dangling-label strip (final)")

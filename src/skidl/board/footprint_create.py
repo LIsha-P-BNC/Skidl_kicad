@@ -6,7 +6,7 @@ blocked the real tracker board: EC200U's 144-pad LGA and TPS2117's
 SOT-5X3 have no stock footprints).
 
 Two modes, both landing in a user-writable library the entire pipeline
-already resolves (KICAD9_FOOTPRINT_DIR/<lib>.pretty/<name>.kicad_mod;
+already resolves (KICAD9_FOOTPRINT_DIR/<lib>.pretty/<name>.anvil_mod;
 the board writer embeds footprints verbatim, so the app renders them
 without any fp-lib-table registration):
 
@@ -163,8 +163,11 @@ def grid_pads(rows: int, cols: int, pitch: float, pad_w: float, pad_h: float,
 
 
 def _write(lib: str, name: str, content: str) -> Path:
+    # Save with the Anvil-native ".anvil_mod" extension so a generated
+    # custom footprint matches the rest of the store (the app reads both
+    # .anvil_mod and .kicad_mod, but the store convention is .anvil_mod).
     pretty = _footprint_root() / f"{lib}.pretty"
     pretty.mkdir(parents=True, exist_ok=True)
-    out = pretty / f"{name}.kicad_mod"
+    out = pretty / f"{name}.anvil_mod"
     out.write_text(content, encoding="utf-8")
     return out

@@ -173,7 +173,7 @@ def test_user_saved_board_suppresses_questions(tmp_path):
                          (100, 60, 0, 60), (0, 60, 0, 0)]:
         edge += (f'\n\t(gr_line\n\t\t(start {a} {b})\n\t\t(end {c} {d})'
                  f'\n\t\t(layer "Edge.Cuts")\n\t)')
-    (tmp_path / f"{base}.kicad_pcb").write_text(
+    (tmp_path / f"{base}.anvil_pcb").write_text(
         '(kicad_pcb\n\t(version 20240108)\n\t(generator "pcbnew")\n'
         f'\t(layers{rows}\n\t)\n{edge}\n)\n', encoding="utf-8")
     out = generate_questionnaire(base, tmp_path)

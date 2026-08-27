@@ -319,17 +319,35 @@ def plan_stitching_vias(board: BoardModel, assignments: dict,
         obstacles.append(ko.bbox())
 
     minx, miny, maxx, maxy = bbox_of(outline)
-    min_via_gap = spacing_mm * 0.5
+
+    # BOUNDED, DENSITY-DRIVEN stitching (NOT an area carpet-bomb). Return-path
+    # integrity needs a SPARSE set of ties -- a handful even on a big board --
+    # not one via per grid node (that gave ~W*H/25 vias: 240 on a 74x100 mm
+    # board). We budget vias by board AREA at ~1 per MM2_PER_VIA, hard-capped,
+    # then widen the grid so it yields about that many. Anywhere the ground
+    # pour ACTUALLY fragments is caught separately + need-based by the
+    # post-route island healer (find_ground_islands / plan_island_vias), so a
+    # sparse grid here can never strand a pin. Fully dynamic -- scales with the
+    # board, identical rule on a 20 mm or 300 mm board.
+    MM2_PER_VIA = 400.0        # ~1 stitch via per 4 cm2 of pour
+    MAX_STITCH_VIAS = 48       # absolute ceiling regardless of board size
+    MIN_STITCH_VIAS = 4        # a 2-layer pour still wants a few ties
+    area = max(1.0, (maxx - minx) * (maxy - miny))
+    budget = max(MIN_STITCH_VIAS, min(MAX_STITCH_VIAS, int(area / MM2_PER_VIA)))
+    # Widen the grid so ~budget nodes fall inside the outline; never tighter
+    # than the caller's spacing_mm (RF/high-speed can still ask for dense).
+    eff_spacing = max(spacing_mm, (area / budget) ** 0.5)
+    min_via_gap = eff_spacing * 0.5
 
     for name, layers in assignments.items():
         if len(layers) < 2:
             continue                                   # nothing to stitch
         via_layers = (layers[0], layers[-1])           # span outer pours -> ties inner
         placed = 0
-        y = miny + spacing_mm / 2.0
-        while y <= maxy:
-            x = minx + spacing_mm / 2.0
-            while x <= maxx:
+        y = miny + eff_spacing / 2.0
+        while y <= maxy and placed < budget:
+            x = minx + eff_spacing / 2.0
+            while x <= maxx and placed < budget:
                 pt = (x, y)
                 if (point_in_polygon(pt, outline)
                         and not any(bbox_contains(bb, pt, margin) for bb in obstacles)
@@ -338,12 +356,13 @@ def plan_stitching_vias(board: BoardModel, assignments: dict,
                     vias.append(Via(net=name, at=pt, size=via_size,
                                     drill=via_drill, layers=via_layers))
                     placed += 1
-                x += spacing_mm
-            y += spacing_mm
+                x += eff_spacing
+            y += eff_spacing
         if placed == 0:
             warnings.append(
-                f"stitch {name}: no legal via location on the {spacing_mm}mm "
-                "grid (dense board) -- return path may be weak")
+                f"stitch {name}: no legal via location on the "
+                f"{eff_spacing:.1f}mm grid (dense board) -- island healer will "
+                "add ties where the pour actually splits")
     return vias, warnings
 
 

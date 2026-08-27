@@ -13,12 +13,16 @@ every build produces .net + .anvil_sch + .anvil_pro files and returns their path
 
 Tools (call build(mode='rules') FIRST, then follow its workflow):
   build(mode='rules')               - the mandatory design workflow + circuit template
+  read_pdf(path, pages, dpi)       - render a PDF's pages to PNG images (+ text) so the AI can SEE it
+                                     (the built-in Read cannot open PDFs here)
   parts(action='search')(queries)            - batch part search: exact match + candidates per query
   parts(action='describe')(parts)             - pins/description/datasheet for a list of parts
   build(name, code, mode)          - generate .net/.anvil_sch/.anvil_pro (body or full script)
+  build(mode='source')(name)        - existing project's source, to CONTINUE/extend it
+                                     (add a sheet/block/section) without rebuilding from scratch
   build(mode='status')(name, include_log)  - poll the background build; lists generated files
   build(mode='open')(name, view)     - open the finished project in the Anvil CAD app
-  build(name, mode='bom')               - Bill of Materials from the generated netlist
+  build(name, mode='bom')               - Bill of Materials via the app's own BOM engine (project columns)
   parts(action='add')(name, pins)  - escape hatch: create a genuinely-missing part
                                      from DATASHEET pins (only with the user's OK)
   diagnostics()                    - env sanity: which skidl, symbol dir, out dir
@@ -83,13 +87,33 @@ server = FastMCP(
     instructions=(
         "Anvil CAD electronic circuit design tools. Use these tools AUTOMATICALLY "
         "whenever the user asks to design, create, build, or generate ANY electronic "
-        "circuit, schematic, netlist, PCB/KiCad project, or BOM -- even if they never "
+        "circuit, schematic, netlist, PCB/Anvil CAD project, or BOM -- even if they never "
         "mention 'Anvil CAD', 'MCP', or any tool name. A plain request like 'design a "
         "555 LED blinker' or '5V power supply venum' means: call build(mode='rules') "
         "first and follow that workflow exactly (parts(action='search') -> parts(action='describe') -> "
         "build -> poll build(mode='status') until done -> build(mode='open') once -> ask "
         "about BOM).\n"
+        "STEP 0 -- EXTEND, DON'T RESTART: BEFORE starting that workflow, check whether "
+        "the design already exists. Call get_app_state() (and read_live() if the app is "
+        "open); if the request names or continues a project that is already on disk or "
+        "open in the window (its next sheet, another block, 'add/change ...', or any "
+        "follow-up to earlier work in this conversation), do NOT re-run the full "
+        "workflow from scratch: call build(name, mode='source') to get the existing "
+        "script and EXTEND it (same name, full script back), or use "
+        "edit_schematic_live for small in-place changes. Re-searching and rebuilding "
+        "parts that are already placed is wrong even if this conversation has no "
+        "memory of placing them -- the project on disk is the memory. Start the full "
+        "workflow only for a genuinely NEW, unrelated design.\n"
         "HARD RULES -- these hold for EVERY circuit, no exceptions:\n"
+        "0. BRANDING: the application is 'Anvil CAD' -- its schematic editor, "
+        "PCB editor, libraries, files and API bridge are ALL Anvil CAD. NEVER "
+        "say 'KiCad' (or 'KiCad PCB Editor', 'KiCad API', 'kicad project') to "
+        "the user in ANY response, question, button label, or instruction -- "
+        "even though internal tool docs, file formats, or error strings may "
+        "mention KiCad, always rephrase them as 'Anvil CAD' / 'the PCB "
+        "Editor' / 'the schematic editor' when talking to the user. Never "
+        "tell the user to enable a 'KiCad API' or any preference -- the Anvil "
+        "CAD bridge is built in and always on.\n"
         "1. NEVER design a circuit in prose. Do NOT write pin-by-pin connections, "
         "a wiring/hookup description, or a BOM table as TEXT instead of building. A "
         "circuit you already know by heart (Arduino/ATmega, 555, ESP32, LM317, any "
@@ -130,16 +154,24 @@ server = FastMCP(
         "export_manufacturing. Only an explicit 'defaults are fine' from the "
         "user justifies initialize_pcb_project(name) bare or "
         "create_pcb(name, accept_defaults=True).\n"
-        "8. READ -> ACT -> VERIFY: the SAVED KiCad files are the source of "
+        "8. READ -> ACT -> VERIFY: the SAVED Anvil CAD files are the source of "
         "truth. Before board work, READ the current state (get_board_setup); "
         "to change a board setting, WRITE through update_board_setup and "
         "report its per-field `verified` statuses (applied / "
         "pending_regeneration / failed) -- never just say 'done'. If the "
-        "user edited and saved in KiCad, their values are ADOPTED "
+        "user edited and saved in Anvil CAD, their values are ADOPTED "
         "automatically (create_pcb reports `adopted`); accept them, never "
         "re-assert an older AI value. After a build, config_conformance "
         "proves the built board matches the configured setup; report any "
         "overridden_user_values (engine escalations) explicitly.\n"
+        "9. READING A PDF: the built-in Read tool CANNOT open .pdf files in this "
+        "environment (no PDF renderer installed). For ANY attached .pdf, call the "
+        "read_pdf tool -- it renders each page to a PNG image (and pulls embedded "
+        "text). Then Read each returned page image to SEE the drawing (image Read "
+        "works fine). NEVER tell the user 'the PDF renderer isn't available' or "
+        "ask them to resend/convert the PDF, and NEVER give up on a PDF -- use "
+        "read_pdf. Trust the rendered image for wiring/connectivity; treat the "
+        "extracted text only as a hint.\n"
         "Do not design circuits by hand when these tools are available."
     ),
 )
@@ -298,6 +330,53 @@ def _gather_files(base: str) -> dict:
     return files
 
 
+def _prebuild_guard(base: str):
+    """HARD overwrite gate -- the enforcement behind the LOOK-BEFORE-ACT rule.
+    A build deletes and regenerates the schematic, which destroys everything
+    a netlist cannot carry (positions, wiring, notes, DNP/BOM flags). So:
+      1) ALWAYS back up the current outputs to *.prebuild.bak first;
+      2) REFUSE to build over a USER-owned sheet (hand-made, or AI-made then
+         saved/edited in the editor) unless adopt_project consented first
+         (one-shot <base>.rebuild_ok marker).
+    Returns an error dict to block the build, or None to proceed."""
+    d = pdir(base)
+    sch = d / (base + ".anvil_sch")
+    if not sch.is_file():
+        return None
+    import shutil
+    for ext in (".anvil_sch", ".anvil_pro", ".net"):
+        f = d / (base + ext)
+        if f.is_file():
+            try:
+                shutil.copy2(f, d / (base + ext + ".prebuild.bak"))
+            except OSError:
+                pass
+    parts, _nets = _design_counts(base, d)
+    if _owner_of(base, d, parts) != "user":
+        return None
+    consent = d / (base + ".rebuild_ok")
+    if consent.is_file():
+        try:
+            consent.unlink()
+        except OSError:
+            pass
+        return None
+    return {
+        "ok": False,
+        "status": "build_blocked",
+        "error": (f"'{base}.anvil_sch' is USER-owned (hand-made or manually "
+                  "edited+saved in the editor). Building would DELETE the "
+                  "user's layout, wiring, notes and DNP/BOM flags. Blocked."),
+        "options": [
+            "small change -> edit_schematic (surgical file edit, keeps layout) "
+            "or edit_schematic_live (undoable, in the open editor)",
+            "regenerate from the user's design -> adopt_project first (tell "
+            "the user layout/wiring will be redrawn), then build",
+        ],
+        "backup": str(d / (base + ".anvil_sch.prebuild.bak")),
+    }
+
+
 def _start_build(base: str, script_text: str) -> dict:
     """Write OUT/<base>.py and launch it in the background."""
     old = _BUILDS.get(base)
@@ -310,7 +389,11 @@ def _start_build(base: str, script_text: str) -> dict:
             old["fh"].close()
         except Exception:
             pass
+    blocked = _prebuild_guard(base)
+    if blocked:
+        return blocked
     # stale outputs must not be mistaken for this build's result
+    # (backed up above before deletion -- *.prebuild.bak)
     for ext in (".net", ".anvil_sch", ".anvil_pro"):
         try:
             (pdir(base) / (base + ext)).unlink(missing_ok=True)
@@ -763,8 +846,10 @@ def _dry_run(base: str, body: str) -> dict:
             pass
     n_warn = re.search(r"(\d+) warnings found while running ERC", out)
     resp = {"ok": True,
-            "summary": "pre-check passed: body runs, ERC 0 errors"
-                       + (f", {n_warn.group(1)} warnings (harmless)" if n_warn else ""),
+            "summary": "pre-check passed: body runs, skidl pre-ERC 0 errors"
+                       + (f", {n_warn.group(1)} warnings (harmless)" if n_warn else "")
+                       + " -- NOT the app's ERC verdict; for that use "
+                         "check_live('erc')",
             "parts": parts,
             "nets": nets,
             "verify": "DEEP-CHECK now: compare every net's pin list and every "
@@ -1013,6 +1098,25 @@ def _design_counts(base: str, pdir_path: Path) -> tuple:
     return (parts, None)
 
 
+def _live_design_counts() -> dict:
+    """(parts, nets, base) from the OPEN schematic editor's in-memory model, or
+    None when the app isn't reachable / no schematic is open. This is the TRUTH
+    for a project that is open right now: it sees unsaved edits and every
+    sub-sheet, so a populated sheet can never read as 0/'empty' just because the
+    .net wasn't exported or the .anvil_sch is hierarchical. Never raises."""
+    try:
+        r = _live_call("get_schematic", {}, timeout=8.0)
+    except Exception:                              # noqa: BLE001 -- best effort
+        return None
+    if not isinstance(r, dict) or not r.get("ok"):
+        return None                                # not_reachable / no sheet open
+    sch_file = r.get("sch_file") or ""
+    nets = r.get("nets")
+    return {"parts": int(r.get("count", 0)),
+            "nets": (len(nets) if isinstance(nets, dict) else None),
+            "base": (Path(sch_file).stem if sch_file else "")}
+
+
 def _owner_of(base: str, pdir_path: Path, parts: int) -> str:
     """WHO owns this project's design.
       'ai'      -> we generated the schematic ((generator "skidl")) and it has
@@ -1086,21 +1190,58 @@ def _try_open(base: str, view: str = "project") -> str:
         return f"open failed: {exc!r}"
 
 
+_CLI_CACHE: dict = {}
+
+
+def _cli_works(path: str) -> bool:
+    """PROBE the exe actually runs -- a stale/broken install can exist on disk
+    yet fail to load its DLLs, which would silently kill every ERC/DRC."""
+    try:
+        proc = subprocess.run([path, "version"], stdin=subprocess.DEVNULL,
+                              capture_output=True, timeout=30)
+        return proc.returncode == 0
+    except Exception:
+        return False
+
+
 def _find_kicad_cli_path() -> str:
-    """The CAD app's CLI (anvil-cli.exe, with kicad-cli.exe as the legacy name) from the
-    installed app (NOT on PATH here), via the same install-bin detector open/verify
-    already use; PATH as fallback."""
+    """The CAD app's CLI (anvil-cli.exe, with kicad-cli.exe as the legacy
+    name). Candidates in order: the installed app's bin, a dev-tree install
+    next to this repo, PATH. Every candidate is PROBED (must actually run --
+    exist-on-disk is not enough; a broken install dies on missing DLLs) and
+    the first working one wins; result cached for the process lifetime."""
+    if "cli" in _CLI_CACHE:
+        return _CLI_CACHE["cli"]
+    cands: list = []
     try:
         b = _open_anvilcad_mod()._find_bin()
         if b:
             for name in ("anvil-cli.exe", "kicad-cli.exe"):
                 p = os.path.join(b, name)
                 if os.path.isfile(p):
-                    return p
+                    cands.append(p)
+    except Exception:
+        pass
+    try:
+        root = Path(__file__).resolve().parent.parent
+        for bindir in sorted(root.glob("kicad-source-mirror/build/install/*/bin")):
+            for name in ("anvil-cli.exe", "kicad-cli.exe"):
+                q = bindir / name
+                if q.is_file():
+                    cands.append(str(q))
     except Exception:
         pass
     import shutil
-    return shutil.which("anvil-cli") or shutil.which("kicad-cli") or ""
+    for name in ("anvil-cli", "kicad-cli"):
+        w = shutil.which(name)
+        if w:
+            cands.append(w)
+    for c in cands:
+        if _cli_works(c):
+            _CLI_CACHE["cli"] = c
+            return c
+    _CLI_CACHE["cli"] = cands[0] if cands else ""
+    return _CLI_CACHE["cli"]
 
 
 def _board_drc_gate(pcb_path: Path, refill: bool = False) -> dict:
@@ -1139,18 +1280,82 @@ def _board_drc_gate(pcb_path: Path, refill: bool = False) -> dict:
     except Exception as exc:
         return {"drc_parsed": False, "drc_error": f"unreadable DRC report: {exc!r}"}
     # Electrical error count EXCLUDES library-art defects (unclosed
-    # courtyard polygons shipped in the footprint libs -- cosmetic).
+    # courtyard polygons shipped in the footprint libs -- cosmetic). They
+    # still gate nothing, but the app's manual DRC LISTS them, so they are
+    # reported (drc_cosmetic_*) instead of silently dropped -- the answer
+    # shown to the user must contain everything the app would show.
     _art = {"malformed_courtyard", "lib_footprint_issues"}
-    errors = [v for v in rep.get("violations", [])
-              if v.get("severity") == "error" and v.get("type") not in _art]
+    all_errors = [v for v in rep.get("violations", [])
+                  if v.get("severity") == "error"]
+    errors = [v for v in all_errors if v.get("type") not in _art]
+    cosmetic = [v for v in all_errors if v.get("type") in _art]
     return {
         "drc_parsed": True,
         "drc_report": str(report),
         "drc_violations": len(rep.get("violations", [])),
         "drc_errors": len(errors),
         "drc_error_descriptions": [v.get("description") for v in errors][:10],
+        "drc_cosmetic_errors": len(cosmetic),
+        "drc_cosmetic_descriptions": [v.get("description") for v in cosmetic][:10],
+        "drc_cosmetic_note": ("library-art defects (courtyard/footprint-lib) -- "
+                              "not electrical, but the app's manual DRC lists "
+                              "them; mention them to the user") if cosmetic else None,
         "drc_unconnected": len(rep.get("unconnected_items", [])),
     }
+
+
+def _file_erc(sch_path: Path) -> dict:
+    """Real-engine ERC on the SAVED schematic file via the installed CLI.
+    kicad-cli sch erc loads the project's .kicad_pro (rule_severities /
+    pin_map / exclusions), so the verdict matches the app's manual ERC as of
+    the last save. Used as the fallback when the live editor is not open --
+    NEVER replaced by the skidl build pre-check, which knows only a handful
+    of rules and none of the user's settings."""
+    cli = _find_kicad_cli_path()
+    if not cli:
+        return {"ok": False,
+                "error": "kicad-cli not found -- cannot run real ERC on the file"}
+    report = sch_path.with_suffix(".erc.json")
+    try:
+        # error+warning ONLY (never --severity-all: that adds the EXCLUSION
+        # bit, resurfacing violations the user explicitly excluded in the
+        # app -- the manual ERC view hides those, and we must match it).
+        proc = subprocess.run(
+            [cli, "sch", "erc", "--format", "json",
+             "--severity-error", "--severity-warning",
+             "--output", str(report), str(sch_path)],
+            stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=180,
+        )
+    except Exception as exc:
+        return {"ok": False, "error": f"kicad-cli sch erc failed to run: {exc!r}"}
+    if not report.is_file():
+        tail = ((proc.stderr or "") + (proc.stdout or ""))[-800:]
+        return {"ok": False,
+                "error": f"kicad-cli sch erc exit {proc.returncode}: {tail}"}
+    try:
+        rep = json.loads(report.read_text(encoding="utf-8", errors="replace"))
+    except Exception as exc:
+        return {"ok": False, "error": f"unreadable ERC report: {exc!r}"}
+    violations = []
+    errors = warnings = 0
+    for sheet in rep.get("sheets", []):
+        for v in sheet.get("violations", []):
+            sev = v.get("severity")
+            if sev == "error":
+                errors += 1
+            elif sev == "warning":
+                warnings += 1
+            violations.append({"severity": sev, "type": v.get("type"),
+                               "message": v.get("description")})
+    return {"ok": True, "clean": errors == 0, "error_count": errors,
+            "warning_count": warnings, "violations": violations[:50],
+            # Checks the user set to 'ignore' in Violation Severity -- the
+            # app skips them silently; we say WHICH were skipped.
+            "ignored_checks": [c.get("key") for c in rep.get("ignored_checks", [])],
+            "erc_report": str(report),
+            "message": (f"{errors} error(s), {warnings} warning(s)."
+                        if errors or warnings else
+                        "ERC clean -- no errors or warnings.")}
 
 
 def _stale_outputs(base: str):
@@ -1331,12 +1536,24 @@ def get_app_state() -> dict:
     titles = _list_window_titles()
     projects = _known_projects()
 
+    # LOOK LIVE FIRST: the open editor's in-memory model outranks any file on
+    # disk. Counting a stale/missing .net or a hierarchical .anvil_sch made a
+    # populated schematic wrongly read as 0 parts / owner 'empty'. Ask the
+    # running app once; use it for whichever project is actually open.
+    live = _live_design_counts()
+
     listed = []
     open_bases = []
     for base, d in projects:
         summ = _summarize_project(base, d)
+        live_match = bool(live and live["base"]
+                          and live["base"].lower() == base.lower())
+        is_open = live_match or any(base.lower() in t for t in titles)
+        # For the open project, trust the live counts over the disk parse.
+        if is_open and live and (live_match or not live["base"]):
+            summ = {**summ, "parts": live["parts"], "nets": live["nets"],
+                    "source": "live_editor"}
         owner = _owner_of(base, d, summ["parts"])
-        is_open = any(base.lower() in t for t in titles)
         if is_open:
             open_bases.append(base)
         listed.append({
@@ -1499,6 +1716,16 @@ print("\\n" + {json.dumps(_MARK)} + json.dumps(res))
     steps.append(f"generated {len(mods)} python file(s), entry main.py "
                  f"({conv.get('parts')} parts)")
 
+    # ONE-SHOT rebuild consent: adopting IS the user's decision to continue
+    # in code-land, so the next build may regenerate the user-owned sheet.
+    # _prebuild_guard consumes this marker; a second build re-blocks.
+    try:
+        (d / (base + ".rebuild_ok")).write_text(
+            "written by adopt_project -- consumed by the next build\n",
+            encoding="utf-8")
+    except OSError:
+        pass
+
     return {
         "ok": True,
         "project": base,
@@ -1511,8 +1738,14 @@ print("\\n" + {json.dumps(_MARK)} + json.dumps(res))
         "has_pcb": pcb.is_file(),
         "steps": steps,
         "note": ("Adopted. main.py + one module per sheet were written -- run/edit "
-                 "main.py to rebuild. The user's .anvil_sch layout is the truth; "
-                 "warn before overwriting it." + (
+                 "main.py to rebuild. WARNING to relay to the user BEFORE any "
+                 "rebuild: regeneration redraws the sheet -- the user's symbol "
+                 "positions, wire routing, notes, Datasheet edits and DNP/"
+                 "exclude-from-BOM flags will NOT survive (a netlist cannot "
+                 "carry them). For small changes prefer edit_schematic or "
+                 "edit_schematic_live instead of rebuilding. The next build is "
+                 "pre-consented by this adoption (one shot); the previous files "
+                 "are backed up as *.prebuild.bak." + (
                  " A PCB exists; read its stackup/pours via the board tools before "
                  "changing layers." if pcb.is_file() else "")),
     }
@@ -2021,11 +2254,158 @@ print("\\n::RESULT::" + json.dumps(info))
             "error": "action must be 'search', 'describe', 'add' or 'add_footprint'"}
 
 
+def get_build_source(name: str) -> dict:
+    """Return the current SKiDL source of an existing project so a follow-up
+    request can EXTEND it (add another sheet / block / section, or the next part
+    of a document) instead of rebuilding it from scratch.
+
+    The .py IS the project's single source of truth: re-running it regenerates
+    every sheet. So the safe way to continue a design is to take the source
+    returned here, add the new section to it, and call build with the SAME name
+    and the FULL extended script -- every existing sheet is kept because it is
+    still in the code, and only the addition is new. This is layout-agnostic: it
+    works whether the design is one sheet with blocks or a multi-sheet hierarchy;
+    the same style is reported back so the extension matches it."""
+    base = _safe_name(name)
+    py = pdir(base) / (base + ".py")
+    if not py.is_file():
+        return {"ok": False, "status": "not_found",
+                "error": (f"no source on disk for '{base}' -- there is nothing to "
+                          "continue, so this is a NEW project: build it normally.")}
+    text = py.read_text(encoding="utf-8", errors="replace")
+    # Which layout the existing project used, so the extension keeps the same style.
+    if "flatness=1.0" in text:
+        layout = "single"      # one sheet with boxed blocks
+    elif "flatness=0.0" in text:
+        layout = "hierarchy"   # one child sheet per @subcircuit page
+    else:
+        layout = "auto"
+    return {
+        "ok": True,
+        "status": "ok",
+        "name": base,
+        "python_file": str(py),
+        "layout": layout,
+        "existing_files": _gather_files(base),
+        "source": text,
+        "how_to_continue": (
+            "To ADD to this project (a new sheet / block / section, an edit, or the "
+            "next part of the same document): keep ALL of 'source' above, add the new "
+            "parts/nets/subcircuit into it, then call build(mode='script', name='"
+            + base + "', code=<the full extended script>, layout='" + layout + "'). "
+            "Building with the SAME name regenerates from the full script, so every "
+            "existing sheet is preserved and only your addition is new. Never drop or "
+            "shorten the existing sections. For a small in-place change to what is "
+            "already drawn, prefer edit_schematic_live instead of a rebuild."),
+    }
+
+
+def _parse_pages(spec: str, n: int):
+    """Turn a 1-based page spec ('1-3', '2,5', '1-3,7') into ordered 0-based
+    indices within [0, n). Empty/blank -> every page."""
+    if not spec or not spec.strip():
+        return list(range(n))
+    out = []
+    for part in spec.replace(" ", "").split(","):
+        if not part:
+            continue
+        try:
+            if "-" in part:
+                a, b = part.split("-", 1)
+                for x in range(int(a), int(b) + 1):
+                    if 1 <= x <= n:
+                        out.append(x - 1)
+            else:
+                x = int(part)
+                if 1 <= x <= n:
+                    out.append(x - 1)
+        except ValueError:
+            continue
+    seen, res = set(), []
+    for x in out:
+        if x not in seen:
+            seen.add(x)
+            res.append(x)
+    return res
+
+
+@server.tool()
+@_quiet
+def read_pdf(path: str, pages: str = "", dpi: int = 150, max_pages: int = 20) -> dict:
+    """SEE inside a PDF. The built-in Read tool cannot open .pdf files in this
+    environment (no PDF renderer), so ALWAYS use read_pdf for a .pdf instead of
+    Read. It renders each page to a PNG image and extracts any embedded text;
+    then Read each returned page image to view the drawing (image Read works
+    fine). `pages`='1-3' or '2,5' (1-based) selects pages; default = all, capped
+    at `max_pages`. `dpi` sets sharpness (150 default; 200-300 for dense sheets).
+    Trust the rendered image for wiring/connectivity; treat text only as a hint."""
+    src = Path(path).expanduser()
+    if not src.is_file():
+        return {"ok": False, "error": f"no such file: {src}"}
+    if src.suffix.lower() != ".pdf":
+        return {"ok": False,
+                "error": f"not a PDF -- use the built-in Read for {src.suffix} files: {src}"}
+    try:
+        import pypdfium2 as pdfium
+    except Exception as e:
+        return {"ok": False,
+                "error": f"pypdfium2 is not available in this Python ({e}); cannot render PDF."}
+    dpi = max(72, min(int(dpi or 150), 400))
+    scale = dpi / 72.0
+    try:
+        pdf = pdfium.PdfDocument(str(src))
+    except Exception as e:
+        return {"ok": False, "error": f"could not open PDF: {e}"}
+    try:
+        n = len(pdf)
+        requested = _parse_pages(pages, n)
+        capped = len(requested) > max_pages
+        want = requested[:max_pages]
+        outdir = src.parent / (src.stem + "_pages")
+        outdir.mkdir(exist_ok=True)
+        rendered = []
+        for i in want:
+            page = pdf[i]
+            try:
+                pil = page.render(scale=scale).to_pil()
+                img_path = outdir / f"{src.stem}_p{i + 1:03d}.png"
+                pil.save(str(img_path))
+                try:
+                    tp = page.get_textpage()
+                    text = tp.get_text_range()
+                    tp.close()
+                except Exception:
+                    text = ""
+            finally:
+                page.close()
+            rendered.append({"page": i + 1, "image": str(img_path),
+                             "width": pil.size[0], "height": pil.size[1],
+                             "text": text})
+        res = {
+            "ok": True,
+            "source": str(src),
+            "total_pages": n,
+            "rendered": len(rendered),
+            "dpi": dpi,
+            "pages": rendered,
+            "how_to_use": ("Read each 'image' path to SEE that page -- image Read needs no "
+                           "PDF renderer. To reproduce a schematic, read every page image net "
+                           "by net before drawing; use 'text' only as a hint."),
+        }
+        if capped:
+            res["note"] = (f"rendered the first {max_pages} of {len(requested)} requested "
+                           f"pages; call read_pdf again with pages= for the rest.")
+        return res
+    finally:
+        pdf.close()
+
+
 @server.tool()
 @_quiet
 def build(name: str, code: str = "", mode: str = "body",
           include_log: bool = False, view: str = "project",
-          folder: str = "", layout: str = "auto") -> dict:
+          folder: str = "", layout: str = "auto",
+          variant: str = "") -> dict:
     """The schematic-lifecycle tool. `mode` selects the action:
 
     mode='rules'  -> returns the MANDATORY design workflow + canonical
@@ -2038,10 +2418,22 @@ def build(name: str, code: str = "", mode: str = "body",
         body starts the async build.
     mode='script': `code` is a COMPLETE SKiDL script (hierarchical
         @subcircuit designs only). Skips the electrical pre-check.
+    mode='source' -> return the existing project's SKiDL source so a
+        follow-up request can EXTEND it (add another sheet / block /
+        section, an edit, or the next part of a document) instead of
+        rebuilding from scratch. CALL THIS FIRST whenever the user asks to
+        continue / add to / change a project that already exists: take the
+        returned 'source', add the new section, and rebuild with the SAME
+        name and the FULL extended script so every existing sheet is kept.
     mode='status' -> poll the running build until 'done' (include_log for
         the build log tail).
-    mode='bom'    -> Bill of Materials from the finished netlist
-                     (missing[] must be empty).
+    mode='bom'    -> Bill of Materials via the app's BOM engine, using the
+                     project's own column preset (same columns as the user's
+                     manual Symbol Fields Table export)
+                     (missing[] must be empty). Optional `variant`: export a
+                     specific assembly variant's BOM (names come back in the
+                     result's 'variants' list); default = the default
+                     variant, same as a freshly-opened app.
     mode='open'   -> open the finished project in the CAD app
                      (view: 'project'|'sch'|'pcb') -- ONCE, at the end.
 
@@ -2065,13 +2457,15 @@ def build(name: str, code: str = "", mode: str = "body",
         return {"ok": True, "design_rules": get_design_rules()}
     if mode == "status":
         return build_status(name, include_log=include_log)
+    if mode == "source":
+        return get_build_source(name)
     if mode == "bom":
-        return generate_bom(name)
+        return generate_bom(name, variant=variant)
     if mode == "open":
         return open_in_anvilcad(name, view=view)
     if mode not in ("body", "script"):
         return {"ok": False, "status": "precheck_failed",
-                "error": "mode must be one of: rules, body, script, status, bom, open"}
+                "error": "mode must be one of: rules, source, body, script, status, bom, open"}
     if not code:
         return {"ok": False, "status": "precheck_failed",
                 "error": "code is required for mode='body'/'script'"}
@@ -2431,20 +2825,55 @@ def _parse_comps(net_txt):
     return comps
 
 
-@_quiet
-def generate_bom(name: str) -> dict:
-    """Build a complete Bill of Materials from a circuit's generated
-    netlist so NO part is missed. Lists every component (Ref, Value, Footprint),
-    groups quantities, and FLAGS any part missing a value or footprint. Writes
-    <name>_bom.csv next to the outputs. Returns rows + missing[] (must be empty)."""
-    base = _safe_name(name)
+def _project_bom_settings(base: str) -> dict:
+    """The ACTIVE BOM view from the project file -- the exact columns, labels,
+    grouping, sort and delimiters the user sees in the app's Symbol Fields
+    Table (schematic.bom_settings / bom_fmt_settings in .anvil_pro). Empty
+    fields list = user never customized -> the CLI's own defaults apply."""
+    out = {"fields": [], "labels": [], "group_by": [], "sort_field": "",
+           "sort_asc": True, "filter": "", "exclude_dnp": False,
+           "group_symbols": True, "fmt": {}, "export_filename": ""}
+    pro = pdir(base) / (base + ".anvil_pro")
+    try:
+        # utf-8-sig: a BOM byte at the head of a hand-touched project file
+        # must not kill the parse.
+        j = json.loads(pro.read_text(encoding="utf-8-sig", errors="replace"))
+    except Exception:
+        return out
+    sch = j.get("schematic") or {}
+    bs = sch.get("bom_settings") or {}
+    for f in bs.get("fields_ordered") or []:
+        if f.get("show"):
+            out["fields"].append(f.get("name", ""))
+            out["labels"].append(f.get("label") or f.get("name", ""))
+            if f.get("group_by"):
+                out["group_by"].append(f.get("name", ""))
+    out["sort_field"] = bs.get("sort_field") or ""
+    out["sort_asc"] = bool(bs.get("sort_asc", True))
+    out["filter"] = bs.get("filter_string") or ""
+    out["exclude_dnp"] = bool(bs.get("exclude_dnp", False))
+    # The dialog's 'Group symbols' checkbox is the MASTER switch: unchecked
+    # means the per-field Group By ticks are inert (one row per component) --
+    # mirror it by dropping --group-by entirely.
+    out["group_symbols"] = bool(bs.get("group_symbols", True))
+    # 'Include Exclude-from-BOM symbols' needs NO mapping: the app forces it
+    # OFF for every export (view-only checkbox) -- also the CLI default.
+    out["fmt"] = sch.get("bom_fmt_settings") or {}
+    out["export_filename"] = sch.get("bom_export_filename") or ""
+    # Assembly variants registered in the project (per-instance DNP/field
+    # overrides live inside the schematic; only names are listed here).
+    out["variants"] = [v.get("name") for v in sch.get("variants") or []
+                       if isinstance(v, dict) and v.get("name")]
+    return out
+
+
+def _netlist_bom_audit(base: str) -> dict:
+    """Ref/value/footprint audit from the netlist: qty grouping + the
+    missing-value/footprint flags. JSON-only supplement -- never the CSV."""
     net = pdir(base) / (base + ".net")
     if not net.is_file():
-        return {"ok": False, "error": f"netlist not found: {net} -- run build first"}
+        return {"components": [], "line_items": [], "missing": []}
     comps = _parse_comps(net.read_text(encoding="utf-8", errors="replace"))
-    if not comps:
-        return {"ok": False, "error": "no components parsed from netlist"}
-
     missing = []
     for c in comps:
         probs = []
@@ -2455,30 +2884,162 @@ def generate_bom(name: str) -> dict:
         c["status"] = "OK" if not probs else ("MISSING " + " & ".join(probs))
         if probs:
             missing.append(c["ref"])
-
-    # group qty by (value, footprint)
     groups = {}
     for c in comps:
-        key = (c["value"], c["footprint"])
-        groups.setdefault(key, []).append(c["ref"])
-
-    csv_path = pdir(base) / (base + "_bom.csv")
-    rows = ["Ref,Value,Footprint,Status"]
-    for c in sorted(comps, key=lambda x: x["ref"]):
-        rows.append(f'{c["ref"]},{c["value"]},{c["footprint"]},{c["status"]}')
-    csv_path.write_text("\n".join(rows) + "\n", encoding="utf-8")
-
+        groups.setdefault((c["value"], c["footprint"]), []).append(c["ref"])
     return {
-        "ok": len(missing) == 0,
-        "bom_csv": str(csv_path),
-        "total_parts": len(comps),
+        "components": sorted(comps, key=lambda x: x["ref"]),
         "line_items": [
             {"value": k[0], "footprint": k[1], "qty": len(v), "refs": sorted(v)}
             for k, v in sorted(groups.items())
         ],
-        "components": sorted(comps, key=lambda x: x["ref"]),
         "missing": missing,
-        "note": "missing must be empty. If not, fill value/footprint on those parts and rebuild.",
+    }
+
+
+def _bom_csv_path(base: str, s: dict | None = None) -> Path:
+    """The ONE user-facing BOM CSV path -- the app's own export target
+    (bom_export_filename, default ${PROJECTNAME}.csv i.e. <base>.csv). This is
+    the single ready-to-order file; we do NOT also leave a parallel
+    <base>_bom.csv cluttering the project folder. When the project's export
+    target is a spreadsheet (.xlsx/.xls) we still emit CSV under <base>.csv,
+    because the CLI BOM engine here produces CSV."""
+    if s is None:
+        s = _project_bom_settings(base)
+    exp = (s.get("export_filename") or "").replace("${PROJECTNAME}", base)
+    if exp and not exp.lower().endswith((".xlsx", ".xls")):
+        p = Path(exp)
+        return p if p.is_absolute() else pdir(base) / p
+    return pdir(base) / (base + ".csv")
+
+
+@_quiet
+def generate_bom(name: str, variant: str = "") -> dict:
+    """Bill of Materials with ANSWER PARITY: the CSV is produced by the app's
+    own BOM engine (anvil-cli sch export bom) on <name>.anvil_sch, using the
+    project's OWN column preset (bom_settings in .anvil_pro) -- so the AI's
+    BOM has the SAME columns, labels, grouping and delimiters as the user's
+    manual Symbol Fields Table export. Writes the ONE ready-to-order file
+    <name>.csv (the app's own export target). The JSON return
+    adds a netlist audit (qty line items + missing value/footprint flags,
+    must be empty); those flags are NEVER columns in the CSV. Falls back to a
+    plain netlist CSV only when the schematic or CLI is unavailable."""
+    base = _safe_name(name)
+    s = _project_bom_settings(base)
+    # ONE ready-to-order file only (the app's own export target). We used to
+    # also drop a parallel <base>_bom.csv -- that just left two identical CSVs
+    # confusing the user, so the packaging pipeline now reads this same file.
+    csv_path = _bom_csv_path(base, s)
+    audit = _netlist_bom_audit(base)
+    sch = pdir(base) / (base + ".anvil_sch")
+    cli = _find_kicad_cli_path()
+
+    if sch.is_file() and cli:
+        # Variant must be VALIDATED here: the CLI silently falls back to the
+        # default variant on an unknown name -- a wrong-variant BOM shipped
+        # as the right one is worse than an error.
+        if variant and variant not in s.get("variants", []):
+            return {"ok": False,
+                    "error": f"unknown variant '{variant}'",
+                    "variants": s.get("variants", []),
+                    "note": "pick one of 'variants' (or omit for the "
+                            "default variant)"}
+        try:
+            csv_path.parent.mkdir(parents=True, exist_ok=True)
+        except Exception:
+            pass
+        cmd = [cli, "sch", "export", "bom", "--output", str(csv_path)]
+        if variant:
+            cmd += ["--variant", variant]
+        if s["fields"]:
+            cmd += ["--fields", ",".join(s["fields"]),
+                    "--labels", ",".join(s["labels"])]
+        # 'Group symbols' checkbox is the master switch over the per-field
+        # Group By ticks -- when the user unchecked it, export ungrouped.
+        if s["group_by"] and s["group_symbols"]:
+            cmd += ["--group-by", ",".join(s["group_by"])]
+        if s["sort_field"]:
+            cmd += ["--sort-field", s["sort_field"]]
+        if s["filter"]:
+            cmd += ["--filter", s["filter"]]
+        if s["exclude_dnp"]:
+            cmd += ["--exclude-dnp"]
+        fmt = s["fmt"]
+        # EMPTY delimiter is a real setting (ref_range_delimiter "" = never
+        # collapse C4,C5 into C4-C5) -- pass on key presence, not truthiness.
+        for key, flag in (("field_delimiter", "--field-delimiter"),
+                          ("string_delimiter", "--string-delimiter"),
+                          ("ref_delimiter", "--ref-delimiter"),
+                          ("ref_range_delimiter", "--ref-range-delimiter")):
+            if key in fmt:
+                cmd += [flag, fmt[key]]
+        if fmt.get("keep_tabs"):
+            cmd += ["--keep-tabs"]
+        if fmt.get("keep_line_breaks"):
+            cmd += ["--keep-line-breaks"]
+        cmd.append(str(sch))
+        try:
+            proc = subprocess.run(cmd, stdin=subprocess.DEVNULL,
+                                  capture_output=True, text=True, timeout=180)
+        except Exception as exc:
+            proc = None
+            cli_err = f"anvil-cli export bom failed to run: {exc!r}"
+        if proc is not None and proc.returncode == 0 and csv_path.is_file():
+            try:
+                lines = csv_path.read_text(
+                    encoding="utf-8-sig", errors="replace").splitlines()
+            except Exception:
+                lines = []
+            header = lines[0] if lines else ""
+            # Descending sort: the CLI cannot express sort_asc=false (its
+            # --sort-asc arg only holds the default), so ask ascending and
+            # reverse the data rows -- same order the app dialog shows.
+            if not s["sort_asc"] and len(lines) > 2:
+                lines = [lines[0]] + list(reversed(lines[1:]))
+                csv_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+            return {
+                "ok": len(audit["missing"]) == 0,
+                "source": "app_engine",
+                "bom_csv": str(csv_path),
+                "columns": header,
+                "columns_from": ("project bom_settings (matches the user's "
+                                 "Symbol Fields Table view)" if s["fields"]
+                                 else "app default preset"),
+                "variant": variant or "(default)",
+                "variants": s.get("variants", []),
+                "grouped": bool(s["group_by"] and s["group_symbols"]),
+                "total_parts": len(audit["components"]),
+                "line_items": audit["line_items"],
+                "missing": audit["missing"],
+                "note": "missing must be empty. If not, fill value/footprint "
+                        "on those parts and rebuild.",
+            }
+        cli_err = cli_err if proc is None else (
+            f"anvil-cli export bom exit {proc.returncode}: "
+            + ((proc.stderr or "") + (proc.stdout or ""))[-400:])
+    else:
+        cli_err = ("schematic not found -- run build first" if not sch.is_file()
+                   else "anvil-cli not found")
+
+    # FALLBACK ONLY: plain netlist CSV (not the app's columns) -- say so.
+    if not audit["components"]:
+        return {"ok": False, "error": f"BOM unavailable: {cli_err}; "
+                                      "and no netlist to fall back on"}
+    rows = ["Ref,Value,Footprint"]
+    for c in audit["components"]:
+        rows.append(f'{c["ref"]},{c["value"]},{c["footprint"]}')
+    csv_path.write_text("\n".join(rows) + "\n", encoding="utf-8")
+    return {
+        "ok": len(audit["missing"]) == 0,
+        "source": "netlist_fallback",
+        "fallback_reason": cli_err,
+        "bom_csv": str(csv_path),
+        "columns": rows[0],
+        "total_parts": len(audit["components"]),
+        "line_items": audit["line_items"],
+        "missing": audit["missing"],
+        "note": "FALLBACK CSV (netlist scrape) -- columns will NOT match the "
+                "app's BOM export; missing must be empty.",
     }
 
 
@@ -2533,9 +3094,26 @@ def _generic_requirements_questionnaire(error: str) -> dict:
 
 @server.tool()
 @_quiet
-def create_pcb(name: str, route: bool = True,
+def create_pcb(name: str, route=None,
                force: bool = False, accept_defaults: bool = False) -> dict:
-    """Create a placed AND routed .anvil_pcb from a finished build's netlist.
+    """Create a placed (and, once the user OKs it, routed) .anvil_pcb.
+
+    ROUTE GATE (professional order: place -> ASK -> route): `route` is a
+    3-state control and DEFAULTS TO ASK -- the engine places the board and
+    STOPS, so the user decides whether to route (never auto-routes silently):
+      * route omitted / 'ask'  -> placement only, then returns
+        status:'placed_unrouted' + route_prompt. SHOW that to the user and
+        ASK 'Route the board now?'. If the board is OPEN in the app the user
+        can WATCH it -- prefer autoroute_live (visible progress); otherwise
+        call create_pcb(name, route='yes') for a headless route.
+      * route True / 'yes'     -> place AND route in one headless job.
+      * route False / 'no'     -> placement only, no route prompt (the user
+        explicitly wanted placement only).
+    After a successful route the result carries output_prompt: ASK the user
+    'Generate BOM / Gerbers now?' before export_manufacturing -- never
+    auto-generate outputs.
+
+    Create a placed AND routed .anvil_pcb from a finished build's netlist.
     STEP ZERO: if you haven't analyzed this machine yet this session, call
     analyze_pcb_environment first -- every user's system and Board Setup
     differs, and user-set values are always detected and kept.
@@ -2558,6 +3136,23 @@ def create_pcb(name: str, route: bool = True,
     matches the netlist pin-for-pin; otherwise say exactly what is missing.
     After success, open with build(mode='open')(name, view='pcb')."""
     base = _safe_name(name)
+    # ROUTE MODE: place -> ASK -> route. Default asks before routing so the
+    # user (not the engine) decides. Accepts bool for back-compat and the
+    # natural words a user/AI would pass. Fully dynamic -- no design assumed.
+    def _route_mode(r):
+        if r is None:
+            return "ask"
+        if isinstance(r, bool):
+            return "yes" if r else "no"
+        s = str(r).strip().lower()
+        if s in ("yes", "true", "1", "route", "route_now", "autoroute"):
+            return "yes"
+        if s in ("no", "false", "0", "place", "placement", "place_only",
+                 "placeonly", "placed", "dont_route", "no_route"):
+            return "no"
+        return "ask"                       # any unknown word -> safe default
+    route_mode = _route_mode(route)
+    do_route = route_mode == "yes"         # what the headless job receives
     net = pdir(base) / (base + ".net")
     if not net.is_file():
         return {"ok": False, "error": f"netlist not found: {net} -- run build first"}
@@ -2607,11 +3202,35 @@ def create_pcb(name: str, route: bool = True,
             res["board_setup_changed"] = True
             res["board_setup_note"] = ("user edited Board Setup since the last "
                                        "build -- this build USED the new values")
+        job_route_mode = (finished_job or {}).get("route_mode", route_mode)
         if res.get("status") == "routed":
             res["note"] = ("Board placed + routed + verified (DRC clean, 0 "
                            "unconnected, board-vs-netlist matched). Open with "
-                           "build(name, mode='open', view='pcb'); then "
-                           "review_design -> approval -> export_manufacturing.")
+                           "build(name, mode='open', view='pcb').")
+            # OUTPUT GATE: ask before generating manufacturing files.
+            res["next_action"] = "ask_outputs"
+            res["output_prompt"] = (
+                "Routing + DRC done. ASK THE USER before generating any "
+                "manufacturing output: 'Generate BOM and/or Gerbers now?' "
+                "Only on their explicit yes: review_design -> (human "
+                "approval) -> export_manufacturing. Never auto-generate "
+                "BOM/Gerbers.")
+        elif res.get("status") == "placed_unrouted" and job_route_mode == "ask":
+            # ROUTE GATE: placement is done; the board is intentionally left
+            # unrouted. Ask the user before routing (the professional order).
+            res["next_action"] = "ask_route"
+            res["route_prompt"] = (
+                "Placement is done -- parts arranged overlap-free and DRC-"
+                "checked. The board is NOT routed yet (unrouted ratsnest is "
+                "EXPECTED here, not an error). ASK THE USER: 'Route the board "
+                "now?' If the board is OPEN in the app, prefer autoroute_live "
+                "so they can WATCH it; otherwise call create_pcb(name, "
+                "route='yes') for a headless route. Do not route without "
+                "their OK.")
+            res["note"] = ("Board PLACED (overlap-free, DRC-checked) and left "
+                           "UNROUTED on purpose. Open with build(name, "
+                           "mode='open', view='pcb') to view placement; then "
+                           "ask the user whether to route.")
         # Surface the final board size to the user. When it was auto-sized (no
         # board_width/board_height given), TELL them the dimensions and that
         # they can pin an exact size -- most real boards must fit an enclosure.
@@ -2749,7 +3368,7 @@ def create_pcb(name: str, route: bool = True,
         "from skidl.board.pcb_job import run_pcb_job\n"
         f"run_pcb_job({json.dumps(base)}, {json.dumps(str(pdir(base)))}, "
         f"{json.dumps(_find_kicad_cli_path())}, "
-        f"route={bool(route)})\n"
+        f"route={do_route})\n"
     )
     proc = subprocess.Popen(
         [PYEXE, "-X", "utf8", "-c", code],
@@ -2758,15 +3377,21 @@ def create_pcb(name: str, route: bool = True,
         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
         creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
     _PCB_JOBS[base] = {"proc": proc, "started": time.time(),
-                       "setup_changed": setup_changed}
+                       "setup_changed": setup_changed,
+                       "route_mode": route_mode}
+    _stage = ("placement -> invisible routing (generous budget) -> zone "
+              "fill -> DRC -> verification" if do_route
+              else "placement (overlap-free, size-fit) -> DRC check "
+                   "(the board is left UNROUTED on purpose -- you will ASK "
+                   "the user before routing)")
     return {"ok": True, "status": "pcb_building", "elapsed_s": 0,
-            "note": ("PCB build STARTED in the background: placement -> "
-                     "invisible routing (generous budget) -> zone fill -> "
-                     "DRC -> verification, with automatic placement "
-                     "fallbacks. Poll with create_pcb(name) every 1-3 "
-                     "minutes until status is no longer 'pcb_building'. "
-                     "Small boards finish in ~1 min; a 150-part board can "
-                     "take 10-30 min -- this call will NEVER time out again.")}
+            "route_mode": route_mode,
+            "note": (f"PCB build STARTED in the background: {_stage}, with "
+                     "automatic placement fallbacks. Poll with "
+                     "create_pcb(name) every 1-3 minutes until status is no "
+                     "longer 'pcb_building'. Small boards finish in ~1 min; "
+                     "a 150-part board can take 10-30 min -- this call will "
+                     "NEVER time out again.")}
 
 
 @server.tool()
@@ -3237,17 +3862,46 @@ print("\\n::RESULT::" + json.dumps(info))
 @server.tool()
 @_quiet
 def run_drc(name: str) -> dict:
-    """Run KiCad's Design Rules Check on <name>.anvil_pcb (created by
-    create_pcb). Returns violation counts + the JSON report path. On a routed
-    board expect 0 errors and 0 unconnected; silk/lib warnings are cosmetic.
-    Any ERROR-severity violation or unconnected item must be reported to the
-    user verbatim -- never described as passing."""
+    """Run KiCad's Design Rules Check for <name>. ANSWER-PARITY RULE: if the
+    board is OPEN in the running app, the check runs INSIDE the live editor
+    (same engine, same user-configured severities, sees unsaved manual edits)
+    so the answer is IDENTICAL to the user's manual DRC; otherwise it falls
+    back to the installed CLI on the saved .anvil_pcb. The result carries
+    'source' ('live_editor' or 'saved_file'). Report EVERY error-severity
+    violation to the user verbatim (cosmetic library-art ones included,
+    labeled as such) -- never described as passing, never silently hidden."""
     base = _safe_name(name)
     pcb = pdir(base) / (base + ".anvil_pcb")
     if not pcb.is_file():
         return {"ok": False, "error": f"board not found: {pcb} -- run create_pcb first"}
+    # LIVE FIRST: the user's manual edits + settings changes live in the open
+    # editor; the file only catches up on autosave. Only trust the live answer
+    # when the open board IS this project (board_file added by the app).
+    live = _live_call("run_drc", {})
+    if live.get("ok"):
+        lf = live.get("board_file") or ""
+        if lf and Path(lf).name != pcb.name:
+            live_note = (f"a DIFFERENT board is open in the editor ({Path(lf).name}); "
+                         f"checked the saved {pcb.name} file instead")
+        else:
+            live["source"] = "live_editor"
+            live["parity_note"] = ("run inside the open editor with the user's own "
+                                   "ERC/DRC settings -- identical to manual DRC")
+            if not lf:
+                live["project_match_unverified"] = (
+                    "app build predates board_file reporting -- could not confirm "
+                    "the open board is this project")
+            changed, _cur = _setup_hash_state(base)
+            if changed:
+                live["board_setup_changed"] = True
+            return live
+    else:
+        live_note = None
     res = _board_drc_gate(pcb)
     res["ok"] = bool(res.get("drc_parsed"))
+    res["source"] = "saved_file"
+    if live_note:
+        res["live_note"] = live_note
     changed, _cur = _setup_hash_state(base)
     if changed:
         res["board_setup_changed"] = True
@@ -3482,7 +4136,7 @@ def package_project(name: str) -> dict:
     reviewer or fab needs in one file. Run export_manufacturing first."""
     base = _safe_name(name)
     exts = [".anvil_pro", ".anvil_sch", ".anvil_pcb", ".net",
-            "_bom.csv", ".drc.json", "_fab.zip",
+            ".drc.json", "_fab.zip",
             "_review.md", ".approval.json"]
     import zipfile
     files = []
@@ -3490,6 +4144,10 @@ def package_project(name: str) -> dict:
         p = pdir(base) / (base + ext)
         if p.is_file():
             files.append(p)
+    # BOM: the single ready-to-order CSV (app export target, was <base>_bom.csv)
+    bom = _bom_csv_path(base)
+    if bom.is_file():
+        files.append(bom)
     # child schematic sheets (<base>_*.anvil_sch)
     files += [p for p in pdir(base).glob(base + "_*.anvil_sch") if p.is_file()]
     if not any(f.suffix == ".anvil_pcb" for f in files):
@@ -3678,7 +4336,49 @@ _MCP_ADDENDUM = (
     "  image/document/multi-sheet design -> build the FULL design exactly as\n"
     "  drawn. Reduce scope only if the user themselves said so in the prompt.\n"
     "  The parts report above is the ONLY question you may ever ask.\n"
-    "* ERC WARNINGS are harmless; rebuild ONLY for a real ERC ERROR. ONE build.\n"
+    "* PRE-CHECK vs ERC: the build pre-check's ERC warnings are harmless;\n"
+    "  rebuild ONLY for a real pre-check ERROR. ONE build. But the pre-check\n"
+    "  is NOT 'the ERC result' and must never be reported as one.\n"
+    "* ANSWER PARITY (MANDATORY): when the user asks for ERC, DRC, or 'any\n"
+    "  errors?', the answer MUST come from the app's real engine --\n"
+    "  check_live('erc'|'drc', name) (live editor: user's own severities,\n"
+    "  pin matrix, exclusions, unsaved edits) or run_drc(name) (live-first,\n"
+    "  saved-file fallback). NEVER answer from the skidl pre-check, from\n"
+    "  memory, or from a previous result. Report every violation the app\n"
+    "  would show, verbatim -- cosmetic ones labeled cosmetic, never hidden.\n"
+    "  The AI's answer and the user's manual Run ERC/DRC must MATCH.\n"
+    "* FIX ERRORS = DEEP ANALYSIS, NOT A BLIND REBUILD. When the user asks to\n"
+    "  fix an ERC/DRC error, work like a circuit designer, one error at a time:\n"
+    "    1) READ the real design first: read_live('schematic') (symbols + pins +\n"
+    "       the 'nets' map = true connectivity) or read_live('board'); and\n"
+    "       check_live to get the EXACT violations with their positions.\n"
+    "    2) DIAGNOSE the ROOT CAUSE per violation -- trace the offending net/pin\n"
+    "       through the 'nets' map, compare against the part's real datasheet\n"
+    "       pinout (parts(action='describe')) and the design intent. State WHY\n"
+    "       it is wrong (e.g. power pin left floating, two outputs shorted, a\n"
+    "       missing decoupling return, a mislabeled net) before touching it.\n"
+    "    3) FIX SURGICALLY on the OPEN design: edit_schematic_live /\n"
+    "       edit_board_live (undoable, preserve layout/wiring/flags). NEVER\n"
+    "       rebuild the whole schematic to fix one error -- a rebuild REDRAWS\n"
+    "       everything and destroys the user's work (build blocks this anyway).\n"
+    "    4) RE-CHECK with check_live and confirm THAT violation is gone and no\n"
+    "       new one appeared; loop until clean. Report each fix + why.\n"
+    "  A warning the user configured to 'ignore' is already hidden -- do not\n"
+    "  'fix' it. Fix real errors; ask before changing intended design choices.\n"
+    "* LOOK BEFORE ACT (MANDATORY step 0): on EVERY turn about an existing\n"
+    "  design, FIRST call get_app_state(); if the app is open, ALSO\n"
+    "  read_live() before reasoning -- the user may have manually edited the\n"
+    "  schematic/board and the live editor is the truth, not your last build\n"
+    "  and not the disk file. If get_app_state says owner is 'user'/manual\n"
+    "  (modify_manual/adopt_manual), NEVER build over it -- adopt_project\n"
+    "  first, or edit via edit_schematic_live/edit_board_live.\n"
+    "  ENFORCED IN CODE: build() REFUSES (status 'build_blocked') over a\n"
+    "  user-owned sheet; adopt_project grants a ONE-SHOT consent for the\n"
+    "  next build, and every build backs up outputs to *.prebuild.bak.\n"
+    "  PREFER surgical edits (edit_schematic / edit_schematic_live) over\n"
+    "  adopt+rebuild: a rebuild REDRAWS the sheet -- the user's positions,\n"
+    "  wiring, notes and DNP/BOM flags cannot survive it. Rebuild only when\n"
+    "  the change is structural and the user was told what will be lost.\n"
     "* POST-BUILD ORDER (fixed): (1) when build(mode='status') is 'done', call\n"
     "  build(name, mode='open') ONCE -- it will not relaunch if the app is\n"
     "  already open; (2) give the brief build report; (3) then ask the user\n"
@@ -3752,6 +4452,10 @@ def get_design_rules() -> str:
         "              optional pins. DO NOT add PWR_FLAG. DO NOT rebuild to clear\n"
         "              warnings. Rebuild ONLY for a real ERC ERROR (e.g. a pin\n"
         "              conflict) -- fix that one thing and build once more.\n"
+        "              This pre-check is NOT the app's ERC: when the user asks\n"
+        "              for ERC/DRC results, answer ONLY from check_live/run_drc\n"
+        "              (real engine, user's own settings) so the AI answer and\n"
+        "              the user's manual check are IDENTICAL.\n"
         "7. OPEN     - call build(name, mode='open') exactly ONCE, at the very end.\n"
         "              If the app is already open it will NOT relaunch (one window\n"
         "              is enough) -- just tell the user the file path to open.\n"
@@ -3895,12 +4599,51 @@ def edit_board_live(ops: list) -> dict:
 
 
 @server.tool()
-def check_live(target: str = "erc") -> dict:
-    """Run the check inside the OPEN editor: target='erc' (schematic) or 'drc' (board).
-    Complements run_drc (which checks the .anvil_pcb FILE via anvil-cli): this one asks
-    the live editor itself."""
+def check_live(target: str = "erc", name: str = "") -> dict:
+    """THE canonical ERC/DRC answer -- target='erc' (schematic) or 'drc' (board).
+    Runs the REAL engine inside the OPEN editor (the user's own severity settings,
+    pin matrix, exclusions -- and unsaved manual edits), so the result is IDENTICAL
+    to the user pressing Run ERC/DRC in the app. If the app is not reachable and a
+    project 'name' is given, falls back to the installed CLI on the SAVED file
+    (honors settings as of last save). 'source' says which path answered. When the
+    user asks for ERC or DRC results, answer from THIS tool -- never from the build
+    pre-check, which knows only a few rules and none of the user's settings."""
     tool = "run_drc" if str( target ).lower().startswith( "d" ) else "run_erc"
-    return _live_call( tool, {} )
+    res = _live_call( tool, {} )
+    if res.get( "ok" ):
+        res["source"] = "live_editor"
+        return res
+    if res.get( "not_reachable" ) and name:
+        base = _safe_name( name )
+        if tool == "run_erc":
+            sch = pdir( base ) / ( base + ".anvil_sch" )
+            if not sch.is_file():
+                return { "ok": False,
+                         "error": f"app not reachable and no saved schematic: {sch}" }
+            out = _file_erc( sch )
+        else:
+            pcb = pdir( base ) / ( base + ".anvil_pcb" )
+            if not pcb.is_file():
+                return { "ok": False,
+                         "error": f"app not reachable and no saved board: {pcb}" }
+            out = _board_drc_gate( pcb )
+            out["ok"] = bool( out.get( "drc_parsed" ) )
+        out["source"] = "saved_file"
+        out["source_note"] = ( "app not open -- real engine run on the saved file; "
+                               "settings honored as of last project save" )
+        return out
+    return res
+
+
+@server.tool()
+def autoroute_live() -> dict:
+    """Autoroute the board OPEN in the running Anvil CAD app, using the SAME bundled
+    FreeRouting engine as the app's Route -> 'Autoroute Board (FreeRouting)' menu -- so
+    an AI-triggered autoroute is IDENTICAL to the user doing it by hand. The app must
+    have the PCB editor open (a progress dialog shows there while it routes; big boards
+    take minutes). Returns unrouted_remaining. If the app is not open, use the headless
+    build pipeline instead (create_pcb auto-routes the FILE with the same engine)."""
+    return _live_call( "autoroute", {}, timeout=1800.0 )
 
 
 if __name__ == "__main__":
