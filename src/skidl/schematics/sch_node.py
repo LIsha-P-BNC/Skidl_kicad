@@ -157,6 +157,24 @@ def _net_span(net):
     return (max(xs) - min(xs)) + (max(ys) - min(ys))
 
 
+def _net_same_function(net):
+    """True when every real pin of the net lives in ONE function -- the same
+    authored/auto block (part.group) or, ungrouped, the same hierarchy node
+    (a @subcircuit page IS one function). Such a net is an in-block connection:
+    the professional rule wires it, and the block/page will be packed tight by
+    flow_place_block/hug AFTER this pre-placement gate runs."""
+    keys = set()
+    for pin in _real_pins(net):
+        part = getattr(pin, "part", None)
+        if part is None:
+            continue
+        g = getattr(part, "group", None)
+        keys.add(("g", str(g)) if g else ("n", id(getattr(part, "node", None))))
+        if len(keys) > 1:
+            return False
+    return bool(keys)
+
+
 def _net_is_locally_compact(net):
     """
     Decide whether a multi-pin net is geometrically compact enough to make an
@@ -165,6 +183,13 @@ def _net_is_locally_compact(net):
     This is NOT a proof that routing is collision-free.
     It is only an early safety filter.
     """
+    # An IN-FUNCTION net is never span-vetoed: this gate runs BEFORE placement,
+    # so the span is measured on meaningless pre-place coordinates -- it was
+    # vetoing 2-pin R->LED nets that the block row later puts 350 mil apart
+    # (observed: t3 load page N$1..N$3 labeled despite a perfect row). The
+    # post-placement gates (crossings/congestion/distance/fanout) still apply.
+    if _net_same_function(net):
+        return True
     span = _net_span(net)
 
     if span is None:
@@ -588,6 +613,14 @@ class SchNode(Placer, Router):
             # Cross hierarchy net
             # -----------------------------------------------------------
 
+            _dbg = os.environ.get("SKIDL_NET_DEBUG")
+            if _dbg and _dbg in str(getattr(net, "name", "")):
+                _keys = {self._node_key_for_pin(p) for p in _real_pins(net)}
+                print(">>> NET_DEBUG %r crosses=%s keys=%s candidate=%s" % (
+                    net.name, self._net_crosses_nodes(net),
+                    sorted(str(k) for k in _keys),
+                    _net_wire_candidate(net)))
+
             if self._net_crosses_nodes(net):
 
                 self._add_boundary_terminals(net)
@@ -637,6 +670,12 @@ class SchNode(Placer, Router):
         # ---------------------------------------------------------------
 
         self.flatten(self.flatness)
+
+        # Tag every part with the SHEET it renders on (post-flatten), so the
+        # wire/label decision keys on SHEET-crossing, not @subcircuit-module
+        # crossing: two modules flattened onto one sheet must connect with a
+        # LOCAL label, only a net that truly leaves the sheet gets a port.
+        self._stamp_sheet_ids()
 
     # -----------------------------------------------------------------------
     # Terminals
@@ -915,6 +954,34 @@ class SchNode(Placer, Router):
                 for child in child_types[child_type]:
 
                     child.flattened = False
+
+    # -----------------------------------------------------------------------
+    # Sheet identity (post-flatten)
+    # -----------------------------------------------------------------------
+
+    def _stamp_sheet_ids(self, sheet_id=None):
+        """Tag every part with the id of the SHEET it renders on.
+
+        The root node is a sheet. A flattened child (a functional group, or a
+        subcircuit inlined by flatten()) renders on its parent's sheet, so it
+        inherits the parent's id; a non-flattened child starts its own sheet.
+        classify_label_scope() reads part.sheet_id to decide local-label vs
+        global-port, so nets crossing modules-on-the-same-sheet stay local.
+        """
+        if sheet_id is None:
+            my_id = id(self)  # root: its own (top) sheet
+        elif getattr(self, "flattened", False):
+            my_id = sheet_id  # inlined onto the parent's sheet
+        else:
+            my_id = id(self)  # own hierarchical sheet
+
+        for part in self.parts:
+            try:
+                part.sheet_id = my_id
+            except Exception:
+                pass
+        for child in self.children.values():
+            child._stamp_sheet_ids(my_id)
 
     # -----------------------------------------------------------------------
     # Statistics

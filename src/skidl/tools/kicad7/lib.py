@@ -55,18 +55,20 @@ def get_fp_lib_tbl_dir():
     """Get the path where the global fp-lib-table file is found."""
     kicad_version = __name__.split(".")[-2][len("kicad"):]
 
-    paths = (
-        f"$HOME/.config/kicad/{kicad_version}.0",
-        f"~/.config/kicad/{kicad_version}.0",
-        f"%APPDATA%/kicad/{kicad_version}.0",
-        f"$HOME/Library/Preferences/kicad/{kicad_version}.0",
-        f"~/Library/Preferences/kicad/{kicad_version}.0",
+    # Search this tool's own KiCad config version first, then fall back to any
+    # other installed version. The global fp-lib-table is version-agnostic (its
+    # lib URIs use ${KICAD*_FOOTPRINT_DIR}), so a table under e.g. 9.0 serves the
+    # kicad6/7/8 tool modules too -- without this fallback they emit a bogus
+    # "footprints are not available" warning whenever only a newer config exists.
+    versions = [kicad_version] + [v for v in ("9", "8", "7", "6") if v != kicad_version]
+    roots = (
         "$HOME/.config/kicad",
         "~/.config/kicad",
         "%APPDATA%/kicad",
         "$HOME/Library/Preferences/kicad",
         "~/Library/Preferences/kicad",
     )
+    paths = [f"{root}/{v}.0" for root in roots for v in versions] + list(roots)
     path = get_abs_filename("fp-lib-table", paths=paths, ext=None, allow_failure=True, descend=0)
     if not path:
         active_logger.bare_warning("fp-lib-table file was not found. Component footprints are not available.")

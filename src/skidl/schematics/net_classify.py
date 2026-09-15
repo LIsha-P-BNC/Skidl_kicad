@@ -296,6 +296,28 @@ def _hier_modules(net):
     return modules
 
 
+def _hier_sheets(net):
+    """Set of distinct SHEET ids touched by the net's REAL pins.
+
+    Reads part.sheet_id (stamped post-flatten by SchNode._stamp_sheet_ids).
+    Returns None if any real-pin part is unstamped, so classify_label_scope
+    can fall back to hierarchy-module comparison. NetTerminal pins (ref-prefix
+    NT) are skipped like in _hier_modules.
+    """
+    sheets = set()
+    for pin in getattr(net, "pins", []):
+        part = getattr(pin, "part", None)
+        if part is None:
+            continue
+        if (getattr(part, "ref_prefix", "") or "").upper() == "NT":
+            continue
+        sid = getattr(part, "sheet_id", None)
+        if sid is None:
+            return None  # not fully stamped -> caller falls back to modules
+        sheets.add(sid)
+    return sheets
+
+
 @export_to_all
 def classify_label_scope(net):
     """
@@ -315,8 +337,17 @@ def classify_label_scope(net):
     DYNAMIC: pure net/part inspection (net name + connected-part hierarchy),
     no per-circuit hardcoding.
     """
-    # Only a net whose real pins span more than one hierarchy module leaves
-    # this sheet. Every other label stays local, including a one-pin label.
+    # A label is GLOBAL only when the net truly leaves the SHEET. Prefer the
+    # post-flatten sheet id stamped on each part (SchNode._stamp_sheet_ids):
+    # two @subcircuit modules flattened onto one sheet share a sheet id, so a
+    # net between them stays LOCAL (a net-label), not a design-wide port.
+    sheets = _hier_sheets(net)
+    if sheets is not None:
+        return "global" if len(sheets) > 1 else "local"
+
+    # Fallback (sheet ids not stamped, e.g. a path with no SchNode tree):
+    # a net whose real pins span more than one hierarchy module leaves the
+    # sheet. Every other label stays local, including a one-pin label.
     if len(_hier_modules(net)) > 1:
         return "global"
 

@@ -203,19 +203,33 @@ def add_anchor_pull_pins(parts, nets, **options):
     if nets:
         # If nets exist, then these parts are interconnected so
         # assign pins on each net to part anchor and pull pin lists.
+        # DETERMINISM: iterate pins/parts in a STABLE (ref, pin-num) order --
+        # raw set iteration follows id() hashes that change every run, which
+        # reorders the anchor/pull pin lists and makes the force sums (and so
+        # the converged placement) differ from run to run.
+        def _pin_key(p):
+            return (str(getattr(p.part, "ref", "")), str(getattr(p, "num", "")))
+
         for net in nets:
             # Get net pins that are on movable parts.
-            pins = {pin for pin in net.pins if pin.part in parts}
+            pins = sorted(
+                {pin for pin in net.pins if pin.part in parts}, key=_pin_key
+            )
 
             # Get the set of parts with pins on the net.
             net.parts = {pin.part for pin in pins}
+            _net_parts_sorted = sorted(
+                net.parts, key=lambda pt: str(getattr(pt, "ref", ""))
+            )
 
             # Add each pin as an anchor on the part that contains it and
             # as a pull pin on all the other parts that will be pulled by this part.
             for pin in pins:
                 pin.part.anchor_pins[net].append(pin)
                 add_place_pt(pin.part, pin)
-                for part in net.parts - {pin.part}:
+                for part in _net_parts_sorted:
+                    if part is pin.part:
+                        continue
                     # NetTerminals are pulled towards connected parts, but
                     # those parts are not attracted towards NetTerminals.
                     if not is_net_terminal(pin.part):
@@ -1053,21 +1067,41 @@ def layout_blocks_by_role(blocks, roles, **options):
         return False
 
     pad = options.get("role_layout_pad", BLK_EXT_PAD)
-    distinct_roles = {r for r in roles.values() if r != "Other"}
-    if len(distinct_roles) >= 2:
-        # Recognizable functional roles -> order the row by role (Power->MCU->...).
-        ordered_blocks = order_blocks_by_role([(roles[blk], blk) for blk in blocks])
+
+    # FLOW ORDER FIRST: the author writes blocks input -> process -> output
+    # (docs: signal flow left->right), so the block sequence on the sheet is
+    # the CREATION order of their parts. Role order (Power->MCU->...) was
+    # scattering the story (e.g. "01. 5V, 02. 3V3, 03. INPUT, 04. OUTPUT" on
+    # the power board); creation order restores INPUT -> 5V -> 3V3 -> OUTPUT.
+    def _creation_key(blk):
+        try:
+            import builtins
+            cidx = {id(p): i for i, p in
+                    enumerate(builtins.default_circuit.parts)}
+            parts = [p for p in getattr(blk.src, "parts", [])
+                     if not is_net_terminal(p)]
+            if parts:
+                return min(cidx.get(id(p), 1 << 30) for p in parts)
+        except Exception:
+            pass
+        return 1 << 30
+
+    keyed = [(_creation_key(b), b) for b in blocks]
+    if all(k < (1 << 30) for k, _b in keyed):
+        ordered_blocks = [b for _k, b in sorted(keyed, key=lambda t: t[0])]
     else:
-        # No role differentiation (e.g. N identical driver channels, or a design
-        # with one anchor type). Previously we BAILED here and left the blocks
-        # wherever the force solver dropped them -- which reads as a staggered,
-        # unaligned scatter. Instead still run the deterministic row/grid wrap,
-        # just preserving the blocks' current left-to-right order, so repeated
-        # blocks line up on a clean baseline. Dynamic: works for any block count.
-        ordered_blocks = sorted(
-            blocks,
-            key=lambda b: (b.place_bbox.ll.x, b.place_bbox.ll.y),
-        )
+        distinct_roles = {r for r in roles.values() if r != "Other"}
+        if len(distinct_roles) >= 2:
+            # Recognizable functional roles -> order by role (Power->MCU->...).
+            ordered_blocks = order_blocks_by_role(
+                [(roles[blk], blk) for blk in blocks])
+        else:
+            # No ordering info at all: keep current left-to-right order so
+            # repeated blocks still line up on a clean baseline.
+            ordered_blocks = sorted(
+                blocks,
+                key=lambda b: (b.place_bbox.ll.x, b.place_bbox.ll.y),
+            )
 
     # Wrap the role-ordered sequence into page-shaped ROWS (reading order:
     # left->right then top->bottom, so the functional story is preserved).
@@ -1077,46 +1111,59 @@ def layout_blocks_by_role(blocks, roles, **options):
     heights = [b.place_bbox.h if b.place_bbox.h > 0 else 500 for b in ordered_blocks]
 
     def _wrap(target_w):
-        """Simulate the wrap at a given row width -> (W, H, positions)."""
+        """Simulate the wrap at a given row width -> (W, H, positions).
+
+        Placer Y is UP but the sheet renders Y-DOWN, so later rows must sit at
+        LOWER placer-y to read top->bottom in flow order on the final sheet
+        (otherwise block 04 renders ABOVE block 01)."""
         x = y = row_h = 0
-        used_w = 0
+        used_w = used_h = 0
         posns = []
         for w, h in zip(widths, heights):
             if x > 0 and x + w > target_w:
                 used_w = max(used_w, x - pad)
                 x = 0
-                y += row_h + pad
+                y -= row_h + pad          # next row BELOW on the sheet
                 row_h = 0
             posns.append((x, y))
             x += w + pad
             row_h = max(row_h, h)
+            used_h = max(used_h, -y + row_h)
         used_w = max(used_w, x - pad)
-        return used_w, y + row_h, posns
+        return used_w, used_h, posns
 
-    # Pick the row count whose overall shape is closest to a landscape page
-    # (sqrt(2):1, the A-series aspect) -- candidates are "total width / k".
-    total_w = sum(w + pad for w in widths)
-    if len(ordered_blocks) <= 6:
-        # Few blocks -- the typical multi-sheet PARENT (one sheet-box per
-        # functional cluster) or a small grouped design. These read best as a
-        # single role-ordered ROW (Power -> MCU -> Comms -> Memory -> ...
-        # left-to-right, the block-diagram convention) rather than an
-        # aspect-compact grid that scatters the flow into columns. A row of <=6
-        # equal boxes still fits a landscape page. NOTE: an aspect-fit grid was
-        # tried here to "fill the page" for same-role repeated blocks, but with
-        # unequal block widths it scatters them diagonally and reads worse than a
-        # clean row with honest whitespace -- reverted. Page-fill, if ever wanted,
-        # must scale content, not reflow the row.
-        _W, _H, posns = _wrap(total_w + max(widths) + pad)
-        best = (0.0, posns)
-    else:
-        best = None
-        for k in range(1, len(ordered_blocks) + 1):
-            tw = max(max(widths), total_w / k)
-            W, H, posns = _wrap(tw)
-            score = abs((W / max(H, 1)) - 1.414)
-            if best is None or score < best[0]:
-                best = (score, posns)
+    # Pack the role-ordered blocks into the SMALLEST fixed landscape page whose
+    # USABLE area (page minus margins and the title-block strip) holds them after
+    # wrapping to that page's width. This is the human decision: fill a real
+    # A4/A3, wrap to a new ROW when the row is full, and step up to a bigger page
+    # (or, when the space-aware sheet-split is enabled, a NEW SHEET) only when the
+    # content genuinely overflows -- NOT grow the paper to an arbitrary 773 mm
+    # row. Wrapping to the page WIDTH keeps a <=6-block flow as a single row when
+    # it fits and only wraps when it truly overflows, so the block-diagram
+    # reading order is preserved without unbounded whitespace.
+    _MILS_PER_MM = 1.0 / 0.0254
+
+    def _usable(w_mm, h_mm):
+        # 10 mm drawing margin each side; reserve ~35 mm at the bottom for the
+        # title block plus a little air so content never lands on it.
+        return ((w_mm - 20.0) * _MILS_PER_MM, (h_mm - 45.0) * _MILS_PER_MM)
+
+    _PAGES_MM = [("A4", 297, 210), ("A3", 420, 297),
+                 ("A2", 594, 420), ("A1", 841, 594)]
+    posns = None
+    for _pname, _pw, _ph in _PAGES_MM:
+        uw, uh = _usable(_pw, _ph)
+        W, H, p = _wrap(uw)
+        if W <= uw and H <= uh:
+            posns = p
+            break
+    if posns is None:
+        # Larger than A1 even after wrapping -> pack to A1 width; _fit_paper
+        # sizes the page up (and the space-aware sheet-split, once enabled,
+        # breaks the overflow onto a new sheet).
+        uw, _uh = _usable(*_PAGES_MM[-1][1:])
+        _W, _H, posns = _wrap(uw)
+    best = (0.0, posns)
     for seq, (blk, (x, y)) in enumerate(zip(ordered_blocks, best[1]), start=1):
         # (x, y) is the slot where this block's LOWER-LEFT corner must land.
         # blk.tx translates the block from its CURRENT position, and its bbox
@@ -1532,10 +1579,23 @@ class Placer:
                     break
 
         # Remove any empty groups that were unioned into other groups.
-        connected_parts = [group for group in connected_parts if group]
+        # DETERMINISM: return each group as a REF-SORTED LIST, not a set. A
+        # set of Part objects iterates in id()/hash order, which differs on
+        # every interpreter run (even with PYTHONHASHSEED=0) -- every consumer
+        # that iterates a group (seed selection, force sums, stubbing scans)
+        # then sees a different order per run and placement diverges.
+        def _stable_key(p):
+            return (str(getattr(p, "ref", "")), str(getattr(p, "name", "")))
 
-        # Find parts that aren't connected to anything.
-        floating_parts = set(node.parts) - set(itertools.chain(*connected_parts))
+        connected_parts = [
+            sorted(group, key=_stable_key) for group in connected_parts if group
+        ]
+
+        # Find parts that aren't connected to anything (ref-sorted, same reason).
+        floating_parts = sorted(
+            set(node.parts) - set(itertools.chain(*connected_parts)),
+            key=_stable_key,
+        )
 
         return connected_parts, internal_nets, floating_parts
 
@@ -1578,13 +1638,18 @@ class Placer:
         seed = max(parts, key=lambda p: len(adjacency.get(id(p), set())))
 
         # BFS traversal, placing in rows.
+        # DETERMINISM: visit neighbors in ref order -- the adjacency values
+        # are sets whose iteration order changes per run.
         visited = {id(seed)}
         queue = deque([seed])
         order = []
         while queue:
             part = queue.popleft()
             order.append(part)
-            for neighbor in adjacency.get(id(part), set()):
+            for neighbor in sorted(
+                adjacency.get(id(part), set()),
+                key=lambda p: str(getattr(p, "ref", "")),
+            ):
                 if id(neighbor) not in visited:
                     visited.add(id(neighbor))
                     queue.append(neighbor)
@@ -2097,6 +2162,11 @@ class Placer:
                     if id(p.part) in part_to_group
                 }
                 if len(pin_groups) > 1:
+                    import os as _os_pg
+                    _t = _os_pg.environ.get("SKIDL_NET_DEBUG")
+                    if _t and _t in str(getattr(net, "name", "")):
+                        print(f">>> PLACER_GROUP_STUB net={net.name} "
+                              f"groups={len(pin_groups)}")
                     net._stub = True
                     net._stub_explicit = False
                     for p in net.get_pins():
@@ -2240,10 +2310,11 @@ class Placer:
                         node.calc_bbox()
                         return
                 except Exception as _anchor_exc:  # never let it break the build
+                    import traceback as _tb
                     import warnings as _warnings
                     _warnings.warn(
-                        "anchor_place failed (%r) -- using legacy placer"
-                        % (_anchor_exc,),
+                        "anchor_place failed (%r) -- using legacy placer\n%s"
+                        % (_anchor_exc, _tb.format_exc()),
                         RuntimeWarning,
                     )
 

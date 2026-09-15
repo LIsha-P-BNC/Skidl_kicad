@@ -407,23 +407,84 @@ def place_node(node, **options):
 
     _pl.add_placement_bboxes(real, **options)
 
-    # M6 HIERARCHICAL CLUSTER PACKING. (1) group parts into functional clusters
-    # (signal clusters + power-only decaps re-attached to their IC's cluster);
-    # (2) pack each cluster TIGHT around its anchor -> members share short nets,
-    # which the router wires (not labels); (3) place the CLUSTERS as units with
-    # generous gaps -> only inter-cluster nets are far enough to label. This
-    # "wire-in / label-between" is what lets the sheet publish AND read well.
-    clusters, adj = build_clusters(real, nets)
-    g_anchor = global_anchor(clusters)
-    if g_anchor is None or _pin_count(g_anchor) < 3:
-        return False  # no dominant anchor -> let legacy handle it
+    # M11 AUTHORED-BLOCK AWARENESS: when the script grouped parts into
+    # functional blocks (`with smart_schematic.block(...)` / auto-grouping),
+    # those groups ARE the clusters -- each block is a complete function
+    # (input -> process -> output), so pack IT tight around ITS own anchor and
+    # lay the blocks left-to-right in AUTHOR (creation) order, which is the
+    # script's signal-flow order. Re-deriving clusters from the signal graph
+    # here would fight the drawn block boxes (parts placed outside their box).
+    groups = {}
+    ungrouped = []
+    for p in real:
+        g = getattr(p, "group", None)
+        if g:
+            groups.setdefault(str(g), set()).add(p)
+        else:
+            ungrouped.append(p)
 
-    packed = []
-    for cl in clusters:
-        _pack_cluster(cl, adj)
-        packed.append((cl, _cluster_bbox(cl)))
-    anchor_cluster = next((cl for cl in clusters if g_anchor in cl), clusters[0])
-    _place_cluster_units(packed, anchor_cluster)
+    # SINGLE-ANCHOR FLOW GUARD: the anchor packer's value is packing MULTIPLE
+    # clusters/blocks tight. A circuit with ONE dominant IC (a regulator or MCU
+    # + its passives) and no second block has nothing to pack against -- the
+    # spiral then separates the signal core from the power-only passives and
+    # scatters them, while the LEGACY directional placer lays the same parts in
+    # a clean left->right flow (measured buck_12v_5v_demo: anchor Y-span 163 mm
+    # vs legacy 38 mm, both fully wired). So hand a single-anchor design to the
+    # legacy placer. Kill switch: SKIDL_ANCHOR_SINGLE=1 forces the old spiral.
+    import os as _os
+    _anchor_count = sum(
+        1 for p in real
+        if (getattr(p, "ref_prefix", "") or "").upper() in _SEED_REF_PREFIXES
+        and _pin_count(p) >= 3
+    )
+    if (len(groups) < 2 and _anchor_count < 2
+            and _os.environ.get("SKIDL_ANCHOR_SINGLE") != "1"):
+        return False
+
+    if len(groups) >= 2:
+        _, adj = detect_signal_clusters(real, nets)
+        clusters = [set(c) for c in groups.values()]
+        # Ungrouped strays join the block they share the most signal edges
+        # with; anything with no signal edge to any block becomes one misc
+        # cluster (placed last in the row).
+        for p in ungrouped:
+            best = max(
+                clusters,
+                key=lambda c: (sum(1 for q in adj.get(p, ()) if q in c), len(c)),
+            )
+            if sum(1 for q in adj.get(p, ()) if q in best):
+                best.add(p)
+        left = [p for p in ungrouped if not any(p in c for c in clusters)]
+        if left:
+            clusters.append(set(left))
+        g_anchor = global_anchor(clusters)
+        if g_anchor is None or _pin_count(g_anchor) < 3:
+            return False  # no dominant anchor -> let legacy handle it
+        packed = []
+        for cl in clusters:
+            _pack_cluster(cl, adj)
+            packed.append((cl, _cluster_bbox(cl)))
+        order_ix = {id(p): i for i, p in enumerate(real)}
+        _place_cluster_flow_row(packed, order_ix)
+    else:
+        # M6 HIERARCHICAL CLUSTER PACKING. (1) group parts into functional
+        # clusters (signal clusters + power-only decaps re-attached to their
+        # IC's cluster); (2) pack each cluster TIGHT around its anchor ->
+        # members share short nets, which the router wires (not labels);
+        # (3) place the CLUSTERS as units with generous gaps -> only
+        # inter-cluster nets are far enough to label. This "wire-in /
+        # label-between" is what lets the sheet publish AND read well.
+        clusters, adj = build_clusters(real, nets)
+        g_anchor = global_anchor(clusters)
+        if g_anchor is None or _pin_count(g_anchor) < 3:
+            return False  # no dominant anchor -> let legacy handle it
+
+        packed = []
+        for cl in clusters:
+            _pack_cluster(cl, adj)
+            packed.append((cl, _cluster_bbox(cl)))
+        anchor_cluster = next((cl for cl in clusters if g_anchor in cl), clusters[0])
+        _place_cluster_units(packed, anchor_cluster)
 
     for part in real:
         _pl.snap_to_grid(part)
@@ -434,8 +495,16 @@ def place_node(node, **options):
     # before routing so the router sees the final pin geometry.
     _orient_passives_rail_up(real)
 
-    _pl.add_anchor_pull_pins(real, nets, **options)
     net_terminals = [p for p in node.parts if _pl.is_net_terminal(p)]
+    if net_terminals:
+        _pl.add_placement_bboxes(net_terminals, **options)
+    # ONE combined call, like the legacy path (place.py:1563-1564): a
+    # terminal's pull_pins only populate when the REAL parts sharing its net
+    # are in the same `parts` list (add_anchor_pull_pins filters pins by
+    # `pin.part in parts`, and two separate calls also clobber net.parts).
+    # Latent M10 gap: auto-hierarchy child sheets carried no terminals, so
+    # the real-parts-only call never bit until a grouped root sheet (M11).
+    _pl.add_anchor_pull_pins(real + net_terminals, nets, **options)
     if net_terminals:
         _pl.place_net_terminals(
             net_terminals, real, nets, _pl.total_part_force, **options
@@ -616,6 +685,362 @@ def _anchor_pin_geometry(anchor):
     return geom
 
 
+def flow_place_hinted(node, **options):
+    """Author-driven FLOW placement. When the script tags parts with a
+    `flow_x` hint (an integer column: input on the left, output on the right),
+    lay the parts out in those columns left-to-right -- the exact
+    input -> process -> output flow the author intends.
+
+    This sidesteps the impossible auto-detection of input/output rails on
+    switching topologies (a buck's output rail is downstream of the inductor
+    with no direct IC pin). The AI writing the circuit KNOWS which part is
+    input vs output, so it states it; the engine just arranges. Parts within a
+    column stack vertically in `flow_y` order (default: creation order).
+    No hints present -> no-op. Returns the number of parts moved."""
+    from skidl.geometry import Tx, Point
+    from skidl.schematics.place import is_net_terminal, snap_to_grid
+
+    real = [p for p in getattr(node, "parts", []) if not is_net_terminal(p)]
+    hinted = [p for p in real if getattr(p, "flow_x", None) is not None]
+    if len({getattr(p, "flow_x") for p in hinted}) < 2:
+        return 0
+
+    order_ix = {id(p): i for i, p in enumerate(real)}
+
+    def _wh(p):
+        bb = _world_bbox(p)
+        return max(getattr(bb, "w", 400), 150), max(getattr(bb, "h", 400), 150)
+
+    def _pin_span_w(p):
+        """Horizontal span of the part's PINS in world coords (NOT the text box).
+
+        Spacing on the pin span -- plus a fixed clearance -- lets same-function
+        parts sit genuinely tight (a vertical 2-pin cap has ~0 pin-span, so it
+        packs to just the clearance) instead of every part reserving room for its
+        wide value text. Value text may then overhang slightly between parts; a
+        function boundary's larger gap keeps blocks legible. Falls back to the
+        text-box width if pin coords are unavailable."""
+        xs = []
+        for pin in getattr(p, "pins", []):
+            pt = getattr(pin, "pt", None)
+            if pt is None:
+                continue
+            wp = pt * p.tx
+            xs.append(wp.x)
+        if len(xs) >= 2:
+            return max(xs) - min(xs)
+        w, _h = _wh(p)
+        return min(w, 200.0)  # single-pin / unknown: a narrow default
+
+    # SINGLE ROW, side-by-side: every hinted part gets its OWN x-slot (ordered
+    # by flow_x, then flow_y), all on ONE horizontal baseline. No vertical
+    # stacking -- so each part's power pin has a CLEAR vertical path up to a
+    # top power rail and each ground pin a clear path down to a bottom GND rail
+    # (the TRACKER ladder). Stacking two caps at one x blocked the lower cap's
+    # rail stub; a single row removes that.
+    ordered = sorted(hinted, key=lambda p: (int(getattr(p, "flow_x")),
+                                            int(getattr(p, "flow_y", 0)),
+                                            order_ix.get(id(p), 0)))
+
+    # FUNCTION-AWARE gaps: neighbouring parts sit CLOSE when they belong to the
+    # same function -- the same flow_x column (author's declared group, e.g. the
+    # two input caps) OR sharing a routed SIGNAL net (e.g. U1-L1-D1 all on
+    # SW_NODE, the switching cluster that must stay tight). A jump to a different
+    # function gets a wider gap so the blocks read as separate groups. Power/GND
+    # nets do NOT count as "shared" -- every part touches them, so they would
+    # collapse every gap to tight and defeat the grouping.
+    import re as _re
+    _PWR = _re.compile(r"^(gnd\w*|agnd|dgnd|\+.*|v(cc|dd|ss|in|bat|sys|bus|out)\w*"
+                       r"|\d+v\d*|.*_\d+v\d*)$", _re.I)
+
+    def _sig_nets(p):
+        s = set()
+        for pin in getattr(p, "pins", []):
+            net = getattr(pin, "net", None)
+            for n in (net if isinstance(net, (list, tuple, set)) else [net]):
+                nm = getattr(n, "name", None)
+                if nm and not _PWR.match(str(nm)):
+                    s.add(str(nm))
+        return s
+
+    def _pin_cx(p):
+        """World-x centre of the part's pin span (what the slot is built around)."""
+        xs = []
+        for pin in getattr(p, "pins", []):
+            pt = getattr(pin, "pt", None)
+            if pt is not None:
+                xs.append((pt * p.tx).x)
+        return (min(xs) + max(xs)) / 2.0 if xs else _world_bbox(p).ctr.x
+
+    # Space on the PIN span + a clearance, not the wide value-text box, so
+    # same-function parts genuinely pack tight. MIN_SLOT keeps bodies apart even
+    # for zero-span vertical parts. INTRA vs INTER gap makes the functional
+    # blocks read as groups (the user's rule: gap depends on function).
+    MIN_SLOT = 250.0    # body slot for a vertical 2-pin part
+    INTRA_GAP = 220.0   # same-function neighbours sit tight
+    INTER_GAP = 620.0   # a new function: a clear block boundary
+    moved = 0
+    x_cursor = 0.0
+    base_y = _world_bbox(ordered[0]).ctr.y
+    prev, prev_sig = None, set()
+    for p in ordered:
+        ew = max(_pin_span_w(p), MIN_SLOT)
+        cur_sig = _sig_nets(p)
+        if prev is not None:
+            same_fn = (int(getattr(p, "flow_x")) == int(getattr(prev, "flow_x"))
+                       or bool(prev_sig & cur_sig))
+            x_cursor += INTRA_GAP if same_fn else INTER_GAP
+        col_cx = x_cursor + ew / 2.0
+        pcx = _pin_cx(p)
+        pc = _world_bbox(p).ctr
+        p.tx = p.tx * Tx().move(Point(col_cx - pcx, base_y - pc.y))
+        snap_to_grid(p)
+        x_cursor += ew
+        prev, prev_sig = p, cur_sig
+        moved += 1
+    return moved
+
+
+def flow_place_block(node, **options):
+    """AUTO within-block flow: lay a functional block's parts in a TIGHT single
+    row (creation order == the author's input->process->output order), centred on
+    the block's current location, so the block's LOCAL signal nets are short and
+    the router WIRES them instead of labeling. The buck proved a tight row wires
+    100%; the legacy scatter and the spiral both leave a single-anchor block's
+    SW_NODE / indicator R-LED as labels. Runs ONLY on a real single-group block
+    (>=3 parts) with NO manual flow_x hints (those go through flow_place_hinted).
+    Power nets still render as per-pin symbols; only within-block SIGNAL nets go
+    from labels to wires. Kill switch SKIDL_FLOW_BLOCK=0. Returns parts moved."""
+    import os as _os
+    if _os.environ.get("SKIDL_FLOW_BLOCK") == "0":
+        return 0
+    from skidl.geometry import Tx, Point
+    from skidl.schematics.place import is_net_terminal, snap_to_grid
+
+    real = [p for p in getattr(node, "parts", []) if not is_net_terminal(p)]
+    if len(real) < 3:
+        return 0
+    if any(getattr(p, "flow_x", None) is not None for p in real):
+        return 0  # author hints -> flow_place_hinted handles it
+    _grps = {getattr(p, "group", None) for p in real}
+    _single_group = len(_grps) == 1 and None not in _grps
+    # A @subcircuit PAGE in hierarchy mode is itself ONE function (docs D.0:
+    # one sheet = one function), so an UNGROUPED child-sheet node rows exactly
+    # like an authored block -- that is what gives every hierarchy child sheet
+    # the same ladder treatment as a flat block. The ROOT of a flat ungrouped
+    # design (parent is None) still bails to the legacy/hug path.
+    _is_page = getattr(node, "parent", None) is not None and None in _grps
+    if not (_single_group or _is_page):
+        return 0  # a flat/mixed root node is not a single function
+    # A tight ROW only suits a SMALL, LINEAR stage (power stage, analog chain).
+    # A block with a big IC (MCU/large device, many pins) or many parts fans out
+    # in 2-D; rowing it strings the fan-out and the router LABELS more, not less
+    # (measured: stm32 12->33, arduino 0->24 labels). Leave those to the anchor
+    # hug. Threshold: no part >16 pins, <=10 parts.
+    if len(real) > 10 or any(_pin_count(p) > 16 for p in real):
+        return 0
+
+    import builtins
+    try:
+        cidx = {id(p): i for i, p in enumerate(builtins.default_circuit.parts)}
+    except Exception:
+        cidx = {}
+    ordered = sorted(real, key=lambda p: cidx.get(id(p), 0))
+
+    def _pin_xs(p):
+        xs = []
+        for pin in getattr(p, "pins", []):
+            pt = getattr(pin, "pt", None)
+            if pt is not None:
+                xs.append((pt * p.tx).x)
+        return xs
+
+    def _pin_span_w(p):
+        xs = _pin_xs(p)
+        return (max(xs) - min(xs)) if len(xs) >= 2 else min(getattr(_world_bbox(p), "w", 200.0), 200.0)
+
+    def _pin_cx(p):
+        xs = _pin_xs(p)
+        return (min(xs) + max(xs)) / 2.0 if xs else _world_bbox(p).ctr.x
+
+    # keep the block where the placer put it: centre the row on the current centroid
+    cxs = [_world_bbox(p).ctr.x for p in real]
+    cys = [_world_bbox(p).ctr.y for p in real]
+    cen_x = sum(cxs) / len(cxs)
+    base_y = sum(cys) / len(cys)
+
+    MIN_SLOT = 200.0
+    GAP = 150.0
+    widths = [max(_pin_span_w(p), MIN_SLOT) for p in ordered]
+    total_w = sum(widths) + GAP * (len(ordered) - 1)
+    x = cen_x - total_w / 2.0
+    moved = 0
+    for p, ew in zip(ordered, widths):
+        col_cx = x + ew / 2.0
+        pc = _world_bbox(p).ctr
+        p.tx = p.tx * Tx().move(Point(col_cx - _pin_cx(p), base_y - pc.y))
+        snap_to_grid(p)
+        p._flow_rowed = True   # rail-draw key: this block is ladder-ready
+        x += ew + GAP
+        moved += 1
+    return moved
+
+
+def hug_power_satellites(node, **options):
+    """M12: pull each power-only decoupling cap up beside the IC it decouples.
+
+    A 2-pin cap whose BOTH pins sit on power/ground rails has no signal edge to
+    its IC (the rails are power symbols, not routed nets), so the placer leaves
+    it stranded in a row far from the part it belongs to. This post-placement
+    pass finds, for each such cap, an anchor IC that shares one of its rail
+    nets and re-seats the cap just outside that IC's bbox -- caps on the same
+    IC stack in a tidy column -- so the sheet reads as a tight decoupling
+    cluster (the hand-layout / TRACKER look). Rails still render as symbols;
+    only the cap POSITIONS change. Runs AFTER place(), BEFORE wire/label
+    classification, so distance-based decisions see the tightened geometry.
+    Kill switch: SKIDL_HUG_DECAPS=0. Returns the number of caps moved."""
+    import os as _os
+    if _os.environ.get("SKIDL_HUG_DECAPS") == "0":
+        return 0
+    from skidl.geometry import Tx, Point
+    from skidl.schematics.place import is_net_terminal, snap_to_grid
+
+    real = [p for p in getattr(node, "parts", []) if not is_net_terminal(p)]
+    anchors = [
+        p for p in real
+        if (getattr(p, "ref_prefix", "") or "").upper() in _SEED_REF_PREFIXES
+        and _pin_count(p) >= 3
+    ]
+    # ONLY single-anchor designs. With >=2 ICs the anchor packer (or the
+    # per-block structure) already clusters each IC's decaps; hugging then
+    # fights that placement and strands OTHER nets into labels (measured
+    # stm32: 72 wired -> 49 with core nets labeled). A lone regulator/MCU is
+    # exactly where decaps get stranded, so that is where hugging helps.
+    if len(anchors) != 1:
+        return 0
+
+    def _rails(p, kinds=("rail",)):
+        return {
+            getattr(pp.net, "name", "") for pp in getattr(p, "pins", [])
+            if getattr(pp, "net", None) is not None
+            and _net_power_kind(pp.net) in kinds
+        }
+
+    def _is_decap(p):
+        if (getattr(p, "ref_prefix", "") or "").upper() != "C":
+            return False
+        pins = [pp for pp in getattr(p, "pins", [])
+                if getattr(pp, "net", None) is not None]
+        return len(pins) == 2 and all(
+            _net_power_kind(pp.net) in ("rail", "ground") for pp in pins)
+
+    # SIGNAL SATELLITES (crystal on OSC, reset R-C on NRST, boot Rs, indicator
+    # R on a GPIO) hug their anchor PIN too -- but ONLY in an UN-ROWED block
+    # (a big-IC node flow_place_block skipped). On a rowed block this exact
+    # move was measured to DESTROY the row (power_board 0->5, arduino 0->24
+    # labels) -- the row already seats everything; satellites-hug is for the
+    # dense-MCU case where the placer strands them and they LABEL (stm32 33).
+    _rowed = any(getattr(p, "_flow_rowed", False) for p in real)
+
+    def _is_sig_satellite(p):
+        if p in anchors or _pin_count(p) > 2:
+            return False
+        pins = [pp for pp in getattr(p, "pins", [])
+                if getattr(pp, "net", None) is not None]
+        return any(_net_power_kind(pp.net) not in ("rail", "ground")
+                   for pp in pins)
+
+    decaps = [p for p in real if _is_decap(p)]
+    if not _rowed:
+        anet = {getattr(pp.net, "name", "") for a in anchors
+                for pp in getattr(a, "pins", [])
+                if getattr(pp, "net", None) is not None}
+        decaps += sorted(
+            (p for p in real if _is_sig_satellite(p)
+             and not getattr(p, "_hugged", False)
+             and any(getattr(pp.net, "name", "") in anet
+                     for pp in getattr(p, "pins", [])
+                     if getattr(pp, "net", None) is not None)),
+            key=_refkey)
+    if not decaps:
+        return 0
+
+    def _ppins(anchor):
+        """(net_name, world_pt, kind) for EVERY connected anchor pin
+        (kind: rail/ground/signal) -- decaps seat on power pins, signal
+        satellites on the signal pin they serve."""
+        out = []
+        for pp in getattr(anchor, "pins", []):
+            net = getattr(pp, "net", None)
+            if net is None:
+                continue
+            k = _net_power_kind(net) or "signal"
+            try:
+                out.append((getattr(net, "name", ""), pp.pt * anchor.tx, k))
+            except Exception:
+                pass
+        return out
+
+    def _dnets(p, kinds=None):
+        s = set()
+        for pp in getattr(p, "pins", []):
+            net = getattr(pp, "net", None)
+            if net is None:
+                continue
+            k = _net_power_kind(net) or "signal"
+            if kinds is None or k in kinds:
+                s.add(getattr(net, "name", ""))
+        return s
+
+    moved = 0
+    for anchor in sorted(anchors, key=_refkey):
+        a_rails = _rails(anchor)
+        if not a_rails:
+            continue
+        abb = _world_bbox(anchor)
+        ac = abb.ctr
+        ppins = _ppins(anchor)
+        a_all = {nm for nm, _pt, _k in ppins}
+        mine = [d for d in decaps
+                if (_dnets(d) & a_all) and getattr(d, "_hugged", False) is False]
+        if not mine or not ppins:
+            continue
+        mine.sort(key=_refkey)
+        gap = 300.0
+        stacked = {}
+        for d in mine:
+            d_all = _dnets(d)
+            d_sig = _dnets(d, kinds=("signal",))
+            cands = [(nm, pt, k) for nm, pt, k in ppins if nm in d_all]
+            if not cands:
+                continue
+
+            def _key(c, _stacked=stacked, _sig=d_sig):
+                pk = round(c[1].x) * 100003 + round(c[1].y)
+                # a signal satellite seats on ITS signal pin; a decap on a
+                # rail pin; ground last.
+                rank = (0 if (c[0] in _sig and c[2] == "signal")
+                        else (1 if c[2] == "rail" else 2))
+                return (rank, _stacked.get(pk, 0))
+
+            nm, pt, k = min(cands, key=_key)
+            pk = round(pt.x) * 100003 + round(pt.y)
+            j = stacked.get(pk, 0)
+            stacked[pk] = j + 1
+            dvec = Point(pt.x - ac.x, pt.y - ac.y)
+            L = max((dvec.x ** 2 + dvec.y ** 2) ** 0.5, 1.0)
+            ux, uy = dvec.x / L, dvec.y / L
+            pitch = max(_world_bbox(d).h * 1.2, 300.0)
+            reach = gap + j * pitch
+            target = Point(pt.x + ux * reach, pt.y + uy * reach)
+            dc = _world_bbox(d).ctr
+            d.tx = d.tx * Tx().move(Point(target.x - dc.x, target.y - dc.y))
+            snap_to_grid(d)
+            d._hugged = True
+            moved += 1
+    return moved
+
+
 def _pack_cluster(cluster, adj=None):
     """Pack a cluster's parts around its anchor (anchor at the local origin).
 
@@ -655,6 +1080,26 @@ def _place_cluster_units(packed, anchor_cluster, gap=1200.0):
         ctr = _cluster_bbox(cluster).ctr
         _move_cluster(cluster, cx * pitch - ctr.x, cy * pitch - ctr.y)
     _resolve_cluster_collisions([c for c, _ in ordered], anchor_cluster, gap)
+
+
+def _place_cluster_flow_row(packed, order_ix, gap=1200.0):
+    """Lay packed clusters in AUTHOR creation order (scripts define blocks
+    input -> processing -> output, so creation order IS the signal-flow order),
+    wrapped into a PAGE-SHAPED grid: left-to-right on a common baseline, then a
+    new row when the current row would overflow the page width, and a bigger
+    page only when the content genuinely overflows -- the human decision (fill a
+    real A4/A3, wrap when full) instead of one unbounded row that the collision
+    resolver then scatters. Used for authored-block (M11) designs; the spiral
+    (_place_cluster_units) stays for signal-derived clusters with no author
+    order."""
+    ordered = sorted(
+        packed, key=lambda pc: min(order_ix.get(id(p), 0) for p in pc[0])
+    )
+    x = 0.0
+    for cluster, _bb in ordered:
+        bb = _cluster_bbox(cluster)
+        _move_cluster(cluster, x - bb.min.x, -bb.ctr.y)
+        x += bb.w + gap
 
 
 def _resolve_cluster_collisions(clusters, anchor_cluster, gap, iters=200):

@@ -233,6 +233,11 @@ def _stub_nets_for_erc_errors(circuit, errors):
                     if str(pin.num) == str(pin_num):
                         net = pin.net
                         if net and not getattr(net, "_stub_explicit", False):
+                            import os as _os_ef
+                            _t = _os_ef.environ.get("SKIDL_NET_DEBUG")
+                            if _t and _t in str(getattr(net, "name", "")):
+                                print(f">>> ERC_FIX_STUB net={net.name} "
+                                      f"from {symbol_ref}/{pin_num}")
                             net._stub = True
                             net._stub_explicit = False
                             for p in net.get_pins():
@@ -411,7 +416,12 @@ def _classify_and_stub_complex_nets(circuit, node, **options):
     # can only look worse, never short.
     from skidl.schematics.net_classify import classify_net_function
 
-    max_wire_pins = options.get("auto_stub_max_wire_pins", 3)
+    # Reference boards wire local nodes up to ~5 pins (divider + filter + series-R
+    # off one node, 3/4-way junctions, multi-drop); a 4-pin divider node must be a
+    # WIRE, not a label. Keep this in step with sch_node._wire_max_local_pins (5),
+    # which the two-tier decision otherwise contradicted (was 3 here -> every 4-pin
+    # local net got stubbed into labels even on a tiny sheet).
+    max_wire_pins = options.get("auto_stub_max_wire_pins", 5)
     far_label_dist = options.get("auto_stub_far_label_dist", 1500)  # mil, closest-pin
     cross_label_at = options.get("auto_stub_crossing_label_threshold", 4)
     congest_at = options.get("auto_stub_congestion_label_threshold", 16)
@@ -439,10 +449,20 @@ def _classify_and_stub_complex_nets(circuit, node, **options):
         if span is not None:
             spans[net] = span
 
-    all_pin_pts = _all_pin_points(node_parts)
-    cluster_of = _cluster_id_map(node_parts)
+    # DETERMINISM: hand these helpers a ref-sorted LIST -- iterating the raw
+    # set follows per-run id() hash order, which changes detect_clusters' BFS
+    # tie-breaks (and so cluster ids / wire-vs-label calls) run to run.
+    _node_parts_sorted = sorted(
+        node_parts, key=lambda p: str(getattr(p, "ref", ""))
+    )
+    all_pin_pts = _all_pin_points(_node_parts_sorted)
+    cluster_of = _cluster_id_map(_node_parts_sorted)
 
-    def _stub(net):
+    def _stub(net, gate="?"):
+        import os as _os_cs
+        _t = _os_cs.environ.get("SKIDL_NET_DEBUG")
+        if _t and _t in str(getattr(net, "name", "")):
+            print(f">>> CLASSIFY_STUB net={net.name} gate={gate}")
         net._stub = True
         net._stub_explicit = False
         for p in net.get_pins():
@@ -455,12 +475,49 @@ def _classify_and_stub_complex_nets(circuit, node, **options):
             continue
         fanout = len(pins)
 
-        # (3) FUNCTION priority -> WIRE. Clock (crystal/XTAL/OSC), reset, USB
-        #     differential pair, and decoupling nets must read as direct local
-        #     connections -- never a label, whatever the distance. (Power is
-        #     already a symbol and returns "power" here, but power nets don't
-        #     reach this loop, so the only categories seen are the wire ones.)
-        if classify_net_function(net) is not None:
+        # Block identity for gates (3)-(3c): hierarchy path + block()/auto
+        # group tag. An ungrouped flat design collapses to ONE block id, so
+        # every gate below behaves exactly as before for it.
+        blk_ids = {
+            (
+                tuple(getattr(p.part, "hiertuple", ()) or ()),
+                getattr(p.part, "group", None),
+            )
+            for p in pins
+        }
+        same_block = len(blk_ids) == 1
+        # Kill switch for the block-scoped gates (A/B + emergency revert):
+        # SKIDL_CROSS_BLOCK_LABEL=0 restores the pre-2026-09-09 behavior.
+        import os as _os
+        _block_scope = _os.environ.get("SKIDL_CROSS_BLOCK_LABEL", "1") != "0"
+        if not _block_scope:
+            same_block = True
+
+        # (3) FUNCTION priority -> WIRE, scoped to ONE block. Clock (crystal/
+        #     XTAL/OSC), reset, USB differential pair, and decoupling nets must
+        #     read as direct local connections at their anchor -- never a
+        #     label, whatever the in-block distance. But a function net that
+        #     SPANS blocks (e.g. USB_DP from the USB-connector block to the
+        #     MCU block) is a block-edge interface: forcing a cross-block wire
+        #     snakes the sheet and defeats packed block layouts (RULE_ENGINE
+        #     Phase 3b known limitation -- this is that fix).
+        if same_block and classify_net_function(net) is not None:
+            continue
+
+        # (3b) SAME-BLOCK -> WIRE: every pin lives in ONE function block.
+        #      The reference wires a block's internal chain regardless of
+        #      distance -- labels are for block edges only (the
+        #      "finger-trace" readability rule).
+        if fanout <= max_wire_pins and same_block:
+            continue
+
+        # (3c) CROSS-BLOCK -> LABEL: "wire in-block, label cross-block". A
+        #      net leaving its function block connects at the block edge by
+        #      NAME; a wire dragged between blocks is the snaking-wire
+        #      anti-pattern however close the nearest pins happen to sit.
+        if not same_block:
+            _stub(net, "3c-crossblock")
+            stubbed_count += 1
             continue
 
         # (4) AFFINITY -> WIRE: all pins in one functional cluster (crystal/
@@ -488,22 +545,22 @@ def _classify_and_stub_complex_nets(circuit, node, **options):
 
         # (5) many CROSSINGS -> LABEL (a wire would tangle the drawing).
         if crossings >= cross_label_at:
-            _stub(net)
+            _stub(net, "5-crossings")
             stubbed_count += 1
             continue
         # (6) high pin-CONGESTION -> LABEL (unreadable even if short).
         if congestion >= congest_at:
-            _stub(net)
+            _stub(net, "6-congestion")
             stubbed_count += 1
             continue
         # (7) FAR (closest pins beyond far_label_dist) -> LABEL.
         if eff_dist >= far_label_dist:
-            _stub(net)
+            _stub(net, "7-distance")
             stubbed_count += 1
             continue
         # (8) high FANOUT -> LABEL (bus-like clutter; a real Bus renders as one).
         if fanout > max_wire_pins:
-            _stub(net)
+            _stub(net, "8-fanout")
             stubbed_count += 1
             continue
         # (9) otherwise -> WIRE (near, low fanout, few crossings, uncongested).
@@ -549,7 +606,11 @@ def _relax_label_collisions(node, iters=200):
     parts = sorted(node.parts, key=lambda p: str(getattr(p, "ref", "") or ""))
     if len(parts) < 2:
         return
-    pad = GRID  # one grid cell of air between visual boxes
+    # Two grid cells of air between visual boxes. One cell (GRID) left tightly
+    # clustered parts (e.g. R/C/R around a shared divider node) with their
+    # Reference/Value text visually touching even though the boxes technically
+    # cleared; 2*GRID gives readable separation matching the reference sheets.
+    pad = 2 * GRID
     moved_any = False
     for _ in range(iters):
         moved = False
@@ -914,12 +975,101 @@ def gen_schematic(
             circuit, tool_module, filepath, top_name, title, flatness
         )
 
+        # D.0 gate (smart_schematic): a small over-split design was merged to
+        # ONE function -- suppress the leftover section boxes (flattened page
+        # boxes included) so the sheet reads as one clean circuit.
+        if options.get("suppress_block_boxes"):
+            def _no_box(n):
+                n._no_box = True
+                for _c in n.children.values():
+                    _no_box(_c)
+            _no_box(node)
+
         try:
             node.place(expansion_factor=expansion_factor, **options)
+            # M12: pull power-only decaps up beside the IC they decouple, so a
+            # function reads as a tight decoupling cluster instead of a spread
+            # row. Runs after placement, before wire/label classification (which
+            # is distance-based). Safe: only cap POSITIONS change; a failure is
+            # swallowed so it can never break a build. Kill switch SKIDL_HUG_DECAPS=0.
+            try:
+                from skidl.schematics.anchor_place import (
+                    hug_power_satellites, flow_place_hinted, flow_place_block)
+
+                def _hug_all(n):
+                    # 1) author flow_x hints win (whole-circuit flow layout);
+                    # 2) else, if this node is a single-function BLOCK, lay it
+                    #    out as a tight flow ROW (local nets wire, not label)
+                    #    AND hug the decaps beside their IC power pins -- the
+                    #    H&C reference look; the per-block rail-draw then puts
+                    #    the rails over the block (measured: skipping the hug
+                    #    here regressed SW_NODE/N$1 back to labels);
+                    # 3) else, just hug the decaps.
+                    if flow_place_hinted(n, **options) == 0:
+                        flow_place_block(n, **options)
+                        hug_power_satellites(n, **options)
+                    for _ch in getattr(n, "children", {}).values():
+                        _hug_all(_ch)
+                _hug_all(node)
+            except Exception as _hug_exc:
+                import warnings as _w
+                _w.warn("hug_power_satellites skipped: %r" % (_hug_exc,),
+                        RuntimeWarning)
+            # ELK layered placement (opt-in) must run BEFORE the wire-vs-label
+            # classification: stub decisions are DISTANCE-based, so they must
+            # see the FINAL geometry. Classifying against force-directed
+            # positions and then moving everything with ELK left main signal
+            # chains as label-hops (unreadable).
+            if options.get("placement_mode") == "elk":
+                from skidl.anvil.elk_layout import place_with_elk, ElkUnavailable
+                try:
+                    n_moved = place_with_elk(node, **options)
+                    active_logger.info(
+                        f"  [elk] repositioned {n_moved} parts via ELK layered layout"
+                    )
+                except ElkUnavailable as _e:
+                    active_logger.warning(
+                        f"  [elk] unavailable, keeping force-directed placement: {_e}"
+                    )
             if options.get("auto_stub", False):
                 _classify_and_stub_complex_nets(circuit, node, **options)
                 _relax_label_collisions(node)
             node.route(**options)
+
+            # CONNECTIVITY SAFETY NET: a multi-pin net that ends up with
+            # NEITHER wires NOR labels silently splits the drawn design
+            # (verified: 77 lost pin-groups on the tracker). Force labels on
+            # any such net and say so loudly.
+            def _wired_nets(n, acc):
+                acc.update(id(nn) for nn in (getattr(n, "wires", {}) or {}))
+                for ch in getattr(n, "children", {}).values():
+                    _wired_nets(ch, acc)
+                return acc
+
+            from skidl.net import NCNet
+            _wired = _wired_nets(node, set())
+            _rescued = []
+            for _net in circuit.nets:
+                if isinstance(_net, NCNet) or id(_net) in _wired:
+                    continue
+                _pins = [p for p in _net.get_pins()
+                         if (getattr(p.part, "ref_prefix", "") or "").upper() != "NT"]
+                if len(_pins) < 2:
+                    continue
+                if getattr(_net, "_stub", False) or any(
+                    getattr(p, "stub", False) for p in _pins
+                ):
+                    continue
+                _net._stub = True
+                for p in _pins:
+                    p.stub = True
+                _rescued.append(_net.name)
+            if _rescued:
+                active_logger.warning(
+                    f"  [rescue] {len(_rescued)} nets had no wires AND no labels; "
+                    f"forced labels: {', '.join(sorted(_rescued)[:8])}"
+                    f"{'...' if len(_rescued) > 8 else ''}"
+                )
 
         except PlacementFailure as e:
             finalize_parts_and_nets(circuit, **options)
@@ -937,6 +1087,16 @@ def gen_schematic(
                 f"Routing failed on attempt {attempt + 1}/{retries}, expanding area by 1.5x: {e}"
             )
             continue
+
+        except Exception:
+            # ANY other abort (e.g. auto_stub_fallback="raise") must still
+            # restore the circuit before propagating: without this, leaked
+            # NetTerminals and ungrabbed pins accumulate on the shared Circuit
+            # across a seed sweep and poison every subsequent generation
+            # attempt (observed: one net unroutable/unverifiable on every
+            # retry even though a cold run verifies fine).
+            finalize_parts_and_nets(circuit, **options)
+            raise
 
         # Generate S-expression schematic using shared module.
         # KiCad 8/9 use version 20230409.

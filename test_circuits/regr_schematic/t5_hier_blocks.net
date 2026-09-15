@@ -1,0 +1,467 @@
+(export 
+  (version "D")
+  (design
+    (source "t5_hier_blocks.py")
+    (date "09/15/2026 05:05 PM")
+    (tool "SKiDL (2.2.3)")
+    (sheet
+      (number 1)
+      (name "/power_pg/")
+      (tstamps "/3ae96227-ecb8-5a6f-afd1-fc224af7a60b/")
+      (title_block
+        (title)
+        (company)
+        (rev)
+        (date)
+        (source ".build_stage_t5_hier_blocks\t5_hier_blocks.py")
+        (comment
+          (number "1")
+          (value ""))
+        (comment
+          (number "2")
+          (value ""))
+        (comment
+          (number "3")
+          (value ""))
+        (comment
+          (number "4")
+          (value ""))
+        (comment
+          (number "5")
+          (value ""))
+        (comment
+          (number "6")
+          (value ""))
+        (comment
+          (number "7")
+          (value ""))
+        (comment
+          (number "8")
+          (value ""))
+        (comment
+          (number "9")
+          (value ""))))
+    (sheet
+      (number 2)
+      (name "/io_pg/")
+      (tstamps "/33cd68f1-01e1-5ecf-91a9-de499789cf23/")
+      (title_block
+        (title)
+        (company)
+        (rev)
+        (date)
+        (source ".build_stage_t5_hier_blocks\t5_hier_blocks.py")
+        (comment
+          (number "1")
+          (value ""))
+        (comment
+          (number "2")
+          (value ""))
+        (comment
+          (number "3")
+          (value ""))
+        (comment
+          (number "4")
+          (value ""))
+        (comment
+          (number "5")
+          (value ""))
+        (comment
+          (number "6")
+          (value ""))
+        (comment
+          (number "7")
+          (value ""))
+        (comment
+          (number "8")
+          (value ""))
+        (comment
+          (number "9")
+          (value ""))))
+    (sheet
+      (number 3)
+      (name "/")
+      (tstamps "/")
+      (title_block
+        (title)
+        (company)
+        (rev)
+        (date)
+        (source ".build_stage_t5_hier_blocks\t5_hier_blocks.py")
+        (comment
+          (number "1")
+          (value ""))
+        (comment
+          (number "2")
+          (value ""))
+        (comment
+          (number "3")
+          (value ""))
+        (comment
+          (number "4")
+          (value ""))
+        (comment
+          (number "5")
+          (value ""))
+        (comment
+          (number "6")
+          (value ""))
+        (comment
+          (number "7")
+          (value ""))
+        (comment
+          (number "8")
+          (value ""))
+        (comment
+          (number "9")
+          (value "")))))
+  (components
+    (comp
+      (ref "C1")
+      (value "22uF/16V")
+      (description "Polarised capacitor")
+      (footprint "Capacitor_SMD:CP_Elec_6.3x7.7")
+      (fields
+        (field
+          (name "Description") "Polarised capacitor")
+        (field
+          (name "Footprint") "Capacitor_SMD:CP_Elec_6.3x7.7")
+        (field
+          (name "Datasheet") "~")
+        (field
+          (name "SKiDL Tag") "C1")
+        (field
+          (name "SKiDL Line") "t5_hier_blocks.py:30"))
+      (libsource
+        (lib "Device")
+        (part "CP"))
+      (sheetpath
+        (names "/power_pg/")
+        (tstamps "/3ae96227-ecb8-5a6f-afd1-fc224af7a60b/"))
+      (component_classes)
+      (tstamps "a3f99f52-35dd-588b-b305-6d419cfa639c"))
+    (comp
+      (ref "C2")
+      (value "100nF/50V")
+      (description "Unpolarized capacitor")
+      (footprint "Capacitor_SMD:C_0603_1608Metric")
+      (fields
+        (field
+          (name "Description") "Unpolarized capacitor")
+        (field
+          (name "Footprint") "Capacitor_SMD:C_0603_1608Metric")
+        (field
+          (name "Datasheet") "~")
+        (field
+          (name "SKiDL Tag") "C2")
+        (field
+          (name "SKiDL Line") "t5_hier_blocks.py:41"))
+      (libsource
+        (lib "Device")
+        (part "C"))
+      (sheetpath
+        (names "/power_pg/")
+        (tstamps "/3ae96227-ecb8-5a6f-afd1-fc224af7a60b/"))
+      (component_classes)
+      (tstamps "6cde61ef-d0a5-56d2-bb8c-f3ce44b18b73"))
+    (comp
+      (ref "C3")
+      (value "22uF/16V")
+      (description "Polarised capacitor")
+      (footprint "Capacitor_SMD:CP_Elec_6.3x7.7")
+      (fields
+        (field
+          (name "Description") "Polarised capacitor")
+        (field
+          (name "Footprint") "Capacitor_SMD:CP_Elec_6.3x7.7")
+        (field
+          (name "Datasheet") "~")
+        (field
+          (name "SKiDL Tag") "C3")
+        (field
+          (name "SKiDL Line") "t5_hier_blocks.py:45"))
+      (libsource
+        (lib "Device")
+        (part "CP"))
+      (sheetpath
+        (names "/power_pg/")
+        (tstamps "/3ae96227-ecb8-5a6f-afd1-fc224af7a60b/"))
+      (component_classes)
+      (tstamps "35b55969-1188-5a44-bf77-c2cd5b5f1a0d"))
+    (comp
+      (ref "C4")
+      (value "100nF/50V")
+      (description "Unpolarized capacitor")
+      (footprint "Capacitor_SMD:C_0603_1608Metric")
+      (fields
+        (field
+          (name "Description") "Unpolarized capacitor")
+        (field
+          (name "Footprint") "Capacitor_SMD:C_0603_1608Metric")
+        (field
+          (name "Datasheet") "~")
+        (field
+          (name "SKiDL Tag") "C4")
+        (field
+          (name "SKiDL Line") "t5_hier_blocks.py:72"))
+      (libsource
+        (lib "Device")
+        (part "C"))
+      (sheetpath
+        (names "/io_pg/")
+        (tstamps "/33cd68f1-01e1-5ecf-91a9-de499789cf23/"))
+      (component_classes)
+      (tstamps "0591c62c-14a2-568f-ac26-f553dc54307d"))
+    (comp
+      (ref "D1")
+      (value "GREEN")
+      (description "LED generic")
+      (footprint "LED_SMD:LED_0805_2012Metric")
+      (fields
+        (field
+          (name "Description") "LED generic")
+        (field
+          (name "Footprint") "LED_SMD:LED_0805_2012Metric")
+        (field
+          (name "Datasheet") "~")
+        (field
+          (name "SKiDL Tag") "D1")
+        (field
+          (name "SKiDL Line") "t5_hier_blocks.py:60"))
+      (libsource
+        (lib "Device")
+        (part "LED"))
+      (sheetpath
+        (names "/io_pg/")
+        (tstamps "/33cd68f1-01e1-5ecf-91a9-de499789cf23/"))
+      (component_classes)
+      (tstamps "941c18e3-40fe-5fb7-a72e-ab479099c576"))
+    (comp
+      (ref "J1")
+      (value "5V_IN")
+      (description "Generic connector, single row, 01x02, script generated (kicad-library-utils/schlib/autogen/connector/)")
+      (footprint "Connector_PinHeader_2.54mm:PinHeader_1x02_P2.54mm_Vertical")
+      (fields
+        (field
+          (name "Description") "Generic connector, single row, 01x02, script generated (kicad-library-utils/schlib/autogen/connector/)")
+        (field
+          (name "Footprint") "Connector_PinHeader_2.54mm:PinHeader_1x02_P2.54mm_Vertical")
+        (field
+          (name "Datasheet") "~")
+        (field
+          (name "SKiDL Tag") "J1")
+        (field
+          (name "SKiDL Line") "t5_hier_blocks.py:25"))
+      (libsource
+        (lib "Connector_Generic")
+        (part "Conn_01x02"))
+      (sheetpath
+        (names "/power_pg/")
+        (tstamps "/3ae96227-ecb8-5a6f-afd1-fc224af7a60b/"))
+      (component_classes)
+      (tstamps "01d4fce6-b98a-5816-ad05-971c6b21ba5f"))
+    (comp
+      (ref "J2")
+      (value "3V3_OUT")
+      (description "Generic connector, single row, 01x03, script generated (kicad-library-utils/schlib/autogen/connector/)")
+      (footprint "Connector_PinHeader_2.54mm:PinHeader_1x03_P2.54mm_Vertical")
+      (fields
+        (field
+          (name "Description") "Generic connector, single row, 01x03, script generated (kicad-library-utils/schlib/autogen/connector/)")
+        (field
+          (name "Footprint") "Connector_PinHeader_2.54mm:PinHeader_1x03_P2.54mm_Vertical")
+        (field
+          (name "Datasheet") "~")
+        (field
+          (name "SKiDL Tag") "J2")
+        (field
+          (name "SKiDL Line") "t5_hier_blocks.py:66"))
+      (libsource
+        (lib "Connector_Generic")
+        (part "Conn_01x03"))
+      (sheetpath
+        (names "/io_pg/")
+        (tstamps "/33cd68f1-01e1-5ecf-91a9-de499789cf23/"))
+      (component_classes)
+      (tstamps "03ac2ef0-20bb-53c6-b5a0-110c79088e44"))
+    (comp
+      (ref "R1")
+      (value "10k")
+      (description "Resistor")
+      (footprint "Resistor_SMD:R_0603_1608Metric")
+      (fields
+        (field
+          (name "Description") "Resistor")
+        (field
+          (name "Footprint") "Resistor_SMD:R_0603_1608Metric")
+        (field
+          (name "Datasheet") "~")
+        (field
+          (name "SKiDL Tag") "R1")
+        (field
+          (name "SKiDL Line") "t5_hier_blocks.py:49"))
+      (libsource
+        (lib "Device")
+        (part "R"))
+      (sheetpath
+        (names "/power_pg/")
+        (tstamps "/3ae96227-ecb8-5a6f-afd1-fc224af7a60b/"))
+      (component_classes)
+      (tstamps "8483607f-f1d8-514b-a12b-dbc4fb5f6aca"))
+    (comp
+      (ref "R2")
+      (value "300")
+      (description "Resistor")
+      (footprint "Resistor_SMD:R_0603_1608Metric")
+      (fields
+        (field
+          (name "Description") "Resistor")
+        (field
+          (name "Footprint") "Resistor_SMD:R_0603_1608Metric")
+        (field
+          (name "Datasheet") "~")
+        (field
+          (name "SKiDL Tag") "R2")
+        (field
+          (name "SKiDL Line") "t5_hier_blocks.py:58"))
+      (libsource
+        (lib "Device")
+        (part "R"))
+      (sheetpath
+        (names "/io_pg/")
+        (tstamps "/33cd68f1-01e1-5ecf-91a9-de499789cf23/"))
+      (component_classes)
+      (tstamps "d46b87cf-4363-5b96-b1f3-a7b358acabee"))
+    (comp
+      (ref "U1")
+      (value "AMS1117-3.3")
+      (description "1A Low Dropout regulator, 3.3V fixed, SOT-223 (datasheet: 1=GND, 2=VOUT, 3=VIN, tab=VOUT)")
+      (footprint "Package_TO_SOT_SMD:SOT-223-3_TabPin2")
+      (fields
+        (field
+          (name "Description") "1A Low Dropout regulator, 3.3V fixed, SOT-223 (datasheet: 1=GND, 2=VOUT, 3=VIN, tab=VOUT)")
+        (field
+          (name "Footprint") "Package_TO_SOT_SMD:SOT-223-3_TabPin2")
+        (field
+          (name "Datasheet") "http://www.advanced-monolithic.com/pdf/ds1117.pdf")
+        (field
+          (name "SKiDL Tag") "U1")
+        (field
+          (name "SKiDL Line") "t5_hier_blocks.py:35"))
+      (libsource
+        (lib "UserParts")
+        (part "AMS1117-3.3"))
+      (sheetpath
+        (names "/power_pg/")
+        (tstamps "/3ae96227-ecb8-5a6f-afd1-fc224af7a60b/"))
+      (component_classes)
+      (tstamps "7325e12d-23d5-59ee-9dd4-be021cca2ed2")))
+  (nets
+    (net
+      (code 1)
+      (name "+3V3")
+      (class "Default")
+      (node
+        (ref "C3")
+        (pin "1")
+        (pintype "PASSIVE"))
+      (node
+        (ref "C4")
+        (pin "1")
+        (pintype "PASSIVE"))
+      (node
+        (ref "J2")
+        (pin "1")
+        (pintype "PASSIVE"))
+      (node
+        (ref "R1")
+        (pin "1")
+        (pintype "PASSIVE"))
+      (node
+        (ref "U1")
+        (pin "2")
+        (pintype "PASSIVE")))
+    (net
+      (code 2)
+      (name "+5V")
+      (class "Default")
+      (node
+        (ref "C1")
+        (pin "1")
+        (pintype "PASSIVE"))
+      (node
+        (ref "C2")
+        (pin "1")
+        (pintype "PASSIVE"))
+      (node
+        (ref "J1")
+        (pin "1")
+        (pintype "PASSIVE"))
+      (node
+        (ref "U1")
+        (pin "3")
+        (pintype "PASSIVE")))
+    (net
+      (code 3)
+      (name "GND")
+      (class "Default")
+      (node
+        (ref "C1")
+        (pin "2")
+        (pintype "PASSIVE"))
+      (node
+        (ref "C2")
+        (pin "2")
+        (pintype "PASSIVE"))
+      (node
+        (ref "C3")
+        (pin "2")
+        (pintype "PASSIVE"))
+      (node
+        (ref "C4")
+        (pin "2")
+        (pintype "PASSIVE"))
+      (node
+        (ref "D1")
+        (pin "1")
+        (pintype "PASSIVE"))
+      (node
+        (ref "J1")
+        (pin "2")
+        (pintype "PASSIVE"))
+      (node
+        (ref "J2")
+        (pin "3")
+        (pintype "PASSIVE"))
+      (node
+        (ref "U1")
+        (pin "1")
+        (pintype "PASSIVE")))
+    (net
+      (code 4)
+      (name "N$1")
+      (class "Default")
+      (node
+        (ref "D1")
+        (pin "2")
+        (pintype "PASSIVE"))
+      (node
+        (ref "R2")
+        (pin "2")
+        (pintype "PASSIVE")))
+    (net
+      (code 5)
+      (name "STATUS_SIG")
+      (class "Default")
+      (node
+        (ref "J2")
+        (pin "2")
+        (pintype "PASSIVE"))
+      (node
+        (ref "R1")
+        (pin "2")
+        (pintype "PASSIVE"))
+      (node
+        (ref "R2")
+        (pin "1")
+        (pintype "PASSIVE")))))

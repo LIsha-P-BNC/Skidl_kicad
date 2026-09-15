@@ -136,19 +136,34 @@ def export_from_schematic(name):
         pass
     except OSError:
         return None
-    try:
-        result = subprocess.run(
-            [KICAD_CLI, "sch", "export", "netlist", sch, "-o", out],
-            stdin=subprocess.DEVNULL,
-            capture_output=True,
-            timeout=300,
-            creationflags=_CREATE_NO_WINDOW,
-        )
-    except Exception:
-        return None
-    if result.returncode != 0:
-        return None
-    return out if os.path.isfile(out) else None
+    # Retry once: under back-to-back builds (regression matrix) a kicad-cli
+    # invocation can transiently fail (config/cache race with the previous
+    # instance); one failed export must not collapse the whole seed sweep to
+    # the all-label fallback.
+    _last_err = ""
+    for _attempt in (0, 1, 2):
+        try:
+            result = subprocess.run(
+                [KICAD_CLI, "sch", "export", "netlist", sch, "-o", out],
+                stdin=subprocess.DEVNULL,
+                capture_output=True,
+                timeout=300,
+                creationflags=_CREATE_NO_WINDOW,
+            )
+        except Exception as _e:
+            result = None
+            _last_err = repr(_e)
+        if result is not None and result.returncode == 0 and os.path.isfile(out):
+            return out
+        if result is not None:
+            _last_err = (result.stderr or b"")[-300:].decode("utf-8", "replace")
+        import time
+        time.sleep(0.5 * (_attempt + 1))
+    # LOUD: a silent export failure here is what flips a whole seed sweep to
+    # the all-label fallback (the arduino/stm32 intermittent flap).
+    print(f">>> verify_connectivity: kicad-cli netlist export FAILED 3x for "
+          f"{os.path.basename(sch)} -- {_last_err.strip()}")
+    return None
 
 
 def verify(name, intended_net=None):

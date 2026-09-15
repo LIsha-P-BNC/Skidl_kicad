@@ -990,6 +990,10 @@ class Net(SkidlBaseObject):
                     pin.disconnect()
                 self._pins.append(pin)
                 pin.nets.append(self)
+                import os as _os_n
+                _t = _os_n.environ.get("SKIDL_NET_DEBUG")
+                if _t and self.stub and _t in str(getattr(self, "name", "")):
+                    print(f">>> CONNECT_PROPAGATE net={self.name} stub->True")
                 pin.stub = self.stub  # Update pin stub net for generating schematics.
             return
 
@@ -1547,6 +1551,12 @@ class Net(SkidlBaseObject):
         self._stub = val
         self._stub_explicit = True
         for pin in self.get_pins():
+            import os as _os_n2
+            _t2 = _os_n2.environ.get("SKIDL_NET_DEBUG")
+            if _t2 and val and _t2 in str(getattr(self, "name", "")):
+                import traceback as _tb2
+                print(">>> NET_STUB_SETTER net=" + str(self.name))
+                print("".join(_tb2.format_stack(limit=6)[:-2]) + ">>> END")
             pin.stub = val
 
     @property

@@ -21,6 +21,10 @@ import re
 
 # Heuristic per-net current guesses (amps) with WHY strings.
 _MOTOR_RE = re.compile(r"(MOTOR|VM\b|PHASE|COIL|SOLENOID|PUMP)", re.I)
+# CONTROL/logic companions of power nets (MOTOR_EN, PUMP_PWM, PHASE_SENSE...)
+# carry gate/logic current, not load current -- never bucket them as 2 A.
+_CTRL_SUFFIX_RE = re.compile(r"(_EN|_PWM|_CTRL|_DIR|_SENSE|_FAULT|_SW|_GATE)$",
+                             re.I)
 _VIN_RE = re.compile(r"(^|_)(VIN|VBAT|VBUS|VSUP|12V|24V|\+12|\+24)", re.I)
 
 
@@ -29,7 +33,8 @@ def estimate_net_current(net_name: str, net_class: str,
     """(amps, basis). The user's sidecar figure always wins."""
     if currents and net_name in currents:
         return float(currents[net_name]), "user-declared (sidecar currents)"
-    if _MOTOR_RE.search(net_name or ""):
+    if _MOTOR_RE.search(net_name or "") and not _CTRL_SUFFIX_RE.search(
+            net_name or ""):
         return 2.0, "heuristic: motor/coil net name -> 2.0 A"
     if _VIN_RE.search(net_name or ""):
         return 1.5, "heuristic: supply-input net name -> 1.5 A"
@@ -48,6 +53,52 @@ def required_width(amps: float, delta_t: float = 10.0, copper_oz: float = 1.0,
     area_mil2 = (amps / (k * (delta_t ** 0.44))) ** (1.0 / 0.725)
     width_mil = area_mil2 / (1.378 * copper_oz)
     return width_mil * 0.0254
+
+
+def required_via_drill(amps: float, delta_t: float = 10.0,
+                       plating_mm: float = 0.025) -> float:
+    """Minimum via DRILL diameter (mm) to carry `amps` -- the via barrel is
+    treated as an INTERNAL conductor (IPC-2221 k=0.024) whose cross-section
+    is the plated cylinder wall: area = pi * d * plating.
+
+    Mirrors the app's Via Size calculator approach; standard 25 um (1 mil)
+    plating assumed -- the fab's actual plating spec wins.
+    """
+    if amps <= 0:
+        return 0.0
+    k = 0.024
+    area_mil2 = (amps / (k * (delta_t ** 0.44))) ** (1.0 / 0.725)
+    area_mm2 = area_mil2 * (0.0254 ** 2)
+    import math
+    d_mm = area_mm2 / (math.pi * plating_mm)
+    return round(d_mm, 3)
+
+
+def fusing_current_a(width_mm: float, thickness_mm: float = 0.035,
+                     time_s: float = 1.0, ta_c: float = 25.0,
+                     tm_c: float = 1084.0) -> float:
+    """Current (A) that FUSES (melts) a copper track of the given cross
+    section within `time_s` seconds -- the safety ceiling, NOT an operating
+    rating.
+
+    Ported VERBATIM from the application's Fusing Current calculator
+    (pcb_calculator/panel_fusing_current.cpp): energy balance
+    volumicEnergy * Area = (resistivity/Area) * I^2 * t, with copper
+    latent heat 205350 J/kg, cp 385 J/kg/K, density 8940 kg/m^3, and
+    average resistivity between ambient and melting temperature.
+    """
+    import math
+    if width_mm <= 0 or thickness_mm <= 0 or time_s <= 0 or tm_c <= ta_c:
+        return 0.0
+    area_m2 = (width_mm * 1e-3) * (thickness_mm * 1e-3)
+    latent_heat = 205350.0          # J/kg
+    cp = 385.0                      # J/kg/K
+    density = 8940.0                # kg/m^3
+    volumic_energy = density * ((tm_c - ta_c) * cp + latent_heat)
+    ra = ((ta_c - 20.0) * 0.00393 + 1.0) * 1.72e-8
+    rm = ((tm_c - 20.0) * 0.00393 + 1.0) * 1.72e-8
+    coeff = volumic_energy / ((ra + rm) / 2.0)
+    return round(area_m2 * math.sqrt(coeff / time_s), 2)
 
 
 def net_width_plan(net_names_by_class: dict, profile: dict,

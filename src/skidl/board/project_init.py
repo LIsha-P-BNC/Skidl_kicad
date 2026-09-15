@@ -409,6 +409,123 @@ def _auto_net_classes(net_path, disc, profile, design_rules, settings):
     except Exception as exc:
         settings["width_plan"] = {"value": None, "source": "ai",
                                   "reason": f"width engine failed: {exc!r}"}
+
+    # IPC-2221-informed CLEARANCE plan (voltage_engine -- the voltage twin of
+    # the width plan above): if any net's voltage needs more spacing than its
+    # class clearance provides, RAISE that class's clearance to the IPC row.
+    # The router and every DRC run then honor voltage spacing with zero
+    # router changes. Same honesty contract: sidecar 'voltages' always wins,
+    # heuristics carry basis strings, >300 V makes the engine raise (recorded
+    # below, never guessed). For ordinary <=30 V logic boards the fab floors
+    # already exceed the IPC rows, so this is a safe no-op.
+    try:
+        from skidl.board.voltage_engine import net_clearance_plan
+        sc_v = disc.get("sidecar", {}) or {}
+        voltages = sc_v.get("voltages") or {}
+        vplan = net_clearance_plan(list(assignments.keys()),
+                                   voltages=voltages)
+        for net, p in vplan.items():
+            cls = assignments.get(net, "Default")
+            cur = float(classes.get(cls, {}).get("clearance", 0) or 0)
+            need = float(p["ipc_row_mm"])
+            if need > cur:
+                classes[cls]["clearance"] = need
+                settings[f"clearance.{cls}"] = {
+                    "value": need, "source": "ai",
+                    "reason": (f"IPC-2221 spacing for {net} at "
+                               f"{p['volts']}V ({p['basis']}) needs "
+                               f"{need}mm > class {cur}mm -- raised")}
+        settings["voltage_plan"] = {
+            "value": {n: {"volts": p["volts"],
+                          "clearance_mm": p["ipc_row_mm"],
+                          "basis": p["basis"]}
+                      for n, p in vplan.items()},
+            "source": "ai",
+            "reason": "IPC-2221-informed voltage->clearance plan "
+                      "(sidecar 'voltages' overrides the heuristics)"}
+    except Exception as exc:
+        settings["voltage_plan"] = {"value": None, "source": "ai",
+                                    "reason": f"voltage engine: {exc!r}"}
+
+    # Via sizing from current (app Via-Size calculator approach): if a class
+    # carries a net whose current needs a bigger via barrel than the class
+    # via_drill provides, raise via_drill (and keep via_size >= drill +
+    # 0.3 mm annular). Router + DRC then honor it -- zero router changes.
+    try:
+        from skidl.board.width_engine import (estimate_net_current,
+                                              required_via_drill)
+        sc_i = disc.get("sidecar", {}) or {}
+        currents_i = sc_i.get("currents") or {}
+        for net, cls in assignments.items():
+            amps, basis = estimate_net_current(net, cls, currents_i)
+            need_drill = required_via_drill(amps)
+            spec = classes.get(cls)
+            if not spec:
+                continue
+            cur_drill = float(spec.get("via_drill", 0) or 0)
+            if need_drill > cur_drill:
+                spec["via_drill"] = need_drill
+                spec["via_size"] = max(float(spec.get("via_size", 0) or 0),
+                                       round(need_drill + 0.3, 3))
+                settings[f"via.{cls}"] = {
+                    "value": {"drill": need_drill,
+                              "size": spec["via_size"]},
+                    "source": "ai",
+                    "reason": (f"via barrel for {net} at {amps}A ({basis}) "
+                               f"needs {need_drill}mm drill > class "
+                               f"{cur_drill}mm -- raised")}
+    except Exception as exc:
+        settings["via_plan"] = {"value": None, "source": "ai",
+                                "reason": f"via engine: {exc!r}"}
+
+    # Fusing-margin sanity (app-verbatim energy model, auto-run per design):
+    # each class's width vs the highest estimated current it carries -- the
+    # SAFETY ceiling must sit well above the operating estimate. Advisory.
+    try:
+        from skidl.board.width_engine import (estimate_net_current as _enc,
+                                              fusing_current_a)
+        sc_f = disc.get("sidecar", {}) or {}
+        currents_f = sc_f.get("currents") or {}
+        worst = {}
+        for net, cls in assignments.items():
+            amps, _b = _enc(net, cls, currents_f)
+            if amps > worst.get(cls, (0, ""))[0]:
+                worst[cls] = (amps, net)
+        fus = {}
+        for cls, (amps, net) in worst.items():
+            w = float(classes.get(cls, {}).get("width", 0) or 0)
+            if w <= 0 or amps <= 0:
+                continue
+            ceiling = fusing_current_a(w)
+            fus[cls] = {"width_mm": w, "op_amps_est": amps, "worst_net": net,
+                        "fusing_amps_1s": ceiling,
+                        "margin_x": round(ceiling / amps, 1) if amps else None}
+        settings["fusing_margin"] = {
+            "value": fus, "source": "ai",
+            "reason": ("fusing ceiling (app-verbatim energy model, 1 s) vs "
+                       "highest estimated operating current per class -- "
+                       "ADVISORY safety sanity, margin_x should be >> 1")}
+    except Exception as exc:
+        settings["fusing_margin"] = {"value": None, "source": "ai",
+                                     "reason": f"fusing engine: {exc!r}"}
+
+    # USB differential-pair geometry suggestion (auto-run when the design has
+    # a USB class): IPC-2141 estimate at a typical 4-layer prepreg h -- the
+    # REAL stackup decides, so this is a labeled suggestion, never a rule.
+    try:
+        usb_nets = [n for n, c in assignments.items() if c == "USB"]
+        if usb_nets:
+            from skidl.board.impedance import usb_diff_pair_geometry
+            g = usb_diff_pair_geometry(90.0, h_mm=0.15)
+            settings["usb_diff_geometry"] = {
+                "value": g, "source": "ai",
+                "reason": (f"USB nets {sorted(usb_nets)}: 90-ohm pair "
+                           "suggestion at ASSUMED h=0.15mm -- the actual "
+                           "stackup decides; verify with the Transline "
+                           "calculator / the fab's impedance tool")}
+    except Exception as exc:
+        settings["usb_diff_geometry"] = {"value": None, "source": "ai",
+                                         "reason": f"impedance engine: {exc!r}"}
     return classes, assignments
 
 

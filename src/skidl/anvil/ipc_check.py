@@ -85,11 +85,27 @@ def _erc_errors(report_text):
     return errors
 
 
-def report(name, kicad_cli=""):
-    """Print a one-block IPC compliance summary. Returns the check dict."""
+def report(name, kicad_cli="", child=False):
+    """Print a one-block IPC compliance summary. Returns the check dict.
+
+    child=True: this file is a CHILD sheet of a hierarchy, ERC'd here as a
+    standalone file. kicad-cli then treats it as a root, so its hierarchical
+    labels report "cannot be connected to non-existent parent sheet" -- an
+    artifact of the standalone run, not a real defect (the true parent DOES
+    reference this sheet; the whole-project ERC on the root validates that).
+    Those artifact errors are dropped from a child's report."""
     c = check(name, kicad_cli)
     if not c:
         return c
+    if child and c.get("erc_errors"):
+        # Also standalone-only: power_pin_not_driven -- PWR_FLAGs are placed
+        # ONCE per project (two on one net is itself an ERC conflict), so a
+        # child whose rail is flagged on a SIBLING sheet reports undriven when
+        # ERC'd alone. The whole-project root ERC still catches genuinely
+        # undriven rails.
+        c["erc_errors"] = [e for e in c["erc_errors"]
+                           if "non-existent parent sheet" not in e[1]
+                           and e[0] != "power_pin_not_driven"]
 
     def m(ok):
         return "OK " if ok else "!! "

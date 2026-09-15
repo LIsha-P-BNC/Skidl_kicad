@@ -201,7 +201,7 @@ def _design_gates():
 
 def build(name=None, title="SKiDL-Generated Schematic", auto_stub_fanout=None,
           auto_stub_fallback="labels", run_erc=True, netlist=True,
-          hierarchy=None, **overrides):
+          hierarchy=None, notes=None, **overrides):
     """Generate ERC + netlist + per-block schematic + project for the default circuit.
 
     Args:
@@ -213,6 +213,10 @@ def build(name=None, title="SKiDL-Generated Schematic", auto_stub_fanout=None,
             huge shared net that distorts placement.
         auto_stub_fallback: what a *dense* block does if it still can't route ("labels").
         run_erc / netlist: toggle those stages.
+        notes: OPTIONAL on-sheet notes (rule C2) -- a string or list of strings.
+            Each becomes one numbered line in a "Notes:" block drawn in the top
+            sheet's top-left corner (jumper settings, DNP/NP marks, layout
+            constraints, warnings). Decorative text only -- never affects ERC.
         overrides: any extra kwargs forwarded to generate_schematic (e.g. flatness,
                    auto_stub_max_wire_pins, seed).
     Returns (schematic_path, project_path).
@@ -288,6 +292,33 @@ def build(name=None, title="SKiDL-Generated Schematic", auto_stub_fanout=None,
     # pages, the .py must group parts into functional "page" @subcircuits (~30-40 parts each,
     # plain helper fns for repeated units) -- NOT one @subcircuit per small unit (that yields
     # dozens of tiny sheets). Split into sheets only once the design is big (>50 real parts).
+    # DEBUG WEAPON (env SKIDL_STUB_TRAP2=<net-substr>): intercept EVERY write
+    # to Pin.stub and print the writer's stack when the pin's net matches --
+    # the definitive way to find which of the FOUR wire/label deciders stubbed
+    # a net (they are scattered and some are silent).
+    if os.environ.get("SKIDL_STUB_TRAP2"):
+        from skidl.pin import Pin as _PinCls
+        if not getattr(_PinCls, "_stub_trapped", False):
+            _PinCls._stub_trapped = True
+
+            def _stub_get(self):
+                return self.__dict__.get("_stub_val", False)
+
+            def _stub_set(self, v):
+                _t = os.environ.get("SKIDL_STUB_TRAP2", "")
+                _n = str(getattr(getattr(self, "net", None), "name", ""))
+                if v and _t and _t in _n:
+                    import traceback as _tb
+                    _fr = "".join(_tb.format_stack(limit=7)[:-1])
+                    print(f">>> PIN_STUB_SET net={_n} "
+                          f"pin={getattr(getattr(self,'part',None),'ref','?')}/"
+                          f"{getattr(self,'num','?')}\n{_fr}>>> END_STACK")
+                self.__dict__["_stub_val"] = v
+
+            def _stub_del(self):
+                self.__dict__.pop("_stub_val", None)
+            _PinCls.stub = property(_stub_get, _stub_set, _stub_del)
+
     import builtins
     _real_parts = [p for p in builtins.default_circuit.parts
                    if not str(getattr(p, "ref", "") or "").startswith("#")]
@@ -298,6 +329,29 @@ def build(name=None, title="SKiDL-Generated Schematic", auto_stub_fanout=None,
     # for a 5-part or a 500-part circuit, just a different side of the threshold.
     _hier_min = int(os.environ.get("SKIDL_HIER_MIN_PARTS", "50"))
     big = n_parts > _hier_min
+
+    # D.0 BLOCK-SANITY GATE (docs SCHEMATIC_DESIGN_RULES section D): "a very
+    # small single-function circuit is ONE block (or none) -- splitting one
+    # small function's stages into separate boxes is over-partitioning". If a
+    # SMALL design arrives with SEVERAL authored/auto blocks (e.g. a 10-part
+    # regulator chain split into INPUT / REG / STATUS LED / OUT), MERGE them:
+    # clear the group tags so the sheet renders as one clean function (row +
+    # ladder rails), and suppress the leftover section boxes. A small design
+    # with EXACTLY ONE authored block keeps it (the buck's titled box).
+    # Enforced HERE so a badly-partitioned script still ships a correct sheet
+    # -- the engine encodes the rule, not the author's discipline.
+    _one_block_max = int(os.environ.get("SKIDL_ONE_BLOCK_MAX", "12"))
+    _auth_groups = {str(getattr(p, "group", None))
+                    for p in _real_parts if getattr(p, "group", None)}
+    if n_parts <= _one_block_max and len(_auth_groups) > 1:
+        for _p in _real_parts:
+            try:
+                _p.group = None
+            except Exception:
+                pass
+        opts["suppress_block_boxes"] = True
+        print(f">>> smart_schematic: {n_parts} parts / {len(_auth_groups)} blocks "
+              "-> ONE function (D.0: merged over-split blocks; single clean sheet)")
 
     # Does the SCRIPT itself provide structure? Two independent signals:
     #   * real SKiDL hierarchy (@subcircuit / Group) -> the root Node has children
@@ -315,6 +369,68 @@ def build(name=None, title="SKiDL-Generated Schematic", auto_stub_fanout=None,
     _has_groups = any(getattr(p, "group", None) for p in _real_parts)
 
     # --- M8 AUTO HIERARCHY (opt-in: hierarchy="auto") ---
+    # SHEET PACKER ("sheet full -> next sheet", docs D + Schemalyzer #30): a BIG
+    # flat design with authored blocks must SPLIT into sheets instead of growing
+    # one oversized page. Fill each sheet with WHOLE blocks in flow (creation)
+    # order up to a per-sheet budget (SKIDL_SHEET_FILL_PARTS, docs heuristic
+    # ~30-45 parts/page -- the part-count proxy for "page full"; a block is
+    # NEVER split across sheets). Each bundle becomes a REAL hierarchy Node
+    # (the proven auto_hierarchy part-move mechanism), so cross-sheet nets get
+    # ports and every page still renders its blocks as boxed sections. Kill
+    # switch: SKIDL_SHEET_PACK=0.
+    if (big and not _has_hier and _has_groups
+            and os.environ.get("SKIDL_SHEET_PACK", "1") != "0"):
+        try:
+            _budget = int(os.environ.get("SKIDL_SHEET_FILL_PARTS", "40"))
+            # blocks in creation order, with their parts
+            _blk_order, _blk_parts = [], {}
+            for _p in _real_parts:
+                _g = getattr(_p, "group", None)
+                if not _g:
+                    continue
+                _g = str(_g)
+                if _g not in _blk_parts:
+                    _blk_order.append(_g)
+                    _blk_parts[_g] = []
+                _blk_parts[_g].append(_p)
+            _bundles, _cur, _cnt = [], [], 0
+            for _g in _blk_order:
+                _n = len(_blk_parts[_g])
+                if _cur and _cnt + _n > _budget:
+                    _bundles.append(_cur)
+                    _cur, _cnt = [], 0
+                _cur.append(_g)
+                _cnt += _n
+            if _cur:
+                _bundles.append(_cur)
+            if len(_bundles) >= 2:
+                from skidl.node import Node
+                _root = builtins.default_circuit.root
+                for _i, _bnd in enumerate(_bundles, start=1):
+                    # H&C-style ordered sheet names: "01-POWER_IN.SchDoc" look
+                    _nm = f"{_i:02d}-" + re.sub(r"[^\w.+-]+", "_",
+                                                str(_bnd[0])).strip("_")
+                    _node = Node(_nm, tag=_nm, circuit=builtins.default_circuit)
+                    builtins.default_circuit.nodes.add(_node)
+                    _root.add_child(_node)
+                    for _g in _bnd:
+                        for _p in _blk_parts[_g]:
+                            try:
+                                _p.node.parts.remove(_p)
+                            except (ValueError, AttributeError):
+                                pass
+                            _node.parts.append(_p)
+                            _p.node = _node
+                _has_hier = True
+                _root_children = _root.children
+                _n_pages = len(_bundles)
+                print(f">>> smart_schematic: SHEET PACK -- {n_parts} parts / "
+                      f"{len(_blk_order)} blocks -> {len(_bundles)} sheets "
+                      f"(~{_budget} parts/sheet, whole blocks, flow order)")
+        except Exception as _e:
+            warnings.warn(f"smart_schematic: sheet-pack skipped: {_e}",
+                          RuntimeWarning)
+
     # Build REAL hierarchy nodes from detected functional clusters BEFORE any
     # netlist/schematic generation, so the generator emits one hierarchical
     # sheet per cluster with auto-created cross-sheet ports (NetTerminals) --
@@ -411,6 +527,30 @@ def build(name=None, title="SKiDL-Generated Schematic", auto_stub_fanout=None,
             warnings.warn(f"smart_schematic: auto-grouping skipped: {_e}",
                           RuntimeWarning)
 
+    # --- M11: anchor-pack authored/auto functional blocks ---
+    # Blocks present -> use the group-aware anchor packer: each block packs
+    # TIGHT around its own anchor IC and the blocks read left-to-right in
+    # author (signal-flow) order. Safe: place_node returns False / raises ->
+    # legacy placer; and the build-level verify gate re-runs with legacy
+    # ("legacy (anchor fell back)") if the layout can't publish. Kill switch:
+    # SKIDL_ANCHOR_BLOCKS=0.
+    # Anchor packing earns its keep only when there are MULTIPLE blocks or
+    # anchors to pack against each other. A SINGLE-function, single-anchor
+    # circuit (one regulator/MCU + its passives) lays out with cleaner
+    # left->right FLOW under the legacy directional placer -- the anchor spiral
+    # otherwise separates the signal core from the power-only passives and
+    # scatters them (measured buck: legacy Y-span 38 mm vs anchor 163 mm).
+    _n_groups = len({str(getattr(p, "group", "")) for p in _real_parts
+                     if getattr(p, "group", None)})
+    _n_anchors = sum(
+        1 for p in _real_parts
+        if (getattr(p, "ref_prefix", "") or "").upper() in ("U", "IC", "A")
+        and len([pp for pp in getattr(p, "pins", [])]) >= 3
+    )
+    if (_has_groups and os.environ.get("SKIDL_ANCHOR_BLOCKS", "1") != "0"
+            and (_n_groups >= 2 or _n_anchors >= 2)):
+        opts.setdefault("placement_mode", "anchor")
+
     # --- flatness / sheet decision ---
     # flatness=0.0 -> one hierarchical SHEET per top-level @subcircuit block.
     # flatness=1.0 -> a single sheet; .group tags become boxed sections on it.
@@ -496,13 +636,26 @@ def build(name=None, title="SKiDL-Generated Schematic", auto_stub_fanout=None,
         except Exception:
             return ("_",)
 
-    _wire_max = int(os.environ.get("SKIDL_WIRE_MAX_FANOUT", "3"))
+    # Default raised 3 -> 4 (2026-09-09): a 4-pin function network (reset =
+    # chip pin + button + cap + test point) is the classic WIRED circuit and
+    # the router handles it (stm32_usb_devboard wires at seed=1 with RESET_N
+    # as a 4-pin tree; regr suite t1/t2 unchanged). Big rails (5+ pins/block)
+    # still pre-label. Env override: SKIDL_WIRE_MAX_FANOUT.
+    _wire_max = int(os.environ.get("SKIDL_WIRE_MAX_FANOUT", "4"))
     if _wire_max > 0:
         _stubbed = 0
         for _net in builtins.default_circuit.nets:
             try:
                 if type(_net).__name__ == "NCNet" or getattr(_net, "stub", False):
                     continue
+                # NOTE (tried & reverted 2026-09-09): exempting FUNCTION-
+                # critical nets (reset/clock/decap/usb_diff) from this fanout
+                # pre-stub regressed the stm32_usb_devboard benchmark to ALL-
+                # LABEL -- the router cannot yet draw a >3-pin wire tree across
+                # a spread legacy layout (every seed failed, safety fallback
+                # ate the whole sheet). Professionals DO wire those networks
+                # (docs par E), so revisit AFTER M12 satellite packing +
+                # NetTerminal pruning give the router a tight layout to wire.
                 # Count pins PER BLOCK: what the router must draw as one wire
                 # tree is the within-block segment (a cross-block net gets one
                 # NetTerminal per block and each block wires only ITS pins to
@@ -518,6 +671,9 @@ def build(name=None, title="SKiDL-Generated Schematic", auto_stub_fanout=None,
                     _k = _net_block_key(_p)
                     _per_block[_k] = _per_block.get(_k, 0) + 1
                 if _per_block and max(_per_block.values()) > _wire_max:
+                    _t = os.environ.get("SKIDL_NET_DEBUG")
+                    if _t and _t in str(getattr(_net, "name", "")):
+                        print(f">>> FANOUT_GATE_STUB net={_net.name}")
                     # same flags the guaranteed-correct all-label mode uses, so the
                     # per-block cluster protection cannot wire this net anyway
                     _net._direct_wired = False
@@ -608,6 +764,23 @@ def build(name=None, title="SKiDL-Generated Schematic", auto_stub_fanout=None,
                 os.remove(_p)
             except OSError:
                 pass
+        # ...and strip placement/routing scratch attrs from the SHARED circuit
+        # Part/Pin objects so every generation attempt starts geometry-clean.
+        # Leak observed (M11): the anchor pass sets pin.place_pt/route_pt for
+        # EVERY net, but a later legacy pass only re-sets them for the nets in
+        # its per-group lists -- a cross-block net (e.g. USB_DP) then draws
+        # from stale anchor-era coordinates and verify fails on every seed
+        # even though a cold legacy run verifies fine.
+        try:
+            import builtins as _b
+            from skidl.utilities import rmv_attr as _rmv
+            _parts = _b.default_circuit.parts
+            _rmv(_parts, ("anchor_pins", "pull_pins", "pin_ctrs",
+                          "saved_anchor_pins", "saved_pull_pins"))
+            for _prt in _parts:
+                _rmv(_prt.pins, ("place_pt", "route_pt"))
+        except Exception:
+            pass
 
     user_seed = opts.pop("seed", None)
     seeds = [user_seed] if user_seed is not None else [0, 1, 2, 3, 5, 8, 13, 21]
@@ -663,6 +836,9 @@ def build(name=None, title="SKiDL-Generated Schematic", auto_stub_fanout=None,
                     pass
             if len(hts) != 1:
                 return 0  # a cross-node net is missing -> not repairable here
+            _t = os.environ.get("SKIDL_NET_DEBUG")
+            if _t and _t in str(getattr(net, "name", "")):
+                print(f">>> REPAIR_STUB net={net.name}")
             net._direct_wired = False
             net.stub = True
             for _p in net.pins:
@@ -700,60 +876,153 @@ def build(name=None, title="SKiDL-Generated Schematic", auto_stub_fanout=None,
     # ALWAYS produced. See docs/anchor_placer_design.md (P3 + acceptance gate).
     _placer_used = "anchor" if opts.get("placement_mode") == "anchor" else "legacy"
 
-    routed_seed = None
-    _t0 = _time.time()
-    for _i, sd in enumerate(seeds):
-        if _i and _time.time() - _t0 > _budget:
-            print(f">>> smart_schematic: wire-route budget exhausted "
-                  f"({int(_time.time() - _t0)}s > {int(_budget)}s after {_i} seed(s)) "
-                  f"-> trying partial-wire mode")
-            break
-        _clean_sheets()  # each attempt starts clean -> no leftover _1 duplicate sheets
-        try:
-            generate_schematic(seed=sd, auto_stub_fallback="raise", **opts)
-        except Exception:
-            continue  # this seed couldn't route -> try the next
-        _sanitize()  # fix lib_id paths before extracting the netlist for verify
-        if verify_connectivity is None:
-            routed_seed = sd
-            print(f">>> smart_schematic: routed with wires (seed={sd}); verify unavailable")
-            break
-        # Verify, and on a multi-sheet build attempt LOCAL-NET REPAIR (M11): a
-        # dropped 2-pin local net is stubbed to a within-sheet label and the seed
-        # is re-routed, up to a few rounds. Cross-node misses abort the repair.
-        ok = True
-        _repaired = 0
-        for _round in range(4):
+    def _snapshot_wire_flags():
+        """Record every net/pin wire-vs-label flag so a placer retry can start
+        from the exact cold state (completed generation attempts leave rescue/
+        stub flags on the SHARED circuit that change later classifications)."""
+        _ns = [(_n, getattr(_n, "stub", None), getattr(_n, "_stub", None),
+                getattr(_n, "_direct_wired", None))
+               for _n in builtins.default_circuit.nets]
+        _ps = [(_p, getattr(_p, "stub", None), getattr(_p, "direct_wired", None))
+               for _prt in builtins.default_circuit.parts
+               for _p in getattr(_prt, "pins", [])]
+        return _ns, _ps
+
+    def _restore_wire_flags(_snap):
+        def _setb(_o, _k, _v):
             try:
-                ok, _msg, _u, _m = verify_connectivity.verify(name)
+                if _v is None:
+                    if _k in getattr(_o, "__dict__", {}):
+                        delattr(_o, _k)
+                else:
+                    setattr(_o, _k, _v)
             except Exception:
-                ok = True
-            # Repair on SINGLE-sheet builds too (was multi-sheet-only): a lone
-            # dropped local net (a 3-pin T-junction the router couldn't draw)
-            # otherwise collapses the WHOLE sheet to all-label -- verified with
-            # cap+cap+LED and regulator+caps circuits. Now only THAT net becomes
-            # a label and every other wire survives. Unwanted-short mismatches
-            # (_u) still abort to the next seed -- those are never repairable.
-            if ok or _u:
+                pass
+        _ns, _ps = _snap
+        for _n, _s, _s2, _dw in _ns:
+            _setb(_n, "stub", _s)
+            _setb(_n, "_stub", _s2)
+            _setb(_n, "_direct_wired", _dw)
+        for _p, _s, _dw in _ps:
+            _setb(_p, "stub", _s)
+            _setb(_p, "direct_wired", _dw)
+
+    _flags_snap = _snapshot_wire_flags()
+    routed_seed = None
+    for _placer_pass in range(2):
+        _t0 = _time.time()
+        for _i, sd in enumerate(seeds):
+            if _i and _time.time() - _t0 > _budget:
+                print(f">>> smart_schematic: wire-route budget exhausted "
+                      f"({int(_time.time() - _t0)}s > {int(_budget)}s after {_i} seed(s)) "
+                      f"-> trying partial-wire mode")
                 break
-            _n = _repair_local_nets(_m)
-            if _n == 0:
-                break  # nothing locally repairable -> next seed / next tier
-            _repaired += _n
-            _clean_sheets()
+            _clean_sheets()  # each attempt starts clean -> no leftover _1 duplicate sheets
             try:
                 generate_schematic(seed=sd, auto_stub_fallback="raise", **opts)
             except Exception:
-                ok = False
+                if os.environ.get("SKIDL_SWEEP_DEBUG"):
+                    import traceback as _dbg_tb
+                    print(f">>> [sweep-debug] seed={sd} generation raised:")
+                    _dbg_tb.print_exc()
+                # HEAL ROLLBACK: the face-graph orphan-heal/island-bridge can
+                # synthesize a global hop with no backing switchbox, which the
+                # detailed router then fails EVERY seed (dense sheets). If a
+                # generation attempt raises while healing is on, turn healing
+                # off for the REST of the sweep -- the pre-heal behavior
+                # (child label fallback) then routes as before, instead of the
+                # whole design collapsing to all-label mode.
+                if os.environ.get("SKIDL_ORPHAN_HEAL", "1") != "0":
+                    os.environ["SKIDL_ORPHAN_HEAL"] = "0"
+                    print(">>> smart_schematic: generation raised with face-"
+                          "heal ON -> disabling SKIDL_ORPHAN_HEAL and "
+                          "RETRYING THIS SEED (pre-heal routing behavior)")
+                    _clean_sheets()
+                    try:
+                        # Same seed again WITHOUT healing -- otherwise the
+                        # best (usually seed-0) layout is burned by the heal
+                        # interplay and an inferior later seed wins (measured
+                        # arduino: 55w/0l seed-0 lost -> 13w/24l seed-2).
+                        generate_schematic(seed=sd,
+                                           auto_stub_fallback="raise", **opts)
+                    except Exception:
+                        continue
+                else:
+                    continue  # this seed couldn't route -> try the next
+            _sanitize()  # fix lib_id paths before extracting the netlist for verify
+            if verify_connectivity is None:
+                routed_seed = sd
+                print(f">>> smart_schematic: routed with wires (seed={sd}); verify unavailable")
                 break
-            _sanitize()
-        if ok:
-            routed_seed = sd
-            _rmsg = f" [repaired {_repaired} local net(s) -> labels]" if _repaired else ""
-            print(f">>> smart_schematic: routed with wires (seed={sd}); "
-                  f"connectivity OK{_rmsg}")
+            # Verify, and on a multi-sheet build attempt LOCAL-NET REPAIR (M11): a
+            # dropped 2-pin local net is stubbed to a within-sheet label and the seed
+            # is re-routed, up to a few rounds. Cross-node misses abort the repair.
+            ok = True
+            _repaired = 0
+            for _round in range(4):
+                try:
+                    ok, _msg, _u, _m = verify_connectivity.verify(name)
+                    # INFRA vs DESIGN failure: a kicad-cli export hiccup is NOT
+                    # a routing defect -- it must not burn the seed (this
+                    # intermittent flip IS the arduino/stm32 "all-label flap").
+                    # One extra verify attempt after a pause.
+                    if not ok and "could not export" in str(_msg):
+                        print(">>> smart_schematic: verify INFRA failure "
+                              f"(cli export) -- retrying once: {_msg}")
+                        import time as _time_v
+                        _time_v.sleep(1.0)
+                        ok, _msg, _u, _m = verify_connectivity.verify(name)
+                except Exception:
+                    ok = True
+                # Repair on SINGLE-sheet builds too (was multi-sheet-only): a lone
+                # dropped local net (a 3-pin T-junction the router couldn't draw)
+                # otherwise collapses the WHOLE sheet to all-label -- verified with
+                # cap+cap+LED and regulator+caps circuits. Now only THAT net becomes
+                # a label and every other wire survives. Unwanted-short mismatches
+                # (_u) still abort to the next seed -- those are never repairable.
+                if ok or _u:
+                    break
+                _n = _repair_local_nets(_m)
+                if _n == 0:
+                    break  # nothing locally repairable -> next seed / next tier
+                _repaired += _n
+                _clean_sheets()
+                try:
+                    generate_schematic(seed=sd, auto_stub_fallback="raise", **opts)
+                except Exception:
+                    ok = False
+                    break
+                _sanitize()
+            if ok:
+                routed_seed = sd
+                _rmsg = f" [repaired {_repaired} local net(s) -> labels]" if _repaired else ""
+                print(f">>> smart_schematic: routed with wires (seed={sd}); "
+                      f"connectivity OK{_rmsg}")
+                break
+            # connectivity mismatch on this seed -> discard, try the next seed
+            if os.environ.get("SKIDL_SWEEP_DEBUG"):
+                print(f">>> [sweep-debug] seed={sd} verify FAILED: {_msg!r} "
+                      f"unwanted={_u!r} missing={_m!r}")
+                try:
+                    import shutil as _sh
+                    _dbg = f"{name}.debug_fail_seed{sd}.anvil_sch"
+                    _sh.copyfile(name + ".anvil_sch", _dbg)
+                    print(f">>> [sweep-debug] failed sheet kept: {_dbg}")
+                except Exception:
+                    pass
+        if routed_seed is not None or opts.get("placement_mode") != "anchor":
             break
-        # connectivity mismatch on this seed -> discard, try the next seed
+        # QUALITY ORDER: a WIRED legacy sheet beats an all-label anchor sheet.
+        # The anchor-packed layout is denser than the router can wire on this
+        # design -> drop to the legacy placer and redo the WIRED sweep before
+        # degrading to the partial / all-label tiers below. Restore the
+        # cold-state wire/stub flags first so the retry behaves exactly like a
+        # fresh legacy run (anchor attempts leave rescue/stub flags behind).
+        print(">>> smart_schematic: anchor layout wouldn't wire-route -> "
+              "retrying wired sweep with legacy placer")
+        _restore_wire_flags(_flags_snap)
+        opts.pop("placement_mode", None)
+        _placer_used = "legacy (anchor wouldn't wire)"
 
     if routed_seed is None:
         # MIDDLE TIER: no seed FULLY routed every wire (auto_stub_fallback="raise"
@@ -982,6 +1251,37 @@ def build(name=None, title="SKiDL-Generated Schematic", auto_stub_fanout=None,
             print(f">>> smart_schematic: beautified wires ({m} segments merged/reshaped)")
         return m
 
+    def _do_powerrail(p):
+        # Ladder rails: collapse "a power symbol on every pin" into ONE horizontal
+        # rail wire + short vertical stubs + ONE source symbol per rail (the
+        # hand-drawn/TRACKER-V2 idiom). AUTO-ON for flow-hinted single-row layouts
+        # (where a clean horizontal rail fits); SKIDL_DRAW_RAILS=0/1 force it
+        # off/on for any layout. In flow mode the ground net also becomes a bottom
+        # rail (SKIDL_DRAW_RAILS_GND=0 keeps GND as per-pin symbols). The
+        # connectivity revert-guard rolls the whole pass back if any net fuses/splits.
+        force = os.environ.get("SKIDL_DRAW_RAILS", "").lower()
+        if force in ("0", "false", "no", "off"):
+            return 0
+        flow_mode = False
+        try:
+            import builtins
+            # ladder-ready layouts: author flow_x hints (whole circuit) OR
+            # blocks the engine itself arranged as tight rows (flow_place_block
+            # tags parts _flow_rowed) -- both give every rail pin a clear
+            # vertical path, so the ladder rails can draw.
+            flow_mode = any(hasattr(pt, "flow_x") or getattr(pt, "_flow_rowed", False)
+                            for pt in builtins.default_circuit.parts)
+        except Exception:
+            pass
+        if not flow_mode and force not in ("1", "true", "yes", "on"):
+            return 0  # only draw rails when the layout is flow-hinted (or forced)
+        gnd = os.environ.get("SKIDL_DRAW_RAILS_GND", "1").lower() not in ("0", "false", "no", "off")
+        import draw_power_rail
+        r = draw_power_rail.draw(p, enable_gnd=gnd)
+        if r:
+            print(f">>> smart_schematic: drew {r} power rail(s) as horizontal ladder(s)")
+        return r
+
     def _do_gridsnap(p):
         # IPC-3: snap connection coords to KiCad's 1.27mm grid so off-grid pins/wires
         # (from symbols whose pins sit at non-50mil offsets) land on grid.
@@ -1052,6 +1352,10 @@ def build(name=None, title="SKiDL-Generated Schematic", auto_stub_fanout=None,
         _guarded(sheet_path, _do_normalize, "pin-exit normalize")
         _guarded(sheet_path, _do_beautify, "wire beautify")
         _guarded(sheet_path, _do_labeltaps, "label-tap removal")
+        # Ladder rails (guarded, gated): after label taps so the pin->symbol stubs
+        # are still intact to read pin points from, before grid-snap+junctions so
+        # the new rail geometry gets snapped and dotted like any other wire.
+        _guarded(sheet_path, _do_powerrail, "power-rail draw")
         _guarded(sheet_path, _do_gridsnap, "grid snap")
         # AFTER every wire-geometry pass: heal any dotless wire-T the passes
         # above (or the router's ordering-sensitive add_junctions) left behind.
@@ -1068,6 +1372,19 @@ def build(name=None, title="SKiDL-Generated Schematic", auto_stub_fanout=None,
     # the guarded chain keeps the flags.
     _do_pwrflags(name + ".anvil_sch")
 
+    # C2 on-sheet notes: draw the caller's jumper/DNP/warning text in the top
+    # sheet's top-left corner. Decorative (no connection point) -> runs unguarded
+    # after the connectivity passes, exactly like PWR_FLAG insertion above.
+    if notes:
+        try:
+            import add_notes
+            _nn = add_notes.add(name + ".anvil_sch", notes)
+            if _nn:
+                print(f">>> smart_schematic: added {_nn} on-sheet note line(s) (C2)")
+        except Exception as _e:
+            warnings.warn(f"smart_schematic: on-sheet notes skipped: {_e}",
+                          RuntimeWarning)
+
     _write_kicad_pro(os.path.abspath(name + ".anvil_sch"))
 
     # IPC compliance gate: report every build against the enforceable IPC-2612 /
@@ -1077,10 +1394,33 @@ def build(name=None, title="SKiDL-Generated Schematic", auto_stub_fanout=None,
     try:
         import ipc_check
         cli = verify_connectivity.KICAD_CLI if verify_connectivity else ""
-        for sheet_path in sheet_paths:
-            ipc_check.report(os.path.splitext(sheet_path)[0], cli)
+        for _i, sheet_path in enumerate(sheet_paths):
+            # sheet_paths[0] is the ROOT; the rest are child sheets whose
+            # standalone ERC reports "non-existent parent" artifacts (filtered).
+            ipc_check.report(os.path.splitext(sheet_path)[0], cli, child=_i > 0)
     except Exception as e:
         warnings.warn(f"smart_schematic: IPC compliance report skipped: {e}", RuntimeWarning)
+
+    # ELECTRICAL-CORRECTNESS gate (runs for EVERY circuit): beyond connectivity
+    # (ERC) and IPC readability, verify every component is RATED for the stress
+    # its net actually carries and every calculated value meets its target --
+    # by pure netlist + value + net-name voltage/current analysis (design_check,
+    # no per-circuit rules). Catches an under-rated cap, an under-rated inductor,
+    # a missing/uncalculated value, or a bad LED current before the design ships.
+    try:
+        import design_check
+        _dc = design_check.check(name + ".net")
+        _dc_err = [f for f in _dc if f[0] == "ERROR"]
+        if _dc:
+            print(">>> Electrical-correctness (component ratings + calculated values):")
+            for _sev, _ref, _rule, _msg in _dc:
+                _mk = "!!" if _sev == "ERROR" else ("~" if _sev == "WARN" else "OK")
+                print(f"    {_mk} {_msg}")
+        if _dc_err:
+            print(f">>> smart_schematic: {len(_dc_err)} electrical-correctness "
+                  "ERROR(s) above -- component rating/value needs fixing")
+    except Exception as e:
+        warnings.warn(f"smart_schematic: design-check skipped: {e}", RuntimeWarning)
 
     # ---- atomic publish: move the finished artifacts into the project dir ----
     os.chdir(_proj)

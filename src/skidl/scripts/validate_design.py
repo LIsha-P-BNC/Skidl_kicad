@@ -53,13 +53,18 @@ AUTO_NET_RE = re.compile(r"^(n\$\d+|wire\d+|net\d+)$", re.IGNORECASE)
 REF_RE = re.compile(r"^(R|C|L|D|Q|U|Y|X|J|K|SW|S|F|T|TP)\d+[A-Z]?$")
 
 # Engineering-notation component values (VAL-1). Deliberately permissive.
+# An OPTIONAL trailing "/rating" is allowed -- professional schematics (e.g.
+# the TRACKER-V2 reference) annotate the working voltage/current/tolerance/
+# power on the value itself: 2.2uF/100V, 100nF/50V, 33uH/3A, 2.2K/1%, 0.5W.
 VALUE_RE = re.compile(
     r"""^(
-        \d+(\.\d+)?[pnuµμmkKMG][FHΩR]? |   # 100n, 4.7u, 100nF, 4.7uF, 10k, 1M, 2.2nF
+        \d+(\.\d+)?[pnuµμmkKMG][FHΩR]? |   # 100n, 4.7u, 100nF, 4.7uF, 10k, 1M, 2.2nF, 49.9K
         \d+[RkKMG]\d* |                    # embedded-decimal: 0R, 4R7, 1k5, 4k7
         \d+(\.\d+)?[FHΩ] |                 # explicit unit only
         \d{1,3}                            # small plain integer ohms: 0, 47, 100
-    )$""",
+    )
+    (\s*/\s*[\w.%]+)*                       # optional rating(s): /100V, /50V, /1%, /3A
+    $""",
     re.VERBOSE,
 )
 

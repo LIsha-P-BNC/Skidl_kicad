@@ -1303,7 +1303,7 @@ class Circuit(SkidlBaseObject):
             # Supply a nonsense footprint just so no complaints are raised when the EESCHEMA code is generated.
             part.footprint = ":"
 
-        if kwargs.get("empty_footprint_handler]"):
+        if kwargs.get("empty_footprint_handler"):
             skidl.empty_footprint_handler = kwargs["empty_footprint_handler"]
         else:
             skidl.empty_footprint_handler = _empty_footprint_handler

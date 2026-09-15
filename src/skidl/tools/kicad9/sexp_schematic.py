@@ -217,7 +217,25 @@ def _extract_power_lib_symbol_raw(name):
     # The real library couldn't be found/read, or doesn't contain this
     # symbol (e.g. no KiCad install on this machine). Fall back to a
     # built-in copy so the symbol still gets a lib_symbols definition.
-    return _POWER_SYMBOL_FALLBACK_TEXT.get(name)
+    fb = _POWER_SYMBOL_FALLBACK_TEXT.get(name)
+    if fb:
+        return fb
+
+    # GENERIC SYNTHESIS for a custom rail present in no library and with no
+    # built-in fallback (e.g. "+4.1V", "+4.4V", "VGSM"). Without this the rail
+    # would fall through to a duplicated global_label at every pin (see
+    # net_label_to_sexp); the reference draws every supply/ground as a power
+    # SYMBOL. Alias the nearest standard graphic -- a ground template for
+    # ground-like names, otherwise the VCC supply graphic -- and substitute the
+    # name so the rail renders as a proper power symbol (one per pin).
+    from skidl.schematics.net_classify import _GROUND_NET_RE
+
+    template = "GND" if _GROUND_NET_RE.match(name or "") else "VCC"
+    if template != name:
+        tmpl_raw = _extract_power_lib_symbol_raw(template)
+        if tmpl_raw:
+            return tmpl_raw.replace(template, name)
+    return None
 
 def _parse_sexp_text(text):
     """Parse an S-expression string into a nested list structure.
@@ -731,6 +749,14 @@ def part_to_sexp(part, tx=Tx()):
         symbol_list.remove([])
     symbol = Sexp(symbol_list)
 
+    # Reference / Value text angle: IEEE-315 drawings only use 0 (horizontal) or
+    # 90 (vertical, reading up) -- never 180/270 (upside-down / reading-down).
+    # Emitting the symbol's raw angle here (with justify left) produced mirrored,
+    # on-body text on rotated/flipped parts, and fix_text_orientation skips any
+    # property that carries an explicit justify. So normalize to 0/90 and use
+    # center justify (anchored at the offset point) directly at generation time.
+    text_angle = 0 if int(round(angle)) % 180 == 0 else 90
+
     # Reference
     symbol.append(
         Sexp(
@@ -738,8 +764,8 @@ def part_to_sexp(part, tx=Tx()):
                 "property",
                 "Reference",
                 part_ref,
-                ["at", origin.x, origin.y - 2.54, angle],
-                ["effects", ["font", ["size", 1.27, 1.27]], ["justify", "left"]],
+                ["at", origin.x, origin.y - 2.54, text_angle],
+                ["effects", ["font", ["size", 1.27, 1.27]]],
             ]
         )
     )
@@ -751,8 +777,8 @@ def part_to_sexp(part, tx=Tx()):
                 "property",
                 "Value",
                 str(part.value),
-                ["at", origin.x, origin.y + 2.54, angle],
-                ["effects", ["font", ["size", 1.27, 1.27]], ["justify", "left"]],
+                ["at", origin.x, origin.y + 2.54, text_angle],
+                ["effects", ["font", ["size", 1.27, 1.27]]],
             ]
         )
     )
@@ -1102,6 +1128,24 @@ def calc_pin_dir(pin):
     }[pin_vector]
 
 
+def _is_power_net(net):
+    """True if a net should render as a power SYMBOL rather than a label.
+
+    Matches a standard KiCad power-symbol name OR any supply/ground rail
+    recognized by net_classify (so custom rails like "+4.1V"/"+4.4V"/"VBAT"
+    render as power symbols, one per pin -- the reference convention -- instead
+    of a duplicated global_label at every pin).
+    """
+    name = getattr(net, "name", None)
+    if not name:
+        return False
+    if name in _get_power_symbol_names():
+        return True
+    from skidl.schematics.net_classify import classify_net_role
+
+    return classify_net_role(net) is not None
+
+
 def net_label_to_sexp(pin, tx=Tx(), force=False):
     """Create S-expression for a net label at a pin stub.
 
@@ -1120,11 +1164,16 @@ def net_label_to_sexp(pin, tx=Tx(), force=False):
     """
     if not force and (not pin.stub or not pin.is_connected()):
         return None
+    import os as _os_nl
+    _t = _os_nl.environ.get("SKIDL_NET_DEBUG")
+    if _t and pin.net is not None and _t in str(getattr(pin.net, "name", "")):
+        print(f">>> LABEL_EMIT net={pin.net.name} pin={getattr(pin.part,'ref','?')}/"
+              f"{pin.num} stub={getattr(pin,'stub',None)} force={force}")
     
     # Check if this net matches a known KiCad power symbol.
     # If so, emit a power symbol instance instead of a global_label.
     # This eliminates power_pin_not_driven ERC errors.
-    if pin.is_connected() and pin.net.name in _get_power_symbol_names():
+    if pin.is_connected() and _is_power_net(pin.net):
         pwr = _power_symbol_to_sexp(pin, pin.net.name, tx)
         if pwr:
             return pwr
@@ -1134,7 +1183,18 @@ def net_label_to_sexp(pin, tx=Tx(), force=False):
     # create unintended design-wide connections from matching local names.
     from skidl.schematics.net_classify import classify_label_scope
 
-    label_type = "global_label" if classify_label_scope(pin.net) == "global" else "label"
+    # Cross-sheet nets use HIERARCHICAL labels: they tie to the matching
+    # sheet pin on the parent box, and the top sheet carries the global
+    # tie -- so the hierarchy reads as a block diagram (not invisible
+    # design-wide globals). Same-sheet labels stay local.
+    # Cross-sheet nets use GLOBAL labels: design-wide by name, verified
+    # reliable. (hierarchical_label ties depend on exact parent sheet-pin
+    # evaluation and split 89 net groups in the re-export diff -- reverted.)
+    label_type = (
+        "global_label"
+        if classify_label_scope(pin.net) == "global"
+        else "label"
+    )
 
     # Position at pin location (Y-flip is already in sheet_tx).
     pin_pt = getattr(pin, "pt", Point(pin.x, pin.y))
@@ -1435,10 +1495,19 @@ def create_hierarchical_sheet_sexp(node, sheet_tx):
         Sexp: Sheet S-expression.
     """
     bbox = node.bbox * node.tx * sheet_tx
-    bx = _round_mm(bbox.ll.x)
-    by = _round_mm(bbox.ll.y)
-    bw = _round_mm(bbox.w)
-    bh = _round_mm(bbox.h)
+    # Snap the sheet box (and therefore every sheet PIN on its edge) to the
+    # 1.27 mm connection grid. Sheet pins connect to the coincident top-sheet
+    # global label; if the box edge is off-grid the later grid_snap pass moves
+    # the LABEL onto the grid but not the sheet pin -- 0.25 mm apart, the label
+    # reads dangling (gets stripped) and the pin reports pin_not_connected
+    # (observed: forced-hierarchy t3, load_pg pin at 163.58 vs label 163.83).
+    _G = 1.27
+    def _gsnap(v):
+        return _round_mm(round(v / _G) * _G)
+    bx = _gsnap(bbox.ll.x)
+    by = _gsnap(bbox.ll.y)
+    bw = _gsnap(bbox.w)
+    bh = _gsnap(bbox.h)
     sheet_uuid = _gen_uuid(f"sheet:{node.sheet_filename}")
 
     sheet = Sexp(
@@ -1475,40 +1544,69 @@ def create_hierarchical_sheet_sexp(node, sheet_tx):
         ]
     )
 
-    # Add sheet pins for boundary nets.
-    if hasattr(node, "get_boundary_nets"):
-        boundary_nets = node.get_boundary_nets()
-        pin_spacing = 2.54  # mm between pins
-        pin_y = by + pin_spacing
-        for net in boundary_nets:
-            # Skip power nets that become power symbols (they don't need sheet pins).
-            if net.name in _get_power_symbol_names():
-                continue
-            # Skip stubbed nets (they use global labels).
-            if getattr(net, "stub", False) or getattr(net, "_stub", False):
-                continue
+    # Add sheet pins for EVERY cross-sheet signal net of this child (power
+    # rails excluded -- they are power symbols). Previously stubbed nets were
+    # skipped, leaving the top-sheet boxes empty; the system connectivity ran
+    # through invisible global labels. Now each box shows its interface, and a
+    # coincident top-sheet GLOBAL label at each pin ties same-named pins of
+    # different boxes together -- the top sheet reads as a block diagram.
+    from skidl.schematics.net_classify import classify_label_scope
 
-            pin_uuid = _gen_uuid(f"sheet_pin:{node.sheet_filename}:{net.name}")
-            # Place pins along the left edge of the sheet.
-            sheet.append(
-                Sexp(
+    def _iface_nets(n, seen=None):
+        if seen is None:
+            seen = {}
+        for part in getattr(n, "parts", []):
+            for p in getattr(part, "pins", []):
+                net = getattr(p, "net", None)
+                if net is None or not getattr(net, "name", None):
+                    continue
+                if net.name in seen or _is_power_net(net):
+                    continue
+                if classify_label_scope(net) == "global":
+                    seen[net.name] = net
+        for ch in getattr(n, "children", {}).values():
+            _iface_nets(ch, seen)
+        return seen
+
+    extra_top_elements = []
+    iface = _iface_nets(node)
+    pin_spacing = 2.54  # mm between pins
+    pin_y = by + pin_spacing
+    for net_name in sorted(iface):
+        pin_uuid = _gen_uuid(f"sheet_pin:{node.sheet_filename}:{net_name}")
+        # Place pins along the left edge of the sheet box.
+        sheet.append(
+            Sexp(
+                [
+                    "pin",
+                    net_name,
+                    "bidirectional",
+                    ["at", bx, _round_mm(pin_y), 180],
                     [
-                        "pin",
-                        net.name,
-                        "bidirectional",
-                        ["at", bx, _round_mm(pin_y), 180],
-                        [
-                            "effects",
-                            ["font", ["size", 1.27, 1.27]],
-                            ["justify", "left"],
-                        ],
-                        ["uuid", pin_uuid],
-                    ]
-                )
+                        "effects",
+                        ["font", ["size", 1.27, 1.27]],
+                        ["justify", "left"],
+                    ],
+                    ["uuid", pin_uuid],
+                ]
             )
-            pin_y += pin_spacing
+        )
+        # Top-sheet tie: a global label AT the pin point (coincident=connected).
+        extra_top_elements.append(
+            Sexp(
+                [
+                    "global_label",
+                    net_name,
+                    ["shape", "bidirectional"],
+                    ["at", bx, _round_mm(pin_y), 180],
+                    ["effects", ["font", ["size", 1.27, 1.27]], ["justify", "right"]],
+                    ["uuid", _gen_uuid(f"toplbl:{node.sheet_filename}:{net_name}")],
+                ]
+            )
+        )
+        pin_y += pin_spacing
 
-    return sheet
+    return [sheet] + extra_top_elements
 
 
 def hierarchical_label_to_sexp(net_name, pt_x, pt_y, angle=180):
@@ -1669,7 +1767,8 @@ def node_to_sexp_schematic(node, sheet_tx=Tx(), version=20230409, circuit=None):
     # rectangle around the block's parts plus its name at the top-left. Pure
     # presentation -- no connectivity meaning -- so it can never break the
     # netlist.
-    if node.flattened and any(not isinstance(p, NetTerminal) for p in node.parts):
+    if (node.flattened and not getattr(node, "_no_box", False)
+            and any(not isinstance(p, NetTerminal) for p in node.parts)):
         try:
             # pad = half the placer's internal block pad, so the box always stays
             # inside the whitespace the placer reserved around this block and can
@@ -1801,20 +1900,45 @@ def node_to_sexp_schematic(node, sheet_tx=Tx(), version=20230409, circuit=None):
 
     # --- Unflattened node: write a separate .anvil_sch file. ---
 
-    # Add hierarchical labels for boundary nets (nets that cross the sheet boundary).
-    if hasattr(node, "get_boundary_nets"):
-        boundary_nets = node.get_boundary_nets()
-        hlabel_y = 10.0  # Starting Y position in mm for labels along the left edge.
-        for net in boundary_nets:
-            # Skip power nets and stubbed nets.
-            if net.name in _get_power_symbol_names():
+    # MATCHING hierarchical labels for the parent's sheet pins. The parent
+    # (create_hierarchical_sheet_sexp) emits a sheet pin for EVERY global-scope
+    # signal net of this child -- including STUBBED nets (they render as global
+    # labels in here). KiCad ERC requires each sheet pin to have a matching
+    # hierarchical label INSIDE the child, so emit one per such net using the
+    # SAME selection rule, placed COINCIDENT with the net's first pin point in
+    # this sheet (a coincident label connects; the old fixed-margin placement
+    # left the label floating, and skipping stubbed nets left every stubbed
+    # sheet pin unmatched -> hier_label_mismatch + pin_not_connected ERC).
+    from skidl.schematics.net_classify import classify_label_scope as _cls_scope
+
+    def _emit_iface_hlabels(n, comp_tx, done):
+        for part in n.parts:
+            if isinstance(part, NetTerminal):
                 continue
-            if getattr(net, "stub", False) or getattr(net, "_stub", False):
-                continue
-            elements.append(
-                hierarchical_label_to_sexp(net.name, 5.0, hlabel_y, angle=180)
-            )
-            hlabel_y += 2.54
+            for pin in part.pins:
+                net = getattr(pin, "net", None)
+                if net is None or not getattr(net, "name", None):
+                    continue
+                if net.name in done or _is_power_net(net):
+                    continue
+                try:
+                    if _cls_scope(net) != "global":
+                        continue
+                except Exception:
+                    continue
+                pin_pt = getattr(pin, "pt", None)
+                if pin_pt is None:
+                    continue
+                pt = pin_pt * part.tx * comp_tx
+                elements.append(
+                    hierarchical_label_to_sexp(net.name, pt.x, pt.y)
+                )
+                done.add(net.name)
+        for ch in n.children.values():
+            if ch.flattened:  # inline grandchildren draw on THIS sheet
+                _emit_iface_hlabels(ch, ch.tx * comp_tx, done)
+
+    _emit_iface_hlabels(node, tx, set())
 
     # Build lib_symbols section for this sheet.
     lib_symbols_sexp = Sexp(["lib_symbols"])
@@ -1853,7 +1977,7 @@ def node_to_sexp_schematic(node, sheet_tx=Tx(), version=20230409, circuit=None):
     _write_sexp_schematic(schematic, filepath)
 
     # Return a hierarchical sheet reference for the parent.
-    return [create_hierarchical_sheet_sexp(node, sheet_tx)]
+    return create_hierarchical_sheet_sexp(node, sheet_tx)
 
 
 # ---------------------------------------------------------------------------

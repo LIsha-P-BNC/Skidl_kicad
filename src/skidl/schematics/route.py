@@ -131,6 +131,12 @@ def _stub_pin(pin):
     it only suppresses a redundant boundary hierarchical label.
     """
     net = pin.net
+    import os as _os_sp
+    _trap = _os_sp.environ.get("SKIDL_STUB_TRAP")
+    if _trap and net is not None and _trap in str(getattr(net, "name", "")):
+        import traceback as _tb
+        print(f">>> STUB_TRAP net={net.name} pin={pin.part.ref}/{pin.num}")
+        _tb.print_stack(limit=6)
     if net is not None and not getattr(net, "_stub_explicit", False):
         net._stub = True
     pin.stub = True
@@ -1316,7 +1322,10 @@ class SwitchBox:
                 break
 
             # Take a random choice of the active growth directions.
-            direction = random.choice(list(growth_directions))
+            # DETERMINISM: sort first -- list(set) follows per-run id/hash
+            # order, so the same random draw would pick a DIFFERENT direction
+            # on every run even with the seed pinned.
+            direction = random.choice(sorted(growth_directions))
 
             # Check the switchboxes along the growth side to see if further expansion is possible.
             box_list = box_lists[direction]
@@ -2169,6 +2178,132 @@ class Router:
         for h_track in h_tracks[1:]:
             h_track.add_adjacencies()
 
+        # ORPHAN-FACE HEAL: add_adjacencies() silently returns when a face's
+        # switchbox construction fails (NoSwitchBox), which can leave a PIN
+        # face with ZERO adjacencies -- the global router then can NEVER reach
+        # that pin and the whole child sheet collapses to labels (measured
+        # stm32 BOOT0: stop-face adjacent==0 after visiting 676 faces).
+        # Give every orphaned pin face an edge into the graph: connect it to
+        # the nearest parallel-track face whose span overlaps it, honoring the
+        # same exclusions as add_adjacency (never a boundary face, never two
+        # faces of the same part). Worst case the synthesized hop fails in
+        # detailed routing and the existing verify guard falls back to labels
+        # -- exactly today's behavior; best case the pin routes.
+        import os as _os_oh
+        if (_os_oh.environ.get("SKIDL_ORPHAN_HEAL", "1") != "0"
+                and getattr(node, "parent", None) is not None):
+            # CHILD nodes only: healing the ROOT's face graph synthesizes
+            # global hops with no backing switchbox and the detailed router
+            # then raises on EVERY seed (measured arduino: burned seed-0's
+            # 55w/0l layout). The orphan/island defects live in dense CHILD
+            # blocks (stm32 BOOT0/USB) -- heal exactly there.
+            def _heal(tracks):
+                healed = 0
+                for _tr in tracks:
+                    for _f in _tr:
+                        # pin terminals attach AFTER track creation, so key on
+                        # PART faces (only they carry pins later); skip faces
+                        # already in the graph and boundary faces.
+                        if _f.adjacent or not _f.part or boundary in _f.part:
+                            continue
+                        _cands = sorted(
+                            (t for t in tracks if t is not _tr),
+                            key=lambda t: abs(t.coord - _tr.coord))
+                        for _ot in _cands:
+                            done = False
+                            for _g in _ot:
+                                if boundary in _g.part:
+                                    continue
+                                if _f.part.intersection(_g.part):
+                                    continue
+                                # span overlap along the track direction
+                                if _f.beg < _g.end and _g.beg < _f.end:
+                                    _f.adjacent.add(Adjacency(_f, _g))
+                                    _g.adjacent.add(Adjacency(_g, _f))
+                                    healed += 1
+                                    done = True
+                                    break
+                            if done:
+                                break
+                return healed
+            _n_healed = _heal(h_tracks) + _heal(v_tracks)
+            if _n_healed:
+                print(f">>> route: healed {_n_healed} orphan pin face(s) "
+                      "(zero-adjacency -> nearest overlapping track face)")
+
+            # ISLAND MERGE: healing per-face still leaves small CONNECTED
+            # COMPONENTS cut off from the main graph (measured stm32 USB_DP:
+            # frontier exhausts a 3-18-face island even capacity-relaxed).
+            # Union-find the adjacency graph and BRIDGE every part-bearing
+            # island to the rest: cheapest parallel-track overlapping pair,
+            # same exclusions as add_adjacency. Bounded (<=50 bridges).
+            def _merge_islands():
+                faces = [f for tr in list(h_tracks) + list(v_tracks) for f in tr]
+                if not faces:
+                    return 0
+                comp = {id(f): id(f) for f in faces}
+
+                def find(x):
+                    while comp[x] != x:
+                        comp[x] = comp[comp[x]]
+                        x = comp[x]
+                    return x
+
+                def union(a, b):
+                    comp[find(a)] = find(b)
+
+                for f in faces:
+                    for adj in f.adjacent:
+                        union(id(f), id(adj.face))
+                bridges = 0
+                for _round in range(50):
+                    groups = {}
+                    for f in faces:
+                        groups.setdefault(find(id(f)), []).append(f)
+                    # islands that carry a PART face (a pin might live there)
+                    part_groups = [g for g in groups.values()
+                                   if any(f.part and boundary not in f.part
+                                          for f in g)]
+                    if len(part_groups) <= 1:
+                        break
+                    part_groups.sort(key=len)
+                    small = part_groups[0]
+                    small_ids = {id(f) for f in small}
+                    best = None
+                    for tracks in (h_tracks, v_tracks):
+                        for f in small:
+                            if f.track not in tracks:
+                                continue  # parallel-track bridging only
+                            for ot in tracks:
+                                if ot is f.track:
+                                    continue
+                                d = abs(ot.coord - f.track.coord)
+                                if best and d >= best[0]:
+                                    continue
+                                for g in ot:
+                                    if id(g) in small_ids:
+                                        continue
+                                    if boundary in g.part:
+                                        continue
+                                    if f.part.intersection(g.part):
+                                        continue
+                                    if f.beg < g.end and g.beg < f.end:
+                                        best = (d, f, g)
+                                        break
+                    if not best:
+                        break
+                    _d, f, g = best
+                    f.adjacent.add(Adjacency(f, g))
+                    g.adjacent.add(Adjacency(g, f))
+                    union(id(f), id(g))
+                    bridges += 1
+                return bridges
+
+            _n_bridges = _merge_islands()
+            if _n_bridges:
+                print(f">>> route: bridged {_n_bridges} face-graph island(s) "
+                      "(disconnected component -> nearest overlapping face)")
+
         return h_tracks, v_tracks
 
     def create_terminals(node, internal_nets, h_tracks, v_tracks):
@@ -2273,6 +2408,12 @@ class Router:
             # Record faces that have been visited and their distance from the start face.
             visited_faces = [start_face]
             start_face.dist_from_start = 0
+            # Capacity-relax fallback: a dense child block can exhaust every
+            # in-capacity face while a physical path still exists. One retry
+            # ignoring the capacity gate turns "whole sheet -> labels" into a
+            # merely crowded (but routable) drawing; detailed routing still
+            # resolves the congestion. (stm32 USB_DP/BOOT0 class.)
+            _cap_relaxed = False
 
             # Path searches are allowed to touch a Face on a Part if it
             # has a Pin on the net being routed or if it is one of the stop faces.
@@ -2304,7 +2445,8 @@ class Router:
                             continue
 
                         if (
-                            adj.face not in unconstrained_faces
+                            not _cap_relaxed
+                            and adj.face not in unconstrained_faces
                             and adj.face.capacity <= 0
                         ):
                             # Skip faces with insufficient routing capacity.
@@ -2319,7 +2461,23 @@ class Router:
                             closest_face = adj.face
                             closest_face.prev_face = visited_face
 
+                if not closest_face and not _cap_relaxed:
+                    # RETRY once ignoring face capacity before surrendering.
+                    _cap_relaxed = True
+                    for _vf in visited_faces:
+                        _vf.dist_from_start = float("inf")
+                    visited_faces = [start_face]
+                    start_face.dist_from_start = 0
+                    continue
+
                 if not closest_face:
+                    import os as _os_gr
+                    if _os_gr.environ.get("SKIDL_ROUTE_DEBUG"):
+                        _stop_adj = [len(f.adjacent) for f in stop_faces]
+                        print(f">>> GR_DEBUG net={net.name} visited={len(visited_faces)} "
+                              f"start_adj={len(start_face.adjacent)} "
+                              f"start_capok={sum(1 for a in start_face.adjacent if a.face.capacity > 0)} "
+                              f"stops={len(stop_faces)} stop_adjs={_stop_adj[:6]}")
                     # Exception raised if couldn't find a path from start to stop faces.
                     raise GlobalRoutingFailure(
                         f"Global routing failure: {net.name} {net} {start_face.pins}"
@@ -2369,11 +2527,20 @@ class Router:
             global_route = GlobalRoute()
 
             # Faces with pins from which paths/routing originate.
-            net_pin_faces = {pin.face for pin in node.get_internal_pins(net)}
+            # DETERMINISM: build the candidate list in PIN order (stable) --
+            # list(set-of-Faces) follows per-run id order, so the same random
+            # draw would start the route from a different face every run.
+            _seen_faces = set()
+            _face_list = []
+            for _p in node.get_internal_pins(net):
+                if _p.face not in _seen_faces:
+                    _seen_faces.add(_p.face)
+                    _face_list.append(_p.face)
+            net_pin_faces = set(_face_list)
             start_faces = set(net_pin_faces)
 
             # Select a random start face and look for a route to *any* of the other start faces.
-            start_face = random.choice(list(start_faces))
+            start_face = random.choice(_face_list)
             start_faces.discard(start_face)
             stop_faces = set(start_faces)
             initial_route = rt_srch(start_face, stop_faces)
@@ -2382,8 +2549,11 @@ class Router:
             # The faces on the route that was found now become the stopping faces for any further routing.
             stop_faces = set(initial_route)
 
-            # Go thru the other start faces looking for a connection to any existing route.
-            for start_face in start_faces:
+            # Go thru the other start faces looking for a connection to any
+            # existing route. DETERMINISM: iterate in the stable pin-derived
+            # order (_face_list) -- iterating the raw set follows per-run id
+            # order and grows the route tree differently every run.
+            for start_face in [f for f in _face_list if f in start_faces]:
                 next_route = rt_srch(start_face, stop_faces)
                 global_route.append(next_route)
 
@@ -2959,7 +3129,12 @@ class Router:
                         start_stop_pts.discard(segment.p2)
 
                         # Send the jog that was found.
-                        yield list(jog_segs), list(start_stop_pts)
+                        # DETERMINISM: order the segment set by geometry --
+                        # list(set) order changes per run.
+                        yield sorted(
+                            jog_segs,
+                            key=lambda s: (s.p1.x, s.p1.y, s.p2.x, s.p2.y),
+                        ), list(start_stop_pts)
 
             # Shuffle segments to vary the order of detected jogs.
             random.shuffle(segments)
@@ -3311,10 +3486,36 @@ class Router:
         for child in node.children.values():
             try:
                 child.route(tool=tool, **options)
-            except RoutingFailure:
-                # This child sheet is too dense to route: convert only THIS sheet to
-                # net labels and keep going, so sibling sheets retain their drawn wires.
-                child.stub_internal_nets()
+            except RoutingFailure as _rf_exc:
+                import os as _os_rt
+                if _os_rt.environ.get("SKIDL_ROUTE_DEBUG"):
+                    import traceback as _tb
+                    print(f">>> ROUTE_DEBUG child '{getattr(child, 'name', '?')}' "
+                          f"first failure: {_rf_exc!r} / cause: {_rf_exc.__cause__!r}")
+                    _tb.print_exc()
+                # This child sheet is too dense to route at the sweep's seed.
+                # The router is seed-dependent, so RETRY this child alone at a
+                # few offset seeds before surrendering -- a dense MCU block
+                # often routes at seed+k while the whole-sheet seed failed
+                # (observed stm32 MCU_CORE: silent stub -> 33 labels).
+                _base = options.get("seed") or 0
+                for _k in (101, 202, 303):
+                    try:
+                        _opts = dict(options)
+                        _opts["seed"] = _base + _k
+                        child.route(tool=tool, **_opts)
+                        print(f">>> route: child '{getattr(child, 'name', '?')}' "
+                              f"failed at seed={_base}, ROUTED at seed+{_k}")
+                        break
+                    except RoutingFailure:
+                        continue
+                else:
+                    # Convert only THIS sheet to net labels and keep going, so
+                    # sibling sheets retain their drawn wires. LOUD, not silent:
+                    # this is the single biggest wire->label downgrade path.
+                    print(f">>> route: child sheet '{getattr(child, 'name', '?')}' "
+                          "unroutable at all retry seeds -> labels-only fallback")
+                    child.stub_internal_nets()
 
         # Exit if no parts to route in this node.
         if not node.parts:

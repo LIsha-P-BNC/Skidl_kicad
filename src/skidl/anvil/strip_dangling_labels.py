@@ -43,6 +43,21 @@ def strip(sch):
         return 0
     text = open(sch, encoding="utf-8").read()
     targets = {(round(float(x), 2), round(float(y), 2), n) for x, y, n in dangling}
+    # SHEET PINS are anchors: a global label coincident with a hierarchical
+    # sheet pin is the top-sheet tie that connects the pin into the flat net
+    # (create_hierarchical_sheet_sexp places one per pin). kicad-cli can still
+    # report such a label "dangling" while the hierarchy resolves, and removing
+    # it disconnects the sheet pin (observed: LOAD_EN pin_not_connected on the
+    # forced-hierarchy t3). Never strip a label sitting on a sheet-pin point.
+    pin_pts = set()
+    for s, e in _blocks(text, "sheet"):
+        for pm in re.finditer(
+                r'\(pin\s+"[^"]+"[^()]*\(at\s+([\d.\-]+)\s+([\d.\-]+)',
+                text[s:e], re.S):
+            pin_pts.add((round(float(pm.group(1)), 2), round(float(pm.group(2)), 2)))
+    targets = {t for t in targets if (t[0], t[1]) not in pin_pts}
+    if not targets:
+        return 0
     remove = []
     for tag in ("global_label", "label"):
         for s, e in _blocks(text, tag):
