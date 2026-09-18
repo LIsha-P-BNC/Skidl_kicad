@@ -53,11 +53,9 @@ import warnings
 warnings.filterwarnings("ignore", message=".*fp-lib-table.*")
 
 
-# Pattern matching common power net names.
-_POWER_NET_RE = re.compile(
-    r"^(\+\d[\d.]*V[\d]*|GND|AGND|DGND|PGND|VCC|VDD|VSS|VEE|VBUS|VBAT|AVCC|AVDD|DVCC|DVDD)$",
-    re.IGNORECASE,
-)
+# Power-net (render-as-power-symbol) classification -- canonical single source
+# (was a local _POWER_NET_RE copy-pasted into every tools/kicadN/gen_schematic.py).
+from skidl.schematics.net_classify import is_power_symbol_net
 
 # ERC error types that can be fixed by stubbing nets.
 FIXABLE_ERROR_TYPES = frozenset(
@@ -104,7 +102,7 @@ def auto_stub_nets(circuit, **options):
             continue
 
         # Power nets: anything starting with "+" or matching common power names.
-        if net.name.startswith("+") or _POWER_NET_RE.match(net.name):
+        if is_power_symbol_net(net.name):
             if small_circuit and len(net.pins) <= power_wire_max:
                 # Wire the chain ONLY when no pin on the rail is a power INPUT:
                 # a wired rail carries no power symbol, and a power-in pin on a
@@ -968,7 +966,40 @@ def gen_schematic(
     expansion_factor = 1.0
     failure_type = None
 
+    # Cold-flag snapshot for the retry ladder: a failed attempt's child-
+    # fallback/_stub_pin flags otherwise LEAK into the next attempt, whose
+    # children then "route" trivially as all-labels -- the retry silently
+    # ships the FAILED attempt's labels (same mechanism as the seed-sweep
+    # flap; caught via SKIDL_NET_DEBUG on water_level PROBE_LOW). Raw
+    # __dict__ capture, presence-aware: pin.stub is a property backed by
+    # _stub_val, so getattr/setattr would stamp explicit values.
+    _FLAG_MISS = object()
+    _NKEYS = ("stub", "_stub", "_direct_wired")
+    _PKEYS = ("stub", "_stub_val", "direct_wired")
+    _flags_cold = (
+        [(n, tuple(n.__dict__.get(k, _FLAG_MISS) for k in _NKEYS))
+         for n in circuit.nets],
+        [(p, tuple(p.__dict__.get(k, _FLAG_MISS) for k in _PKEYS))
+         for prt in circuit.parts for p in getattr(prt, "pins", [])],
+    )
+
+    def _flags_restore():
+        for _o, _vals, _keys in (
+            [(n, vals, _NKEYS) for n, vals in _flags_cold[0]]
+            + [(p, vals, _PKEYS) for p, vals in _flags_cold[1]]
+        ):
+            for _k, _v in zip(_keys, _vals):
+                try:
+                    if _v is _FLAG_MISS:
+                        _o.__dict__.pop(_k, None)
+                    else:
+                        _o.__dict__[_k] = _v
+                except Exception:
+                    pass
+
     for attempt in range(retries):
+        if attempt:
+            _flags_restore()
         preprocess_circuit(circuit, **options)
 
         node = SchNode(
@@ -994,7 +1025,8 @@ def gen_schematic(
             # swallowed so it can never break a build. Kill switch SKIDL_HUG_DECAPS=0.
             try:
                 from skidl.schematics.anchor_place import (
-                    hug_power_satellites, flow_place_hinted, flow_place_block)
+                    hug_power_satellites, flow_place_hinted, flow_place_block,
+                    uncross_parallel_bundles, orient_to_neighbors)
 
                 def _hug_all(n):
                     # 1) author flow_x hints win (whole-circuit flow layout);
@@ -1005,9 +1037,26 @@ def gen_schematic(
                     #    the rails over the block (measured: skipping the hug
                     #    here regressed SW_NODE/N$1 back to labels);
                     # 3) else, just hug the decaps.
-                    if flow_place_hinted(n, **options) == 0:
-                        flow_place_block(n, **options)
-                        hug_power_satellites(n, **options)
+                    _hug_opts = {**options, "expansion_factor": expansion_factor}
+                    if flow_place_hinted(n, **_hug_opts) == 0:
+                        _rowed = flow_place_block(n, **_hug_opts)
+                        hug_power_satellites(n, **_hug_opts)
+                        # a part whose pins face AWAY from their partners
+                        # (relay coil down / contacts up in a left-right
+                        # row) is unroutable at any gap -- rotate it to
+                        # face them, then RE-pack the row (pin spans
+                        # changed with the rotation). ONLY on a node the
+                        # flow layout actually managed: on a mixed
+                        # multi-group sheet the same rotations churn the
+                        # legacy placement into all-label (measured
+                        # probe4 2-block repro: 25 fallbacks -> all-label).
+                        if _rowed and orient_to_neighbors(n, **_hug_opts):
+                            flow_place_block(n, **_hug_opts)
+                            hug_power_satellites(n, **_hug_opts)
+                    # bundle uncrossing runs for EVERY node (row, stacked,
+                    # anchor-hugged alike): a crossed multi-net bundle fails
+                    # routing identically in all of them.
+                    uncross_parallel_bundles(n, **_hug_opts)
                     for _ch in getattr(n, "children", {}).values():
                         _hug_all(_ch)
                 _hug_all(node)
@@ -1070,6 +1119,27 @@ def gen_schematic(
                     f"forced labels: {', '.join(sorted(_rescued)[:8])}"
                     f"{'...' if len(_rescued) > 8 else ''}"
                 )
+
+            # WIRE-IN-BLOCK EXPANSION RETRY: child sheets that fall back to
+            # labels no longer raise RoutingFailure (per-child containment in
+            # route.py), so the expansion ladder in the except-handler below
+            # never fires for the exact case it was built for. A child
+            # fallback signals DENSITY (measured wlc: PROBE_SENSE terminal
+            # exhaustion, PUMP_RELAY island with no wire corridor) -- while
+            # retries remain, re-place with more room and re-route instead of
+            # accepting a label block.
+            from skidl.schematics import route as _route_mod_fb
+            _fb_children = list(getattr(_route_mod_fb, "CHILD_LABEL_FALLBACKS", []) or [])
+            if _fb_children and attempt < retries - 1:
+                finalize_parts_and_nets(circuit, **options)
+                expansion_factor *= 1.5
+                active_logger.warning(
+                    f"  [expand-retry] {len(_fb_children)} child sheet(s) fell back "
+                    f"to labels ({', '.join(_fb_children)}) on attempt "
+                    f"{attempt + 1}/{retries}; re-placing with expansion "
+                    f"x{expansion_factor:g}"
+                )
+                continue
 
         except PlacementFailure as e:
             finalize_parts_and_nets(circuit, **options)

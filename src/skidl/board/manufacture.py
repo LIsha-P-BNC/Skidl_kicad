@@ -57,15 +57,36 @@ def export_manufacturing(pcb_path: Path, kicad_cli: str,
     prefs = _board_plot_prefs(pcb_path)
 
     results = {}
+    notes = {}                 # informational, kept OUT of per-format status
+    gerber_src = pcb_path      # may be swapped for a sanitized temp copy
+    tmp_holder = []            # keeps TemporaryDirectory alive until zipped
     for fmt in formats:
         if fmt == "gerbers":
+            if prefs["has_plot_params"]:
+                # FAB SANITY: (drillshape 1/2) plots drill MARKS into the
+                # gerbers -- a KiCad print-dialog default, never wanted by a
+                # fab (the drill file carries the holes; a 0.35mm mark
+                # flashed on the Profile layer reads as a tiny cutout).
+                # Export from a same-stem temp copy with marks off so the
+                # user's board file and their other settings stay untouched.
+                import re as _re, tempfile
+                txt = pcb_path.read_text(encoding="utf-8", errors="replace")
+                if _re.search(r"\(drillshape\s+[12]\)", txt):
+                    td = tempfile.TemporaryDirectory()
+                    tmp_holder.append(td)
+                    gerber_src = Path(td.name) / pcb_path.name
+                    gerber_src.write_text(
+                        _re.sub(r"\(drillshape\s+[12]\)", "(drillshape 0)",
+                                txt), encoding="utf-8")
+                    notes["drill_marks"] = ("disabled in fab gerbers "
+                                            "(board file untouched)")
             cmd = [kicad_cli, "pcb", "export", "gerbers",
                    "--output", str(fab_dir) + "/"]
             if prefs["has_plot_params"]:
                 # the user's own Plot dialog settings (layers, format
                 # options, origin) exactly as saved in the board
                 cmd.append("--board-plot-params")
-            cmd.append(str(pcb_path))
+            cmd.append(str(gerber_src))
         elif fmt == "drill":
             cmd = [kicad_cli, "pcb", "export", "drill",
                    "--output", str(fab_dir) + "/",
@@ -103,9 +124,11 @@ def export_manufacturing(pcb_path: Path, kicad_cli: str,
         for f in files:
             zf.write(f, f.name)
 
-    return {
+    out = {
         "ok": all(v == "ok" for v in results.values()),
         "formats": results,
         "files": [f.name for f in files],
         "zip": str(zip_path),
     }
+    out.update(notes)
+    return out

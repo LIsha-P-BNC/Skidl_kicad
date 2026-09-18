@@ -6,7 +6,7 @@
   (paper "A4")
   (title_block
     (title "SKiDL-Generated Schematic")
-    (date "2026-09-15")
+    (date "2026-09-17")
     (rev A)
     (company "regr")
     (comment 1 "Engineer: T3")
@@ -826,7 +826,7 @@
                 (size 1.27 1.27))))))
       (embedded_fonts no)))
   (sheet
-    (at 113.03 96.52)
+    (at 113.03 86.36)
     (size 20.32 17.78)
     (exclude_from_sim no)
     (in_bom yes)
@@ -840,19 +840,19 @@
       (color 0 0 0 0.0))
     (uuid d38ada07-363c-5f24-b2cd-6f1b5715c45c)
     (property "Sheetname" "psu_pg"
-      (at 113.03 95.81 0)
+      (at 113.03 85.65 0)
       (effects
         (font
           (size 1.27 1.27))
         (justify left bottom)))
     (property "Sheetfile" "t3_subcircuit_psu_pg.anvil_sch"
-      (at 113.03 114.88 0)
+      (at 113.03 104.72 0)
       (effects
         (font
           (size 1.27 1.27))
         (justify left top)))
     (pin LOAD_EN bidirectional
-      (at 113.03 99.06 180)
+      (at 113.03 88.9 180)
       (effects
         (font
           (size 1.27 1.27))
@@ -860,14 +860,14 @@
       (uuid c444b6d4-64d8-5976-9764-dddf2eb4f8fb)))
   (global_label "LOAD_EN"
     (shape bidirectional)
-    (at 113.03 99.06 180)
+    (at 113.03 88.9 180)
     (effects
       (font
         (size 1.27 1.27))
       (justify right))
     (uuid 80baa19d-12c5-531c-8931-159a456c9b89))
   (sheet
-    (at 163.83 96.52)
+    (at 163.83 86.36)
     (size 20.32 17.78)
     (exclude_from_sim no)
     (in_bom yes)
@@ -881,19 +881,19 @@
       (color 0 0 0 0.0))
     (uuid c8096c82-3890-544f-8e68-e597054b65f7)
     (property "Sheetname" "load_pg"
-      (at 163.83 95.81 0)
+      (at 163.83 85.65 0)
       (effects
         (font
           (size 1.27 1.27))
         (justify left bottom)))
     (property "Sheetfile" "t3_subcircuit_load_pg.anvil_sch"
-      (at 163.83 114.88 0)
+      (at 163.83 104.72 0)
       (effects
         (font
           (size 1.27 1.27))
         (justify left top)))
     (pin LOAD_EN bidirectional
-      (at 163.83 99.06 180)
+      (at 163.83 88.9 180)
       (effects
         (font
           (size 1.27 1.27))
@@ -901,7 +901,7 @@
       (uuid 47e2a7e1-e6b4-54a0-a637-ecbf57e66ec2)))
   (global_label "LOAD_EN"
     (shape bidirectional)
-    (at 163.83 99.06 180)
+    (at 163.83 88.9 180)
     (effects
       (font
         (size 1.27 1.27))

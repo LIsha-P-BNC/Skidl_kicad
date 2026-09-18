@@ -80,7 +80,12 @@ def add(sch_path, notes, header="Notes:"):
     """
     try:
         return _add(sch_path, notes, header)
-    except Exception:
+    except Exception as exc:
+        try:
+            from skidl.schematics.net_classify import log_swallowed
+            log_swallowed("add_notes", exc)
+        except Exception:
+            pass
         return 0  # never break a build over a decorative pass
 
 

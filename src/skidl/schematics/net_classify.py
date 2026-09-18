@@ -14,10 +14,28 @@ testable and reusable by both placement (net_classify) and clustering
 (cluster.py, which builds on top of these).
 """
 
+import os
 import re
+import sys
+import traceback
 from collections import deque
 
 from skidl.utilities import export_to_all
+
+
+@export_to_all
+def log_swallowed(where, exc):
+    """Surface an otherwise-swallowed exception to stderr, gated on SKIDL_PASS_DEBUG.
+
+    Post-passes catch-all to never break a build; that hides real regressions
+    behind "clean" output. Call this from a pass's top-level except so the
+    failure is at least visible when debugging, without changing default behavior.
+    """
+    if os.environ.get("SKIDL_PASS_DEBUG"):
+        print(
+            "[anvil:%s] swallowed %r\n%s" % (where, exc, traceback.format_exc()),
+            file=sys.stderr,
+        )
 
 # Ground-like net names bias toward the bottom of a placement.
 _GROUND_NET_RE = re.compile(
@@ -26,10 +44,56 @@ _GROUND_NET_RE = re.compile(
 )
 
 # Power-rail-like net names bias toward the top of a placement.
+#
+# CANONICAL "positive supply rail" pattern for the WHOLE engine. Deliberately a
+# SUPERSET of the historical strict form -- it additionally covers VIN/VSYS, bare
+# NvM notation (3V3, 1V8, 5V) and prefixed forms (SYS_3V3) so that placement
+# top-bias (here), the ladder-rail pass (anvil/draw_power_rail.py) and clustering
+# all agree on what a rail is. VEE/VSS are intentionally NOT rails (ground-side,
+# see _GROUND_NET_RE) so anchor_place._net_power_kind keeps its rail/ground split.
 _POWER_RAIL_NET_RE = re.compile(
-    r"^(\+\d[\d.]*V[\d]*|VCC|VDD|VBUS|VBAT|AVCC|AVDD|DVCC|DVDD)\d*$",
+    r"^(\+[\w.]+|(A|D)?V(CC|DD|IN|BUS|BAT|SYS)\d*|\d+V\d*|[A-Za-z0-9]+_\d+V\d*)$",
     re.IGNORECASE,
 )
+
+# CANONICAL "render as a power symbol (vs a net label)" pattern. Kept byte-equal
+# to the historical _POWER_NET_RE that used to be copy-pasted into every
+# tools/kicadN/gen_schematic.py and scripts/validate_design.py. This is the
+# CONSERVATIVE render set (rails + grounds) and is intentionally narrower than the
+# placement superset above: broadening what renders as a power symbol has ERC
+# (PWR_FLAG) implications, so that change is deferred behind the connectivity/ERC
+# guards. Consume via is_power_symbol_net().
+_POWER_SYMBOL_NET_RE = re.compile(
+    r"^(\+\d[\d.]*V[\d]*|GND|AGND|DGND|PGND|VCC|VDD|VSS|VEE|VBUS|VBAT"
+    r"|AVCC|AVDD|DVCC|DVDD)$",
+    re.IGNORECASE,
+)
+
+
+@export_to_all
+def is_power_symbol_net(name):
+    """True if a net should RENDER as a power symbol (conservative rails+grounds).
+
+    Single source of truth replacing the 5 hand-synced copies of _POWER_NET_RE.
+    Byte-equivalent to the historical behavior: name.startswith('+') OR match.
+    """
+    name = name or ""
+    return bool(name.startswith("+") or _POWER_SYMBOL_NET_RE.match(name))
+
+
+@export_to_all
+def is_power_net(name):
+    """True if a net is a power net at all (positive rail OR ground OR '+').
+
+    Uses the SUPERSET rail pattern. NOTE: not (yet) wired into render sites --
+    reserved for a future guarded change; use is_power_symbol_net() for rendering.
+    """
+    name = name or ""
+    return bool(
+        name.startswith("+")
+        or _POWER_RAIL_NET_RE.match(name)
+        or _GROUND_NET_RE.match(name)
+    )
 
 # Net-name keywords for common bidirectional/feedback buses. These are
 # excluded as BFS edges in part_depth_map() since they routinely form

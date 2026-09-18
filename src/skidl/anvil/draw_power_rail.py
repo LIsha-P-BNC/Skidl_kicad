@@ -38,7 +38,23 @@ _NS = uuid.NAMESPACE_URL
 
 # a power net that reads as a positive supply rail (+12V, +5V, +3V3, VCC, VDD,
 # VIN, 3V3, 5V ...). GND is handled separately and only when opted in.
-_RAIL_RE = re.compile(r"^(\+.*|v(cc|dd|in|bat|sys|bus).*|\d+v\d*|.*_?\d+v\d*)$", re.I)
+#
+# CANONICAL source is net_classify._POWER_RAIL_NET_RE so placement top-bias and
+# this ladder-draw agree on what a rail is (they used to diverge). Fallback keeps
+# the module importable if loaded standalone (it is loaded by bare name). This
+# pass is connectivity-guarded by the caller, so any slight narrowing vs the old
+# broad local pattern can only reduce collapses, never break a net.
+try:
+    from skidl.schematics.net_classify import _POWER_RAIL_NET_RE as _RAIL_RE
+    from skidl.schematics.net_classify import log_swallowed as _log_swallowed
+except Exception:  # standalone / import path not set up
+    _RAIL_RE = re.compile(
+        r"^(\+[\w.]+|(A|D)?V(CC|DD|IN|BUS|BAT|SYS)\d*|\d+V\d*|[A-Za-z0-9]+_\d+V\d*)$",
+        re.I,
+    )
+
+    def _log_swallowed(where, exc):
+        pass
 
 
 def draw(sch_path, enable_gnd=False):
@@ -51,7 +67,8 @@ def draw(sch_path, enable_gnd=False):
     """
     try:
         return _draw(sch_path, enable_gnd)
-    except Exception:
+    except Exception as exc:
+        _log_swallowed("draw_power_rail", exc)
         return 0  # never break a build over a drawing pass
 
 

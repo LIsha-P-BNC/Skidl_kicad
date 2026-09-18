@@ -71,6 +71,197 @@ OUT.mkdir(parents=True, exist_ok=True)
 # Lets a project live at a user-chosen path instead of the default <OUT>/<base>.
 _PROJECT_DIRS: dict = {}
 
+# ---------------------------------------------------------------------------
+# WORKFLOW GATE -- AI-agnostic flow enforcement.
+#
+# The design workflow (rules -> parts search/describe -> recommend to the USER
+# -> user confirms -> build) used to live only in prompt instructions, so a
+# weaker / non-Claude MCP client could skip straight to build() without ever
+# gathering the user's input. These module-level states let build() REFUSE a
+# new-project build until the flow actually happened, whatever AI is driving:
+#   1. build(mode='rules') was called this session      (_WF["rules_fetched"])
+#   2. every non-primitive part in the body was          (_DESCRIBED)
+#      parts(action='describe')d first
+#   3. a design plan was registered via build(mode='plan') and the build call
+#      carries confirm=True, meaning the AI showed the plan to the user and
+#      the user explicitly approved                      (_PLANS)
+# EXTENDING an existing project (its .py already on disk) skips the plan gate
+# (small follow-ups shouldn't re-interrogate the user) but still requires
+# describe for genuinely NEW parts. Set env SKIDL_MCP_NO_GATE=1 to disable
+# (tests / scripted batch runs).
+# ---------------------------------------------------------------------------
+_WF_GATE_OFF = os.environ.get("SKIDL_MCP_NO_GATE", "") not in ("", "0")
+_WF = {"rules_fetched": False}
+_DESCRIBED: set = set()          # "lib:name" (lowercased) described this session
+_PLANS: dict = {}                # base -> {"plan": str, "confirmed": bool}
+
+# The in-app Anvil CAD chat runs `claude -p --resume` PER TURN, so this server
+# process (and all in-memory state above) is recreated every message. The flow
+# spans turns (plan this turn -> user approves -> confirm next turn), so gate
+# state MUST live on disk: session-wide state in <OUT>/_wf_session.json (with a
+# TTL so a stale day-old session re-reads the rules) and each project's plan in
+# its own folder. In-memory sets act as a same-process cache on top.
+_WF_STATE_TTL = 12 * 3600        # seconds a session file stays valid
+
+
+def _wf_state_path() -> Path:
+    return OUT / "_wf_session.json"
+
+
+def _wf_load() -> dict:
+    """Persisted session state, or a fresh one if missing/stale/corrupt."""
+    try:
+        d = json.loads(_wf_state_path().read_text(encoding="utf-8"))
+        if time.time() - float(d.get("ts", 0)) <= _WF_STATE_TTL:
+            return d
+    except Exception:
+        pass
+    return {"ts": time.time(), "rules": False, "described": []}
+
+
+def _wf_save(d: dict) -> None:
+    d["ts"] = time.time()
+    try:
+        _wf_state_path().write_text(json.dumps(d), encoding="utf-8")
+    except OSError:
+        pass                     # disk trouble never blocks the tools
+
+
+def _wf_mark_rules() -> None:
+    _WF["rules_fetched"] = True
+    d = _wf_load()
+    d["rules"] = True
+    _wf_save(d)
+
+
+def _wf_rules_ok() -> bool:
+    return _WF["rules_fetched"] or bool(_wf_load().get("rules"))
+
+
+def _wf_described() -> set:
+    return _DESCRIBED | {str(s) for s in _wf_load().get("described", [])}
+
+
+def _plan_path(base: str) -> Path:
+    # Central store, NOT the project folder: a project built with folder=<custom>
+    # loses its _PROJECT_DIRS entry when the per-turn server process restarts, so
+    # a folder-relative plan file would "disappear" between plan and confirm.
+    d = OUT / "_plans"
+    d.mkdir(parents=True, exist_ok=True)
+    return d / f"{base}.json"
+
+
+def _plan_load(base: str):
+    if base in _PLANS:
+        return _PLANS[base]
+    try:
+        plan = json.loads(_plan_path(base).read_text(encoding="utf-8"))
+        _PLANS[base] = plan
+        return plan
+    except Exception:
+        return None
+
+
+def _plan_save(base: str, plan: dict) -> None:
+    _PLANS[base] = plan
+    try:
+        _plan_path(base).write_text(json.dumps(plan), encoding="utf-8")
+    except OSError:
+        pass
+# 2-pin primitives / power symbols whose pinout is trivial -- describing every
+# resistor would add noise, not correctness.
+_GATE_EXEMPT_LIBS = {"device", "power", "connector", "connector_generic",
+                     "connector_audio", "switch", "jumper", "mechanical",
+                     "graphic", "userparts"}
+
+_PART_RE = re.compile(r"""Part\(\s*["']([^"']+)["']\s*,\s*["']([^"']+)["']""")
+
+
+def _parts_in_code(code: str) -> set:
+    """Every literal Part("Lib", "Name") in a body/script, as 'lib:name'
+    (lowercased). Parts built via variables/loops are invisible to this --
+    the gate checks what it can see and lets the precheck catch the rest."""
+    return {f"{m.group(1).lower()}:{m.group(2).lower()}"
+            for m in _PART_RE.finditer(code)}
+
+
+def _record_described(result: dict) -> None:
+    """After a successful parts(action='describe'), remember each found part
+    so the build gate knows its pins were actually looked up."""
+    new = set()
+    for entry in (result.get("parts") or {}).values():
+        if entry.get("found"):
+            m = _PART_RE.search(entry.get("part", ""))
+            if m:
+                new.add(f"{m.group(1).lower()}:{m.group(2).lower()}")
+    if new:
+        _DESCRIBED.update(new)
+        d = _wf_load()
+        d["described"] = sorted(set(d.get("described", [])) | _DESCRIBED)
+        _wf_save(d)
+
+
+def _workflow_gate(base: str, code: str, confirm: bool):
+    """Return None to allow the build, or a refusal dict telling the AI the
+    exact step it skipped. Deterministic: holds for every MCP client."""
+    if _WF_GATE_OFF:
+        return None
+    # Extend detection must survive the per-turn process restart AND custom
+    # folders: _resolve_project also scans <OUT>/* and registered dirs for the
+    # project's real home, so an existing design is never mistaken for new.
+    _, proj_dir = _resolve_project(base)
+    existing_py = proj_dir / f"{base}.py"
+    is_extend = existing_py.is_file()
+    if not _wf_rules_ok():
+        return {"ok": False, "status": "workflow_gate",
+                "error": "build(mode='rules') has not been called this session. "
+                         "Call it first and follow the returned workflow "
+                         "(parts search/describe -> recommend the design to the "
+                         "USER -> user confirms -> build)."}
+    # parts-describe gate: every visible non-primitive part must have been
+    # described (extends: parts already in the existing source are exempt).
+    used = {p for p in _parts_in_code(code)
+            if p.split(":", 1)[0] not in _GATE_EXEMPT_LIBS}
+    if is_extend:
+        try:
+            existing = existing_py.read_text(encoding="utf-8", errors="replace")
+            used -= _parts_in_code(existing)
+        except OSError:
+            pass
+    missing = sorted(used - _wf_described())
+    if missing:
+        return {"ok": False, "status": "workflow_gate",
+                "error": "these parts were never parts(action='describe')d "
+                         "this session -- pin names/numbers must come from "
+                         "describe, not memory. Call parts(action='describe') "
+                         "for them, write connections from its pins JSON, "
+                         "then build again.",
+                "parts_not_described": missing}
+    if is_extend:
+        return None
+    # plan/confirm gate: NEW project must have a user-approved plan.
+    plan = _plan_load(base)
+    if not plan:
+        return {"ok": False, "status": "workflow_gate",
+                "error": "no design plan registered for this project. Call "
+                         "build(name, mode='plan', code=<short human-readable "
+                         "plan: blocks, chosen parts + values, and any "
+                         "user-input questions with their answers>), SHOW that "
+                         "plan to the user, and only after the user explicitly "
+                         "approves call build again with confirm=True."}
+    if not confirm and not plan.get("confirmed"):
+        return {"ok": False, "status": "workflow_gate",
+                "error": "the registered plan has not been confirmed. Present "
+                         "the plan to the USER, wait for their explicit "
+                         "approval, then call build(..., confirm=True). Never "
+                         "pass confirm=True without the user actually "
+                         "approving.",
+                "plan": plan.get("plan", "")}
+    if not plan.get("confirmed"):
+        plan["confirmed"] = True
+        _plan_save(base, plan)
+    return None
+
 
 def pdir(base: str) -> Path:
     """Per-project output folder (created on demand). Everything for one
@@ -172,6 +363,17 @@ server = FastMCP(
         "ask them to resend/convert the PDF, and NEVER give up on a PDF -- use "
         "read_pdf. Trust the rendered image for wiring/connectivity; treat the "
         "extracted text only as a hint.\n"
+        "10. USER-INPUT GATE (server-enforced): a NEW project cannot be built "
+        "until (a) build(mode='rules') was called this session, (b) every IC/"
+        "non-primitive part in the body was parts(action='describe')d, and "
+        "(c) a plan was registered via build(mode='plan', code=<short plan: "
+        "blocks, parts+values, user questions+answers>), SHOWN to the user, "
+        "and the user explicitly approved -- then build with confirm=True. "
+        "A build refused with status 'workflow_gate' means you skipped one of "
+        "these steps; do the step it names, never work around it. NEVER pass "
+        "confirm=True unless the user actually approved the plan. Extending "
+        "an existing project skips the plan step but still requires describe "
+        "for new parts.\n"
         "Do not design circuits by hand when these tools are available."
     ),
 )
@@ -394,7 +596,7 @@ def _start_build(base: str, script_text: str) -> dict:
         return blocked
     # stale outputs must not be mistaken for this build's result
     # (backed up above before deletion -- *.prebuild.bak)
-    for ext in (".net", ".anvil_sch", ".anvil_pro"):
+    for ext in (".net", ".anvil_sch", ".anvil_pro", ".build_result.json"):
         try:
             (pdir(base) / (base + ext)).unlink(missing_ok=True)
         except OSError:
@@ -463,15 +665,40 @@ def _finish_build(base: str) -> dict:
         (pdir(base) / (base + ".anvil_pro")).write_text(
             json.dumps(skeleton, indent=2) + "\n", encoding="utf-8")
         files = _gather_files(base)
-    # How was the schematic actually drawn? (printed by smart_schematic)
-    if "all-label mode ->" in log:
-        mode = "labels (nets connect by label name -- normal for dense circuits)"
-    elif "partial wire route (seed=" in log:
-        mode = "partial (wires where routable, labels on dense nets)"
-    elif "routed with wires (seed=" in log:
-        mode = "wires"
+    # AUTHORITATIVE verdict (gap H3): smart_schematic writes <base>.build_result.json
+    # with the FINAL mode + connectivity verdict. Prefer it; grep the free-form log
+    # only when it is absent (older engine / early crash). Log-grep is fragile -- a
+    # build that hit an early MISMATCH but recovered via a fallback still carries the
+    # stale "all-label mode -> ...MISMATCH..." line, which the grep wrongly failed.
+    result_json = None
+    try:
+        rj = pdir(base) / (base + ".build_result.json")
+        if rj.is_file():
+            result_json = json.loads(rj.read_text(encoding="utf-8"))
+    except Exception:
+        result_json = None
+
+    if result_json:
+        sm = result_json.get("schematic_mode")
+        if sm == "labels":
+            mode = "labels (nets connect by label name -- normal for dense circuits)"
+        elif sm == "wires":
+            # partial vs full is a display-only nuance the JSON doesn't split;
+            # refine from the log if it recorded a partial route.
+            mode = ("partial (wires where routable, labels on dense nets)"
+                    if "partial wire route (seed=" in log else "wires")
+        else:
+            mode = "unknown"
     else:
-        mode = "unknown"
+        # How was the schematic actually drawn? (printed by smart_schematic)
+        if "all-label mode ->" in log:
+            mode = "labels (nets connect by label name -- normal for dense circuits)"
+        elif "partial wire route (seed=" in log:
+            mode = "partial (wires where routable, labels on dense nets)"
+        elif "routed with wires (seed=" in log:
+            mode = "wires"
+        else:
+            mode = "unknown"
     res = {
         "ok": ok,
         "status": "done" if ok else "failed",
@@ -481,18 +708,31 @@ def _finish_build(base: str) -> dict:
         "generated": files,
         "log": log[-6000:],  # tail is where errors/summary live
     }
-    # NEVER report a schematic the verifier said is WRONG as a success. The
-    # all-label fallback prints its verify result; MISMATCH there means the
-    # drawn sheet has shorts / missing connections.
-    mism = re.search(r"all-label mode -> [^\n]*MISMATCH[^\n]*", log)
-    if ok and mism:
-        res["ok"] = False
-        res["status"] = "failed"
-        res["error"] = (
-            "schematic connectivity MISMATCH: " + mism.group(0).split("-> ", 1)[-1]
-            + " -- the .anvil_sch is WRONG (do not use or show it); the .net "
-              "netlist is still valid for PCB layout. Tell the user exactly this."
-        )
+    # NEVER report a schematic the verifier said is WRONG as a success.
+    if result_json:
+        # Trust the FINAL structured verdict: it records connectivity at return,
+        # so a build that recovered after an early MISMATCH is correctly a success
+        # (the old log-grep false-failed it on the stale MISMATCH line).
+        if ok and result_json.get("verify_available") and not result_json.get("verified", True):
+            res["ok"] = False
+            res["status"] = "failed"
+            res["error"] = (
+                "schematic connectivity NOT verified -- the .anvil_sch is WRONG "
+                "(do not use or show it); the .net netlist is still valid for PCB "
+                "layout. Tell the user exactly this."
+            )
+    else:
+        # Legacy fallback (no structured verdict): the all-label fallback prints
+        # its verify result; MISMATCH there means shorts / missing connections.
+        mism = re.search(r"all-label mode -> [^\n]*MISMATCH[^\n]*", log)
+        if ok and mism:
+            res["ok"] = False
+            res["status"] = "failed"
+            res["error"] = (
+                "schematic connectivity MISMATCH: " + mism.group(0).split("-> ", 1)[-1]
+                + " -- the .anvil_sch is WRONG (do not use or show it); the .net "
+                  "netlist is still valid for PCB layout. Tell the user exactly this."
+            )
     # Non-blocking design review of the finished output: netlist-level checks
     # (LED series resistor, decoupling caps, floating nets) + the net->block
     # connectivity matrix from the .py, so the model can confirm no net was
@@ -1638,8 +1878,13 @@ def adopt_project(name: str) -> dict:
     py = d / (base + ".py")
 
     if not sch.is_file() and not net.is_file():
-        return {"ok": False, "error": f"no .anvil_sch or .net found for '{base}' "
-                f"in {d} -- nothing to adopt."}
+        # PCB-only project: no schematic/netlist to export from, but a board can
+        # be reverse-engineered (parse footprints/nets -> infer symbols -> netlist
+        # -> SKiDL). Connectivity-faithful; IC pin semantics are not recoverable.
+        if pcb.is_file():
+            return _reverse_pcb_to_py(base, d, pcb)
+        return {"ok": False, "error": f"no .anvil_sch, .net or .anvil_pcb found for "
+                f"'{base}' in {d} -- nothing to adopt."}
 
     steps = []
     # 1. ensure a netlist exists
@@ -1749,6 +1994,190 @@ print("\\n" + {json.dumps(_MARK)} + json.dumps(res))
                  " A PCB exists; read its stackup/pours via the board tools before "
                  "changing layers." if pcb.is_file() else "")),
     }
+
+
+def _reverse_pcb_to_py(base: str, d: Path, pcb_file: Path) -> dict:
+    """Shared PCB-only reverse core (import_pcb + adopt_project fallback):
+    analyze the board (parse + infer symbols + synthesize a netlist), create any
+    generic IC symbols, write <base>.net, then netlist_to_skidl -> <base>.py.
+    Returns a report dict; the caller renders the schematic via build(name)."""
+    steps = []
+    # 1. analyze in a subprocess (the server never imports skidl in-process).
+    code = f'''
+import sys, os, json, traceback
+sys.path.insert(0, {json.dumps(str(SRC))})
+res = {{}}
+try:
+    from skidl.board import pcb_reverse
+    res = pcb_reverse.analyze({json.dumps(str(pcb_file))}, match_ics=True)
+    res["ok"] = True
+except Exception as exc:
+    res = {{"ok": False, "error": repr(exc), "tb": traceback.format_exc()[-1200:]}}
+print("\\n" + {json.dumps(_MARK)} + json.dumps(res))
+'''
+    ana = _py_json(code, timeout=180)
+    if not ana.get("ok"):
+        return {"ok": False, "error": "PCB analysis failed", "detail": ana}
+    counts = ana.get("counts") or {}
+    steps.append(f"analyzed board: {counts.get('parts')} parts, "
+                 f"{counts.get('nets')} nets, {counts.get('generic')} generic symbol(s)")
+
+    # 2. create the generic (IC/unknown) symbols server-side so the netlist's
+    #    libsource resolves at build. Passives/connectors use real library parts.
+    made_syms, sym_fail = [], []
+    for g in ana.get("generic_symbols") or []:
+        try:
+            r = add_part_to_library(
+                g["name"], g["pins"], lib=g.get("lib", "ReversePCB"),
+                ref_prefix=(re.match(r"^([A-Za-z]+)", g["ref"]) or [None, "U"])[1].upper()
+                if re.match(r"^([A-Za-z]+)", g["ref"]) else "U",
+                value=g.get("value", ""), footprint=g.get("footprint", ""))
+            (made_syms if r.get("ok") else sym_fail).append(g["name"])
+        except Exception as exc:
+            sym_fail.append(f"{g['name']} ({exc!r})")
+    if made_syms:
+        steps.append(f"created {len(made_syms)} generic symbol(s) in ReversePCB")
+    if sym_fail:
+        return {"ok": False, "error": "could not create generic symbol(s) -- the "
+                "rebuilt schematic would not resolve", "failed": sym_fail, "steps": steps}
+
+    # 3. write the synthesized netlist.
+    net = d / (base + ".net")
+    try:
+        net.write_text(ana["netlist_text"], encoding="utf-8")
+    except OSError as exc:
+        return {"ok": False, "error": f"could not write netlist: {exc!r}", "steps": steps}
+    steps.append(f"wrote synthesized netlist -> {net.name}")
+
+    # 4. netlist -> SKiDL python (subprocess, same converter as adopt_project).
+    entry = d / "main.py"
+    code2 = f'''
+import sys, os, json, glob, traceback
+sys.path.insert(0, {json.dumps(str(SRC))})
+res = {{}}
+try:
+    from skidl.anvil import anvil_libs
+    from skidl.netlist_to_skidl import netlist_to_skidl
+    outdir = {json.dumps(str(d))}
+    netlist_to_skidl({json.dumps(str(net))}, output_dir=outdir)
+    res = {{"ok": True, "entry_ok": os.path.isfile(os.path.join(outdir, "main.py"))}}
+except Exception as exc:
+    res = {{"ok": False, "error": repr(exc), "tb": traceback.format_exc()[-1200:]}}
+print("\\n" + {json.dumps(_MARK)} + json.dumps(res))
+'''
+    conv = _py_json(code2, timeout=240)
+    if not conv.get("ok") or not conv.get("entry_ok"):
+        return {"ok": False, "error": "netlist_to_skidl failed", "detail": conv,
+                "steps": steps}
+    steps.append("generated SKiDL python (main.py)")
+
+    # 5. one-shot rebuild consent (the next build renders the schematic).
+    try:
+        (d / (base + ".rebuild_ok")).write_text(
+            "written by import_pcb -- consumed by the next build\n", encoding="utf-8")
+    except OSError:
+        pass
+
+    generic_refs = [g["ref"] for g in (ana.get("generic_symbols") or [])]
+    return {
+        "ok": True,
+        "project": base,
+        "dir": str(d),
+        "python_entry": str(entry),
+        "netlist": str(net),
+        "counts": counts,
+        "components": ana.get("report"),
+        "generic_parts": generic_refs,
+        "steps": steps,
+        "warnings": ([
+            "PIN FUNCTIONS ARE NOT RECOVERABLE from a PCB: parts " +
+            ", ".join(generic_refs) + " were rebuilt as GENERIC numbered-pin "
+            "symbols (connectivity is faithful, pin names/functions are not). "
+            "Confirm/replace these IC symbols before trusting the schematic."
+        ] if generic_refs else []),
+        "note": "Reverse-engineered from the PCB. Connectivity + values + "
+                "footprints are faithful; IC pin semantics are not. Call "
+                f"build('{base}') to render + ERC the schematic, then edit as usual.",
+    }
+
+
+@server.tool()
+@_quiet
+def import_pcb(path: str, name: str = "") -> dict:
+    """REVERSE a PCB-only input into an editable schematic project.
+
+    Give a .anvil_pcb / .kicad_pcb file PATH (no schematic needed): this parses
+    the board, extracts every component (ref, value, footprint) and net (pad ->
+    net), INFERS a schematic symbol per part (passives/connectors exactly by
+    ref-prefix+footprint; ICs as GENERIC numbered-pin boxes -- a PCB does not
+    carry pin functions), synthesizes a netlist and rebuilds a SKiDL <base>.py.
+    Then call build(name) to render + ERC the schematic and edit from there.
+
+    HONEST LIMIT: the result is CONNECTIVITY-faithful, NOT pin-semantics-faithful
+    -- generic IC pins are numbered, not named; confirm those symbols. Foreign
+    (non-KiCad) PCB formats and gerbers are not supported."""
+    src = Path(path)
+    if not src.is_file():
+        return {"ok": False, "error": f"no PCB file at {path!r}"}
+    if src.suffix.lower() not in (".anvil_pcb", ".kicad_pcb"):
+        return {"ok": False, "error": "path must be a .anvil_pcb or .kicad_pcb file "
+                f"(got {src.suffix!r})"}
+    base = re.sub(r"[^A-Za-z0-9_]", "_", (name or src.stem)).strip("_") or "imported_pcb"
+    d = pdir(base)
+    pcb_dst = d / (base + ".anvil_pcb")
+    try:
+        pcb_dst.write_text(src.read_text(encoding="utf-8", errors="replace"),
+                           encoding="utf-8")
+    except OSError as exc:
+        return {"ok": False, "error": f"could not copy PCB into project: {exc!r}"}
+    res = _reverse_pcb_to_py(base, d, pcb_dst)
+    if res.get("ok"):
+        res.setdefault("steps", []).insert(0, f"copied {src.name} -> {pcb_dst.name}")
+    return res
+
+
+@server.tool()
+@_quiet
+def simulate(netlist: str, name: str = "") -> dict:
+    """Run a SPICE simulation through the app's OWN bundled ngspice engine -- the
+    standard EDA step between schematic and PCB (verify a circuit's behaviour
+    before layout). Give a COMPLETE SPICE netlist: a title line, the elements
+    (R/L/C, V/I sources, diodes/BJT/MOSFET with inline .model, behavioral
+    B-sources), ONE analysis command (.op operating point / .dc sweep / .tran
+    transient / .ac frequency), and .end.
+
+    Returns the result vectors (node voltages / branch currents), a summary of
+    each node's final value, and the analysis type. Basic analog needs no
+    external code models; results are only as good as the netlist's models.
+
+    Use this for CUSTOM ANALOG (filters, amplifiers, feedback/stability, timing,
+    dividers, RC/LC behaviour) where formulas aren't enough. Datasheet-reference
+    power supplies and pure-digital MCU boards usually do NOT need simulation."""
+    if not netlist or not netlist.strip():
+        return {"ok": False, "error": "provide a SPICE netlist"}
+    if ".end" not in netlist.lower():
+        return {"ok": False, "error": "netlist must include an analysis line "
+                "(.op/.dc/.tran/.ac) and end with .end"}
+    code = f'''
+import sys, json, traceback
+sys.path.insert(0, {json.dumps(str(SRC))})
+res = {{}}
+try:
+    from skidl.spice_sim import run_netlist
+    res = run_netlist({json.dumps(netlist)})
+except Exception as exc:
+    res = {{"ok": False, "error": repr(exc), "tb": traceback.format_exc()[-1500:]}}
+print("\\n" + {json.dumps(_MARK)} + json.dumps(res))
+'''
+    out = _py_json(code, timeout=180)
+    if name and out.get("ok"):
+        try:
+            base = re.sub(r"[^A-Za-z0-9_]", "_", name).strip("_") or "sim"
+            (pdir(base) / (base + ".cir")).write_text(netlist, encoding="utf-8")
+            out["netlist_saved"] = str(pdir(base) / (base + ".cir"))
+        except OSError:
+            pass
+    return out
 
 
 _LABEL_TAGS = ("label", "global_label", "hierarchical_label")
@@ -2211,7 +2640,10 @@ def parts(action: str, items: list[str] = None, name: str = "",
     if action == "describe":
         if not items:
             return {"ok": False, "error": "items (list of 'Lib:Name') required"}
-        return describe_part(items)
+        res = describe_part(items)
+        if res.get("ok"):
+            _record_described(res)   # unlocks these parts in the build gate
+        return res
     if action == "add":
         if not name or not pins:
             return {"ok": False, "error": "name and pins required for action='add'"}
@@ -2405,12 +2837,19 @@ def read_pdf(path: str, pages: str = "", dpi: int = 150, max_pages: int = 20) ->
 def build(name: str, code: str = "", mode: str = "body",
           include_log: bool = False, view: str = "project",
           folder: str = "", layout: str = "auto",
-          variant: str = "") -> dict:
+          variant: str = "", confirm: bool = False) -> dict:
     """The schematic-lifecycle tool. `mode` selects the action:
 
     mode='rules'  -> returns the MANDATORY design workflow + canonical
                      circuit BODY template. CALL THIS FIRST for any new
                      circuit (no name/code needed).
+    mode='plan'   -> register the design plan for a NEW project before
+        building: `code` = a SHORT human-readable plan (functional blocks,
+        chosen parts + values, and the user-input questions you asked with
+        their answers). SHOW this plan to the user and WAIT for their
+        explicit approval; only then call build(mode='body'/'script',
+        confirm=True). A new-project build is REFUSED (status
+        'workflow_gate') until a plan exists and confirm=True.
     mode='body' (PREFER for building): `code` is ONLY nets/parts/
         connections (no imports/build call -- template from mode='rules').
         Pre-checked (syntax, real parts/pins, ERC) in seconds; on
@@ -2454,7 +2893,19 @@ def build(name: str, code: str = "", mode: str = "body",
     Build flow: mode='rules' -> parts(action='search'/'describe') ->
     mode='body' -> mode='status' until done -> mode='open'."""
     if mode == "rules":
+        _wf_mark_rules()
         return {"ok": True, "design_rules": get_design_rules()}
+    if mode == "plan":
+        if not name or not code:
+            return {"ok": False, "status": "precheck_failed",
+                    "error": "mode='plan' needs name and code (the plan text)"}
+        _plan_save(_safe_name(name), {"plan": code, "confirmed": False})
+        return {"ok": True, "status": "plan_registered",
+                "next": "Show this plan to the USER verbatim and ask for "
+                        "approval. Only after the user explicitly approves, "
+                        "call build(name, code=<circuit body>, confirm=True). "
+                        "If the user asks for changes, register the revised "
+                        "plan with mode='plan' again first."}
     if mode == "status":
         return build_status(name, include_log=include_log)
     if mode == "source":
@@ -2465,13 +2916,16 @@ def build(name: str, code: str = "", mode: str = "body",
         return open_in_anvilcad(name, view=view)
     if mode not in ("body", "script"):
         return {"ok": False, "status": "precheck_failed",
-                "error": "mode must be one of: rules, source, body, script, status, bom, open"}
+                "error": "mode must be one of: rules, plan, source, body, script, status, bom, open"}
     if not code:
         return {"ok": False, "status": "precheck_failed",
                 "error": "code is required for mode='body'/'script'"}
     base = _safe_name(name)
     if folder:                       # user-chosen location for this project
         _PROJECT_DIRS[base] = Path(folder).expanduser()
+    gate = _workflow_gate(base, code, confirm)
+    if gate:
+        return gate
     if mode == "script":
         # Strip GUI-launch lines to stay SKiDL-only (no external app window).
         # Pass 1: the whole call, incl. multi-line arg lists (one nesting
@@ -3673,6 +4127,7 @@ def initialize_pcb_project(name: str, layers: "int | None" = None,
                             ipc_class: int = None,
                             mechanical: dict = None,
                             currents: dict = None,
+                            voltages: dict = None,
                             requirements_asked: list = None) -> dict:
     """LEARN-FIRST PCB project setup. Call analyze_pcb_environment FIRST
     (step zero) and show the user what their system already has -- then
@@ -3701,6 +4156,10 @@ def initialize_pcb_project(name: str, layers: "int | None" = None,
     a board too small FAILS honestly instead of growing.
     currents: {"NET": amps} user-declared currents for the
     IPC-2152-informed width plan (advisory estimates otherwise).
+    voltages: {"NET": volts} user-declared working voltages (input/
+    output rails, mains) for the IPC-2221 clearance plan -- class
+    clearances are RAISED to the IPC spacing row when needed
+    (name-based advisory estimates otherwise).
     This is also how you SUBMIT the user's answers to create_pcb's
     requirements questionnaire: each question's answer_via names the
     parameter, skipped questions follow their skip_means, and
@@ -3724,6 +4183,23 @@ try:
     out_dir = Path({json.dumps(str(pdir(base)))})
     scp = out_dir / ({json.dumps(base)} + ".board_config.json")
     currents = {json.dumps(currents) if currents else "None"}
+    voltages = {json.dumps(voltages) if voltages else "None"}
+    if voltages:
+        # User-declared working voltages go in BEFORE init so THIS run's
+        # IPC-2221 clearance plan uses them (same contract as currents:
+        # source "user" = "arrived via the tool call", not verified truth).
+        sc = {{}}
+        if scp.is_file():
+            try:
+                sc = json.loads(scp.read_text(encoding="utf-8"))
+            except Exception:
+                pass
+        sc["voltages"] = voltages
+        vmeta = sc.get("voltages_meta") or {{}}
+        for net in voltages:
+            vmeta[net] = {{"source": "user", "status": "confirmed"}}
+        sc["voltages_meta"] = vmeta
+        scp.write_text(json.dumps(sc, indent=2) + "\\n", encoding="utf-8")
     if currents:
         # User-declared currents go in BEFORE init so THIS run's width
         # plan uses them (init carries them forward from the sidecar).
@@ -3755,6 +4231,8 @@ try:
                              kicad_cli={json.dumps(_find_kicad_cli_path())})
     if currents:
         rep["currents"] = "user-declared -- applied to the width plan"
+    if voltages:
+        rep["voltages"] = "user-declared -- applied to the clearance plan"
     # SOFT CONFIRMATION: one canonical file-based resolution of what the
     # build WILL do, every value with its source + confirmed status.
     from skidl.board.rule_discovery import resolve_board_config

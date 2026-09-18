@@ -15,6 +15,13 @@ from itertools import chain, zip_longest
 
 from skidl import Part
 from skidl.utilities import export_to_all, rmv_attr
+
+# Child sheets that fell back to labels during the current root route. A plain
+# module-global (accessed WITHOUT sys.modules[__name__]: route() injects tool
+# constants into this module's __dict__, corrupting __name__/__package__).
+# smart_schematic reads it after each generation to enforce the wire-in-block
+# gate.
+CHILD_LABEL_FALLBACKS = []
 from .debug_draw import draw_end, draw_endpoint, draw_routing, draw_seg, draw_start, draw_text
 from skidl.geometry import BBox, Point, Segment, Tx, Vector, tx_rot_90
 
@@ -769,8 +776,15 @@ class GlobalWire(list):
                         self[i] = terminal
                         break
                 else:
-                    # Route should never touch a part face if there is no terminal with the route's net.
-                    raise RuntimeError
+                    # Route should never touch a part face if there is no terminal
+                    # with the route's net. Raise a RoutingFailure subclass -- NOT a
+                    # bare RuntimeError -- so the per-child seed-retry/label fallback
+                    # in Node.route() handles it. A RuntimeError here escaped that
+                    # handler, aborted the WHOLE generation, and face-heal got
+                    # falsely blamed and disabled for the remaining seeds.
+                    raise GlobalRoutingFailure(
+                        f"route for net {self.net.name} entered part face with no matching terminal"
+                    )
 
         # Proceed through all the Faces/Terminals on the GlobalWire, converting
         # all the Faces to Terminals.
@@ -778,8 +792,12 @@ class GlobalWire(list):
             # The current element on a GlobalWire should always be a Terminal. Use that terminal
             # to convert the next Face on the wire to a Terminal (if it isn't one already).
             if isinstance(self[i], Face):
-                # Logic error if the current element has not been converted to a Terminal.
-                raise RuntimeError
+                # Current element should already be a Terminal. Same containment
+                # rationale as above: degrade this child's routing, don't abort
+                # the whole generation.
+                raise GlobalRoutingFailure(
+                    f"route for net {self.net.name} has unconverted face at index {i}"
+                )
 
             if isinstance(self[i + 1], Face):
                 # Convert the next Face element into a Terminal on this net. This terminal will
@@ -2212,6 +2230,11 @@ class Router:
                         for _ot in _cands:
                             done = False
                             for _g in _ot:
+                                # Part-face landings are allowed: with the rt_srch
+                                # part-face WALL enforced, only nets with pins on
+                                # that part (or stop faces) can enter it, so the
+                                # edge enables legitimate pin-to-pin hops without
+                                # re-opening the route-through-symbol hole.
                                 if boundary in _g.part:
                                     continue
                                 if _f.part.intersection(_g.part):
@@ -2290,6 +2313,35 @@ class Router:
                                     if f.beg < g.end and g.beg < f.end:
                                         best = (d, f, g)
                                         break
+                    if not best and _os_oh.environ.get("SKIDL_ISLAND_RELAX", "0") == "1":
+                        # RELAXED pass (opt-in, SKIDL_ISLAND_RELAX=1): some islands
+                        # (screw-terminal/connector regions at a block edge) have NO
+                        # span-overlapping parallel face at all (measured water_level
+                        # PUMP_NC: 3-face island, unbridgeable above). Take the
+                        # nearest candidate by track distance + span gap instead.
+                        # OFF by default: a hop between distant parallel faces spans
+                        # multiple switchboxes and detailed routing then fails every
+                        # seed (measured arduino LIGHT_REACTIVE_DEMO 49w/0l -> 13w/24l).
+                        for tracks in (h_tracks, v_tracks):
+                            for f in small:
+                                if f.track not in tracks:
+                                    continue
+                                for ot in tracks:
+                                    if ot is f.track:
+                                        continue
+                                    d = abs(ot.coord - f.track.coord)
+                                    for g in ot:
+                                        if id(g) in small_ids:
+                                            continue
+                                        if boundary in g.part:
+                                            continue
+                                        if f.part.intersection(g.part):
+                                            continue
+                                        gap = max(g.beg.coord - f.end.coord,
+                                                  f.beg.coord - g.end.coord, 0)
+                                        cost = d + gap
+                                        if not best or cost < best[0]:
+                                            best = (cost, f, g)
                     if not best:
                         break
                     _d, f, g = best
@@ -2386,6 +2438,11 @@ class Router:
         #           unrouted start faces.
         #        d. Add the faces on the new route to the stop_faces list.
 
+        # Part-face wall (see rt_srch): default ON; SKIDL_PART_WALL=0 restores the
+        # pre-wall behavior for bisection.
+        import os as _os_pw
+        _part_wall = _os_pw.environ.get("SKIDL_PART_WALL", "1") != "0"
+
         # Core routing function.
         def rt_srch(start_face, stop_faces):
             """Return a minimal-distance path from the start face to one of the stop faces.
@@ -2442,6 +2499,19 @@ class Router:
                     for adj in visited_face.adjacent:
                         if adj.face in visited_faces:
                             # Don't re-visit faces that have already been visited.
+                            continue
+
+                        if (_part_wall
+                                and adj.face.part
+                                and adj.face not in unconstrained_faces):
+                            # Part/boundary faces are WALLS: a route may only touch
+                            # one carrying a pin of this net or a stop face (the rule
+                            # stated above). This was implicit in their capacity==0
+                            # until the capacity-relax retry began skipping the
+                            # capacity gate, letting routes pass THROUGH foreign part
+                            # symbols and die later in cvt_faces_to_terminals
+                            # (measured water_level_controller: every child block
+                            # collapsed to labels via that path).
                             continue
 
                         if (
@@ -3476,6 +3546,14 @@ class Router:
         this_module = sys.modules[__name__]
         this_module.__dict__.update(tool_modules[tool].constants.__dict__)
 
+        # Track child sheets that fall back to labels during THIS root route so
+        # the seed sweep can reject "wired" builds that silently violate the
+        # wire-in-block rule (a label child must be a last resort, not an
+        # accepted first answer -- measured arduino: a label child at anchor
+        # placement masked a fully-wired legacy-placement sheet).
+        if getattr(node, "parent", None) is None:
+            CHILD_LABEL_FALLBACKS.clear()
+
         random.seed(options.get("seed"))
 
         # Remove any stuff leftover from a previous place & route run.
@@ -3499,6 +3577,7 @@ class Router:
                 # often routes at seed+k while the whole-sheet seed failed
                 # (observed stm32 MCU_CORE: silent stub -> 33 labels).
                 _base = options.get("seed") or 0
+                _routed = False
                 for _k in (101, 202, 303):
                     try:
                         _opts = dict(options)
@@ -3506,15 +3585,46 @@ class Router:
                         child.route(tool=tool, **_opts)
                         print(f">>> route: child '{getattr(child, 'name', '?')}' "
                               f"failed at seed={_base}, ROUTED at seed+{_k}")
+                        _routed = True
                         break
                     except RoutingFailure:
                         continue
-                else:
+                if not _routed:
+                    # PER-CHILD HEAL-OFF RETRY: a failure here is often CAUSED by
+                    # a heal/bridge edge (synthetic hop -> route through a part
+                    # face or an unrealizable switchbox path). The old cure was
+                    # accidental: the cvt bare RuntimeError aborted the WHOLE
+                    # generation and smart_schematic's rollback retried the seed
+                    # with heal off (how arduino got 49w/0l). Now that cvt raises
+                    # a catchable RoutingFailure, do that rollback HERE, for this
+                    # child only, before surrendering to labels.
+                    _prev_heal = _os_rt.environ.get("SKIDL_ORPHAN_HEAL")
+                    if (_prev_heal or "1") != "0":
+                        _os_rt.environ["SKIDL_ORPHAN_HEAL"] = "0"
+                        try:
+                            for _k in (0, 101, 202, 303):
+                                try:
+                                    _opts = dict(options)
+                                    _opts["seed"] = _base + _k
+                                    child.route(tool=tool, **_opts)
+                                    print(f">>> route: child '{getattr(child, 'name', '?')}' "
+                                          f"ROUTED with heal disabled (seed+{_k})")
+                                    _routed = True
+                                    break
+                                except RoutingFailure:
+                                    continue
+                        finally:
+                            if _prev_heal is None:
+                                del _os_rt.environ["SKIDL_ORPHAN_HEAL"]
+                            else:
+                                _os_rt.environ["SKIDL_ORPHAN_HEAL"] = _prev_heal
+                if not _routed:
                     # Convert only THIS sheet to net labels and keep going, so
                     # sibling sheets retain their drawn wires. LOUD, not silent:
                     # this is the single biggest wire->label downgrade path.
                     print(f">>> route: child sheet '{getattr(child, 'name', '?')}' "
                           "unroutable at all retry seeds -> labels-only fallback")
+                    CHILD_LABEL_FALLBACKS.append(getattr(child, "name", "?"))
                     child.stub_internal_nets()
 
         # Exit if no parts to route in this node.

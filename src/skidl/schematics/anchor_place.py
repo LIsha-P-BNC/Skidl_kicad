@@ -465,7 +465,13 @@ def place_node(node, **options):
             _pack_cluster(cl, adj)
             packed.append((cl, _cluster_bbox(cl)))
         order_ix = {id(p): i for i, p in enumerate(real)}
-        _place_cluster_flow_row(packed, order_ix)
+        # 2D BLOCK-GRID (gap H1): opt-in (SKIDL_BLOCK_GRID=1). Compact 2D grid of
+        # boxed blocks with the MCU centred -- the dev-board composition. Falls
+        # back to the proven flow row if it declines (no anchor) or is disabled;
+        # the build-level connectivity verify is the final safety net.
+        if not (_os.environ.get("SKIDL_BLOCK_GRID") == "1"
+                and place_block_grid(packed, g_anchor)):
+            _place_cluster_flow_row(packed, order_ix)
     else:
         # M6 HIERARCHICAL CLUSTER PACKING. (1) group parts into functional
         # clusters (signal clusters + power-only decaps re-attached to their
@@ -870,20 +876,379 @@ def flow_place_block(node, **options):
     base_y = sum(cys) / len(cys)
 
     MIN_SLOT = 200.0
-    GAP = 150.0
+    # Honor the generation retry ladder's expansion factor: the tight row is
+    # exactly what starves dense blocks of routing corridors/terminals
+    # (measured wlc PROBE_SENSE/PUMP_RELAY: expand-retry re-placed with 1.5x
+    # then 2.25x, and this fixed GAP silently reverted both to the same tight
+    # row every attempt).
+    _exp = 1.0
+    try:
+        _exp = max(float(options.get("expansion_factor", 1.0) or 1.0), 1.0)
+    except Exception:
+        pass
+    GAP = 150.0 * _exp
+
+    def _sig_net_ids(p):
+        return {id(_pn.net) for _pn in getattr(p, "pins", [])
+                if getattr(_pn, "net", None) is not None
+                and _net_power_kind(_pn.net) not in ("rail", "ground")}
+
+    def _pair_gap(a, b):
+        """Gap between two row neighbours sized to the ROUTING DEMAND of the
+        corridor between them: every net shared by the pair needs terminal
+        slots on the corridor's faces (GRID=50 -> ~2 slots per 100 mil).
+        A fixed 150 gap gives 3 slots -- a 3-net relay->terminal bundle
+        exhausts it at every seed (measured wlc PUMP_RELAY: get_next_terminal
+        starvation). Nets counted from the pair's own pins -- dynamic."""
+        _shared = len(_sig_net_ids(a) & _sig_net_ids(b))
+        return max(GAP, (_shared + 2) * 100.0 * _exp)
+
+    # --- CHAIN-STACK: a FAN block -- one HUB part feeding >=2 parallel
+    # multi-part chains (e.g. a probe connector driving 3 identical
+    # R->Q->pullup channels) -- cannot route as ONE tight row: every
+    # channel's nets share the same horizontal corridor and the switchbox
+    # runs out of face terminals (measured wlc PROBE_SENSE: unroutable at
+    # EVERY seed and expansion). Draw it the way a human does: hub on the
+    # LEFT, one ROW PER CHAIN stacked vertically, rows ordered by the hub
+    # pin each chain attaches to -- a planar fan with zero forced
+    # crossings. Pure connectivity+geometry (no part names, no per-circuit
+    # constants). Kill switch SKIDL_CHAIN_STACK=0.
+    _flow_dbg = _os.environ.get("SKIDL_FLOW_DEBUG")
+    if _flow_dbg:
+        print(f">>> [flow-debug] node='{getattr(node, 'name', '?')}' "
+              f"real={len(real)} groups={_grps} page={_is_page} "
+              f"refs={[getattr(p, 'ref', '?') for p in real]}")
+    if _os.environ.get("SKIDL_CHAIN_STACK", "1") != "0" and len(real) >= 4:
+        _adj = {id(p): set() for p in real}
+        _by_id = {id(p): p for p in real}
+        for p in real:
+            for _pn in getattr(p, "pins", []):
+                _nt = getattr(_pn, "net", None)
+                if _nt is None or _net_power_kind(_nt) in ("rail", "ground"):
+                    continue
+                for _op in getattr(_nt, "pins", []):
+                    _opart = getattr(_op, "part", None)
+                    if (_opart is not None and id(_opart) in _adj
+                            and _opart is not p):
+                        _adj[id(p)].add(id(_opart))
+        _hub = max(real, key=lambda p: (len(_adj[id(p)]), _pin_count(p),
+                                        -cidx.get(id(p), 0)))
+        if _flow_dbg:
+            print(f">>> [flow-debug]   hub={getattr(_hub, 'ref', '?')} "
+                  f"deg={len(_adj[id(_hub)])}")
+        if len(_adj[id(_hub)]) >= 3:
+            _seen = {id(_hub)}
+            _comps = []
+            for p in ordered:
+                if id(p) in _seen:
+                    continue
+                _stk, _comp = [p], []
+                _seen.add(id(p))
+                while _stk:
+                    _q = _stk.pop()
+                    _comp.append(_q)
+                    for _nb in sorted(_adj[id(_q)],
+                                      key=lambda i: cidx.get(i, 0)):
+                        if _nb not in _seen:
+                            _seen.add(_nb)
+                            _stk.append(_by_id[_nb])
+                _comps.append(_comp)
+            _multi = [c for c in _comps if len(c) >= 2]
+            if len(_multi) >= 2:
+                def _hub_y(comp):
+                    _ids = {id(p) for p in comp}
+                    _ys = []
+                    for _pn in getattr(_hub, "pins", []):
+                        _nt = getattr(_pn, "net", None)
+                        if (_nt is None
+                                or _net_power_kind(_nt) in ("rail", "ground")):
+                            continue
+                        if any(id(getattr(_op, "part", None)) in _ids
+                               for _op in getattr(_nt, "pins", [])):
+                            _ys.append((_pn.pt * _hub.tx).y)
+                    return sum(_ys) / len(_ys) if _ys else 0.0
+
+                _comps.sort(key=lambda c: (_hub_y(c), cidx.get(id(c[0]), 0)))
+
+                def _chain_order(comp):
+                    _ids = {id(p): p for p in comp}
+                    _start = next(
+                        (p for p in comp if id(_hub) in _adj[id(p)]), comp[0])
+                    _o, _sn, _qu = [], {id(_start)}, [_start]
+                    while _qu:
+                        _c = _qu.pop(0)
+                        _o.append(_c)
+                        for _nb in sorted(_adj[id(_c)],
+                                          key=lambda i: cidx.get(i, 0)):
+                            if _nb in _ids and _nb not in _sn:
+                                _sn.add(_nb)
+                                _qu.append(_ids[_nb])
+                    return _o
+
+                _rows = [_chain_order(c) for c in _comps]
+                _hub_w = max(_pin_span_w(_hub), MIN_SLOT)
+
+                def _row_w(_r):
+                    _w = sum(max(_pin_span_w(p), MIN_SLOT) for p in _r)
+                    for _j in range(len(_r) - 1):
+                        _w += _pair_gap(_r[_j], _r[_j + 1])
+                    return _w
+
+                _max_row_w = max(_row_w(_r) for _r in _rows)
+                _pitch_y = max(max(_world_bbox(p).h for p in _r)
+                               for _r in _rows) + GAP
+                _hub_gap = max(_pair_gap(_hub, _r[0]) for _r in _rows)
+                _total_w = _hub_w + _hub_gap + _max_row_w
+                _x_hub = cen_x - _total_w / 2.0 + _hub_w / 2.0
+                _x0 = _x_hub + _hub_w / 2.0 + _hub_gap
+                moved = 0
+                _hc = _world_bbox(_hub).ctr
+                _hub.tx = _hub.tx * Tx().move(
+                    Point(_x_hub - _pin_cx(_hub), base_y - _hc.y))
+                snap_to_grid(_hub)
+                moved += 1
+                _k = len(_rows)
+                for _i, _r in enumerate(_rows):
+                    _ry = base_y + (_i - (_k - 1) / 2.0) * _pitch_y
+                    _x = _x0
+                    for _j, p in enumerate(_r):
+                        _ew = max(_pin_span_w(p), MIN_SLOT)
+                        _pc = _world_bbox(p).ctr
+                        p.tx = p.tx * Tx().move(
+                            Point(_x + _ew / 2.0 - _pin_cx(p), _ry - _pc.y))
+                        snap_to_grid(p)
+                        _x += _ew + (_pair_gap(_r[_j], _r[_j + 1])
+                                     if _j < len(_r) - 1 else 0.0)
+                        moved += 1
+                print(f">>> chain-stack: block '{getattr(node, 'name', '?')}' "
+                      f"fanned {_k} chain row(s) off hub "
+                      f"{getattr(_hub, 'ref', '?')}")
+                return moved
+
     widths = [max(_pin_span_w(p), MIN_SLOT) for p in ordered]
-    total_w = sum(widths) + GAP * (len(ordered) - 1)
+    gaps = [_pair_gap(ordered[i], ordered[i + 1])
+            for i in range(len(ordered) - 1)]
+    total_w = sum(widths) + sum(gaps)
     x = cen_x - total_w / 2.0
     moved = 0
-    for p, ew in zip(ordered, widths):
+    for i, (p, ew) in enumerate(zip(ordered, widths)):
         col_cx = x + ew / 2.0
         pc = _world_bbox(p).ctr
         p.tx = p.tx * Tx().move(Point(col_cx - _pin_cx(p), base_y - pc.y))
         snap_to_grid(p)
         p._flow_rowed = True   # rail-draw key: this block is ladder-ready
-        x += ew + GAP
+        x += ew + (gaps[i] if i < len(gaps) else 0.0)
         moved += 1
     return moved
+
+
+def orient_to_neighbors(node, **options):
+    """Rotate a multi-pin part (3..16 pins) so its pins FACE the parts they
+    connect to -- the way a human orients a relay (contacts toward the
+    output terminal, coil toward the driver). The placer keeps library
+    orientation, so a part whose bundle edge points AWAY from its partner
+    leaves the router no reachable faces: measured wlc PUMP_RELAY, where
+    K1's COM/NO/NC sit on the TOP edge while J3 is to the RIGHT and the
+    coil pins sit on the BOTTOM while the driver is to the LEFT --
+    unroutable at every seed/gap. Scoring: total manhattan distance from
+    each signal pin to the centroid of its net's other in-node pins, over
+    the 4 rotations; apply the best when it clearly wins (>8%% better).
+    Pure geometry+netlist; caller should re-run the row/stack layout after
+    a rotation (pin spans change). Kill switch SKIDL_ORIENT_MULTI=0.
+    Returns the number of parts rotated."""
+    import os as _os
+    if _os.environ.get("SKIDL_ORIENT_MULTI") == "0":
+        return 0
+    import builtins
+    from skidl.geometry import Tx, Point, tx_rot_90, tx_rot_180, tx_rot_270
+    from skidl.schematics.place import is_net_terminal, snap_to_grid
+
+    real = [p for p in getattr(node, "parts", []) if not is_net_terminal(p)]
+    if len(real) < 2:
+        return 0
+    _rid = {id(p) for p in real}
+
+    def _sig_pins(p):
+        return [pn for pn in getattr(p, "pins", [])
+                if getattr(pn, "net", None) is not None
+                and _net_power_kind(pn.net) not in ("rail", "ground")]
+
+    def _score(p):
+        s = 0.0
+        n_ref = 0
+        for pn in _sig_pins(p):
+            others = [(op.pt * op.part.tx)
+                      for op in getattr(pn.net, "pins", [])
+                      if getattr(op, "part", None) is not None
+                      and op.part is not p and id(op.part) in _rid]
+            if not others:
+                continue
+            cx = sum(o.x for o in others) / len(others)
+            cy = sum(o.y for o in others) / len(others)
+            w = pn.pt * p.tx
+            s += abs(w.x - cx) + abs(w.y - cy)
+            n_ref += 1
+        return s if n_ref else None
+
+    def _all_stubbed(p):
+        """True when every signal pin of the part is label-stubbed -- a
+        label-mode (all-label / partial-label) block. Rotating or mirroring
+        such a part moves its pins under the ALREADY-DECIDED label geometry
+        and the emitter drops dangling labels -> missing net groups
+        (measured pump: all-label tier verified BEFORE these passes, then
+        MISMATCH 3 missing after a mid-tier mirror). Leave label-mode
+        parts exactly where the placer put them."""
+        _sig = [pn for pn in getattr(p, "pins", [])
+                if getattr(pn, "net", None) is not None
+                and _net_power_kind(pn.net) not in ("rail", "ground")]
+        if not _sig:
+            return True
+        return all(pn.__dict__.get("stub", False)
+                   or pn.__dict__.get("_stub_val", False)
+                   or pn.net.__dict__.get("stub", False)
+                   or pn.net.__dict__.get("_stub", False)
+                   for pn in _sig)
+
+    rotated = 0
+    for p in real:
+        if not (3 <= _pin_count(p) <= 16):
+            continue
+        if _all_stubbed(p):
+            continue
+        base = _score(p)
+        if base is None:
+            continue
+        best_tx, best_s = None, base
+        old_tx = p.tx
+        old_ctr = _world_bbox(p).ctr
+        for rot in (tx_rot_90, tx_rot_180, tx_rot_270):
+            p.tx = rot * old_tx
+            new_ctr = _world_bbox(p).ctr
+            p.tx = p.tx * Tx().move(old_ctr - new_ctr)  # rotate about center
+            s = _score(p)
+            if s is not None and s < best_s:
+                best_s, best_tx = s, p.tx
+            p.tx = old_tx
+        if best_tx is not None and best_s < 0.92 * base:
+            p.tx = best_tx
+            snap_to_grid(p)
+            rotated += 1
+            print(f">>> orient: rotated {getattr(p, 'ref', '?')} to face its "
+                  f"neighbors (wire est. {base:.0f} -> {best_s:.0f})")
+    return rotated
+
+
+def uncross_parallel_bundles(node, **options):
+    """Vertical-mirror a part whose >=2-net parallel BUNDLE to a neighbor is
+    CROSSED -- e.g. a relay's COM/NO/NC feeding a 1x3 terminal whose pin
+    order runs the other way. Crossed bundle wires overlap at points, the
+    router's cross-net short guard raises RoutingFailure at EVERY seed, and
+    the whole block falls back to labels (measured wlc PUMP_RELAY: the
+    PUMP_COM x PUMP_NC touch repeated on every attempt). Mirroring the
+    LIGHTER part (fewer outside commitments) reverses its pin order so the
+    bundle routes as parallel straight wires -- the classic schematic
+    component-flip uncrossing. Pure geometry+netlist, any circuit. Runs
+    pre-route; the text-orientation post-pass re-normalizes labels. Kill
+    switch SKIDL_UNCROSS=0. Returns the number of parts mirrored."""
+    import os as _os
+    if _os.environ.get("SKIDL_UNCROSS") == "0":
+        return 0
+    import builtins
+    from skidl.geometry import Tx, Point, tx_flip_y
+    from skidl.schematics.place import is_net_terminal, snap_to_grid
+
+    real = [p for p in getattr(node, "parts", []) if not is_net_terminal(p)]
+    if len(real) < 2:
+        return 0
+    try:
+        cidx = {id(p): i for i, p in enumerate(builtins.default_circuit.parts)}
+    except Exception:
+        cidx = {}
+    _rid = {id(p): p for p in real}
+
+    # bundles: (partA, partB) -> [(pinA, pinB)] -- nets with exactly ONE pin
+    # on each of exactly TWO in-node parts (extra pins outside the node, e.g.
+    # a NetTerminal, don't disqualify the pair).
+    bundles = {}
+    _seen_nets = set()
+    for p in real:
+        for _pn in getattr(p, "pins", []):
+            _nt = getattr(_pn, "net", None)
+            if _nt is None or id(_nt) in _seen_nets:
+                continue
+            _seen_nets.add(id(_nt))
+            if _net_power_kind(_nt) in ("rail", "ground"):
+                continue
+            _sides = {}
+            for _op in getattr(_nt, "pins", []):
+                _prt = getattr(_op, "part", None)
+                if _prt is not None and id(_prt) in _rid:
+                    _sides.setdefault(id(_prt), []).append(_op)
+            if len(_sides) != 2 or any(len(v) != 1 for v in _sides.values()):
+                continue
+            (_ia, _pa), (_ib, _pb) = sorted(
+                _sides.items(), key=lambda kv: cidx.get(kv[0], 0))
+            bundles.setdefault((_ia, _ib), []).append((_pa[0], _pb[0]))
+
+    flipped = 0
+    _done = set()
+    for (_ia, _ib), _prs in sorted(bundles.items(),
+                                   key=lambda kv: (-len(kv[1]),
+                                                   cidx.get(kv[0][0], 0))):
+        if len(_prs) < 2 or _ia in _done or _ib in _done:
+            continue
+        # a STUBBED bundle renders as labels -- no wires, no crossing to
+        # unwind; mirroring the part under already-decided label geometry
+        # drops dangling labels in the label tiers (same failure class the
+        # orient pass guards against).
+        if any(_pa.net.__dict__.get("stub", False)
+               or _pa.net.__dict__.get("_stub", False)
+               or _pa.__dict__.get("stub", False)
+               or _pa.__dict__.get("_stub_val", False)
+               for _pa, _ in _prs):
+            continue
+        _a, _b = _rid[_ia], _rid[_ib]
+
+        def _inversions():
+            _ys = sorted(((_pa.pt * _a.tx).y, (_pb.pt * _b.tx).y)
+                         for _pa, _pb in _prs)
+            _seq = [y2 for _, y2 in _ys]
+            return sum(1 for i in range(len(_seq))
+                       for j in range(i + 1, len(_seq)) if _seq[i] > _seq[j])
+
+        _n = len(_prs)
+        _tot = _n * (_n - 1) // 2
+        _inv = _inversions()
+        if _inv * 2 <= _tot:
+            continue  # already (mostly) parallel -- nothing to unwind
+        _bundle_nets = {id(_pa.net) for _pa, _ in _prs}
+
+        def _outside(p):
+            _k = 0
+            for _pn in getattr(p, "pins", []):
+                _nt = getattr(_pn, "net", None)
+                if (_nt is not None and id(_nt) not in _bundle_nets
+                        and _net_power_kind(_nt) not in ("rail", "ground")):
+                    _k += 1
+            return _k
+
+        _tgt = min((_b, _a), key=lambda p: (_outside(p), _pin_count(p),
+                                            cidx.get(id(p), 0)))
+        if _pin_count(_tgt) < 3:
+            continue  # 2-pin passives belong to _orient_passives_rail_up
+        _old_tx = _tgt.tx
+        _cy = _world_bbox(_tgt).ctr.y
+        _tgt.tx = _tgt.tx * tx_flip_y * Tx().move(Point(0.0, 2.0 * _cy))
+        snap_to_grid(_tgt)
+        if _inversions() >= _inv:
+            _tgt.tx = _old_tx  # no improvement -> revert
+            continue
+        _done.add(id(_tgt))
+        flipped += 1
+        _oth = _a if _tgt is _b else _b
+        print(f">>> uncross: mirrored {getattr(_tgt, 'ref', '?')} to unwind "
+              f"a {_n}-net bundle with {getattr(_oth, 'ref', '?')}")
+    return flipped
 
 
 def hug_power_satellites(node, **options):
@@ -1100,6 +1465,97 @@ def _place_cluster_flow_row(packed, order_ix, gap=1200.0):
         bb = _cluster_bbox(cluster)
         _move_cluster(cluster, x - bb.min.x, -bb.ctr.y)
         x += bb.w + gap
+
+
+def _grid_assign(n):
+    """Pure grid slot assignment (gap H1). Returns (rows, cols, slots) where
+    slots[i] = (row, col) for the i-th block IN PLACEMENT ORDER. Slot 0 is the
+    CENTRE cell (the anchor/MCU owns it); the rest spiral out from the centre by
+    Manhattan ring distance (deterministic tie-break) so role-ordered blocks land
+    closest-first around the anchor. A near-square grid keeps the sheet compact."""
+    import math as _math
+    n = max(int(n), 1)
+    cols = _math.ceil(_math.sqrt(n))
+    rows = _math.ceil(n / cols)
+    cr, cc = rows // 2, cols // 2
+    ring = sorted(
+        [(r, c) for r in range(rows) for c in range(cols) if (r, c) != (cr, cc)],
+        key=lambda rc: (abs(rc[0] - cr) + abs(rc[1] - cc), rc[0], rc[1]),
+    )
+    return rows, cols, [(cr, cc)] + ring
+
+
+def _grid_coords(rows, cols, slots, dims, gap, align):
+    """Pure cell geometry (gap H1). COLUMN WIDTH = max block width in that column,
+    ROW HEIGHT = max block height in that row -> a true aligned grid with uniform
+    gaps. Returns [(x_left, y_top), ...] per block (block tops align within a row,
+    block lefts within a column), snapped to the ALIGN grid. Y grows downward."""
+    colW = [0.0] * cols
+    rowH = [0.0] * rows
+    for (r, c), (w, h) in zip(slots, dims):
+        colW[c] = max(colW[c], w)
+        rowH[r] = max(rowH[r], h)
+    colX = []
+    x = 0.0
+    for c in range(cols):
+        colX.append(x)
+        x += colW[c] + gap
+    rowYtop = []
+    y = 0.0
+    for r in range(rows):
+        rowYtop.append(y)
+        y -= rowH[r] + gap          # next row sits BELOW (schematic Y grows up)
+    out = []
+    for (r, c), _wh in zip(slots, dims):
+        X = round(colX[c] / align) * align
+        Ytop = round(rowYtop[r] / align) * align
+        out.append((X, Ytop))
+    return out, colW, rowH
+
+
+def place_block_grid(packed, g_anchor, gap=1000.0, align=50.0):
+    """2D BLOCK-GRID placement (gap H1; SCHEMATIC_LAYOUT_LOGIC.md spec).
+
+    Lay already-internally-packed blocks as a compact 2D GRID of boxed cells --
+    MCU/anchor CENTRED, small function blocks around it, uniform 500-1000 mil
+    gaps, column/row edges aligned -- the ATmega/STM dev-board composition. This
+    replaces the spiral packer (which scatters) and the flow_x 1-D row (correct
+    but over-wide) for multi-block boards. Returns True on success, False to let
+    the caller fall back to the flow row. OPT-IN (SKIDL_BLOCK_GRID=1) and guarded
+    downstream by the build-level connectivity verify, so it can never ship a
+    worse sheet than today's default.
+    """
+    blocks = [cl for cl, _bb in packed]
+    if len(blocks) < 2:
+        return False
+    anchor_block = next((cl for cl in blocks if g_anchor in cl), None)
+    if anchor_block is None:
+        return False
+    try:
+        from skidl.schematics.cluster import (
+            classify_block_role, order_blocks_by_role,
+        )
+    except Exception:
+        return False
+    others = [cl for cl in blocks if cl is not anchor_block]
+    try:
+        ordered_others = order_blocks_by_role(
+            [(classify_block_role(cl), cl) for cl in others]
+        )
+    except Exception:
+        ordered_others = others
+    placement = [anchor_block] + list(ordered_others)
+    dims = []
+    for cl in placement:
+        bb = _cluster_bbox(cl)
+        dims.append((bb.w, bb.h))
+    rows, cols, slots = _grid_assign(len(placement))
+    coords, _cw, _rh = _grid_coords(rows, cols, slots, dims, gap, align)
+    for cl, (X, Ytop) in zip(placement, coords):
+        bb = _cluster_bbox(cl)
+        # align this block's TOP-LEFT to its cell origin
+        _move_cluster(cl, X - bb.min.x, Ytop - bb.max.y)
+    return True
 
 
 def _resolve_cluster_collisions(clusters, anchor_cluster, gap, iters=200):

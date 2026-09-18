@@ -6,7 +6,7 @@
   (paper "A4")
   (title_block
     (title "SKiDL-Generated Schematic")
-    (date "2026-09-15")
+    (date "2026-09-17")
     (rev A)
     (company "BNC Energy")
     (comment 1 "Engineer: Anvil AI")
@@ -1087,7 +1087,7 @@
                 (size 1.27 1.27))))))
       (embedded_fonts no)))
   (sheet
-    (at 111.76 96.52)
+    (at 111.76 86.36)
     (size 21.59 17.78)
     (exclude_from_sim no)
     (in_bom yes)
@@ -1101,19 +1101,19 @@
       (color 0 0 0 0.0))
     (uuid 27430e92-4230-5be4-9734-ce1cfc7d0d90)
     (property "Sheetname" "power_pg"
-      (at 111.76 95.81 0)
+      (at 111.76 85.65 0)
       (effects
         (font
           (size 1.27 1.27))
         (justify left bottom)))
     (property "Sheetfile" "t5_hier_blocks_power_pg.anvil_sch"
-      (at 111.76 114.88 0)
+      (at 111.76 104.72 0)
       (effects
         (font
           (size 1.27 1.27))
         (justify left top)))
     (pin STATUS_SIG bidirectional
-      (at 111.76 99.06 180)
+      (at 111.76 88.9 180)
       (effects
         (font
           (size 1.27 1.27))
@@ -1121,14 +1121,14 @@
       (uuid 3d0c1e9d-8f73-5038-896c-1b77292ce294)))
   (global_label "STATUS_SIG"
     (shape bidirectional)
-    (at 111.76 99.06 180)
+    (at 111.76 88.9 180)
     (effects
       (font
         (size 1.27 1.27))
       (justify right))
     (uuid 64e3621e-2f9f-537f-af30-0df6b947a7bb))
   (sheet
-    (at 163.83 96.52)
+    (at 163.83 86.36)
     (size 20.32 17.78)
     (exclude_from_sim no)
     (in_bom yes)
@@ -1142,19 +1142,19 @@
       (color 0 0 0 0.0))
     (uuid 9674c592-a02e-593e-a708-475f6729e3ec)
     (property "Sheetname" "io_pg"
-      (at 163.83 95.81 0)
+      (at 163.83 85.65 0)
       (effects
         (font
           (size 1.27 1.27))
         (justify left bottom)))
     (property "Sheetfile" "t5_hier_blocks_io_pg.anvil_sch"
-      (at 163.83 114.88 0)
+      (at 163.83 104.72 0)
       (effects
         (font
           (size 1.27 1.27))
         (justify left top)))
     (pin STATUS_SIG bidirectional
-      (at 163.83 99.06 180)
+      (at 163.83 88.9 180)
       (effects
         (font
           (size 1.27 1.27))
@@ -1162,7 +1162,7 @@
       (uuid b7102bdc-6d94-5271-8d76-5369c02ee1c4)))
   (global_label "STATUS_SIG"
     (shape bidirectional)
-    (at 163.83 99.06 180)
+    (at 163.83 88.9 180)
     (effects
       (font
         (size 1.27 1.27))

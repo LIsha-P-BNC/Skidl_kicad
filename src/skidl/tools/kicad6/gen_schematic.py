@@ -53,11 +53,9 @@ import warnings
 warnings.filterwarnings("ignore", message=".*fp-lib-table.*")
 
 
-# Pattern matching common power net names.
-_POWER_NET_RE = re.compile(
-    r"^(\+\d[\d.]*V[\d]*|GND|AGND|DGND|PGND|VCC|VDD|VSS|VEE|VBUS|VBAT|AVCC|AVDD|DVCC|DVDD)$",
-    re.IGNORECASE,
-)
+# Power-net (render-as-power-symbol) classification -- canonical single source
+# (was a local _POWER_NET_RE copy-pasted into every tools/kicadN/gen_schematic.py).
+from skidl.schematics.net_classify import is_power_symbol_net
 
 # ERC error types that can be fixed by stubbing nets.
 FIXABLE_ERROR_TYPES = frozenset(
@@ -88,7 +86,7 @@ def auto_stub_nets(circuit, **options):
             continue
 
         # Power nets: anything starting with "+" or matching common power names.
-        if net.name.startswith("+") or _POWER_NET_RE.match(net.name):
+        if is_power_symbol_net(net.name):
             net._stub = True
             net._stub_explicit = False
             for pin in net.get_pins():

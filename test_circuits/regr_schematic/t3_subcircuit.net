@@ -2,7 +2,7 @@
   (version "D")
   (design
     (source "t3_subcircuit.py")
-    (date "09/15/2026 05:04 PM")
+    (date "09/17/2026 09:50 AM")
     (tool "SKiDL (2.2.3)")
     (sheet
       (number 1)

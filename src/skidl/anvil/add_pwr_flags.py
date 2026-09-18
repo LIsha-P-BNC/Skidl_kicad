@@ -92,8 +92,13 @@ _PWR_FLAG_LIB = '''    (symbol "power:PWR_FLAG"
 # pin types KiCad accepts as a "driver" (satisfy an Input / Power-in pin's need)
 _DRIVER_TYPES = {"POWER-OUT", "OUTPUT", "BIDIRECTIONAL", "TRI-STATE",
                  "OPEN-COLLECTOR", "OPEN-EMITTER"}
-# pin types that REQUIRE a driver on their net or KiCad ERC errors
-_NEEDS_DRIVER = {"POWER-IN", "INPUT"}
+# Pin types that REQUIRE a driver on their net. POWER-IN only: a PWR_FLAG is
+# the standard cure for an undriven power RAIL. It is semantically WRONG on a
+# passive-fed signal net (transistor base behind a resistor, AREF behind a
+# decap) -- those render as power flags stamped on signal pins (user-rejected
+# on water_level_controller: flags on N$1-3/N$7/AREF). Such nets at worst get
+# a pin_not_driven ERC note, which is the truthful diagnosis.
+_NEEDS_DRIVER = {"POWER-IN"}
 
 
 def _nets_needing_flag(netlist_path):

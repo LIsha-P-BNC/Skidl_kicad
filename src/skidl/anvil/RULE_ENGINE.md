@@ -743,3 +743,151 @@ is GONE); stm32 standalone 121 wires/15 labels (best ever; satellites all
 wired; remaining 15 all legitimate cross-block: USB/UART/SWD/N$1);
 check_all 11/11 ALL GREEN. Residual: stm32 in-matrix lands 45w/33l variant
 (ERC 0, correct, cosmetic variance only) -- low-priority determinism tail.
+
+### Phase 5l — WIRE-IN-BLOCK enforced end-to-end (2026-09-16)  ✅
+Trigger: water_level_controller (in-app build) collapsed to ALL-LABEL. Chain
+of root causes found + fixed, each measured:
+1. rt_srch PART-FACE WALL (route.py): the documented "a route may only touch a
+   part face carrying this net's pin / a stop face" rule was implicit in part
+   faces' capacity==0 -- the capacity-relax retry skipped that gate and routed
+   THROUGH foreign symbols, dying later in cvt_faces_to_terminals. Wall is now
+   explicit code, relax-proof. Kill switch SKIDL_PART_WALL=0.
+2. cvt_faces_to_terminals bare RuntimeErrors -> GlobalRoutingFailure: the
+   RuntimeError escaped the per-child RoutingFailure handler, aborted the WHOLE
+   generation and got face-heal falsely blamed + disabled (the real
+   heal-rollback trigger). Failures now degrade per child.
+3. PER-CHILD HEAL-OFF RETRY (route.py child loop): before a child surrenders to
+   labels, retry it with SKIDL_ORPHAN_HEAL=0 (seeds +0/101/202/303) -- the old
+   accidental whole-generation rollback, now surgical.
+4. WIRE-IN-BLOCK GATE (smart_schematic sweep): a "wired" seed with label-child
+   fallbacks (route.CHILD_LABEL_FALLBACKS) is REJECTED; sweep continues to
+   other seeds/placer; partial tier stays the deliberate fallback. Measured
+   arduino: label child at anchor masked a fully-wired legacy sheet (13w/24l
+   accepted vs 47w/0l). Kill switch SKIDL_LABEL_CHILD_GATE=0.
+5. COLD FLAGS PER SEED + PARTIAL TIER: _restore_wire_flags now runs before
+   every seed (was: only between placer passes) -- the Phase 5i "flap residue"
+   root cause: a failed seed's stub flags leaked into the next seed whose
+   children then "routed" as all-labels and passed every gate. CRITICAL detail:
+   snapshot/restore captures RAW __dict__ storage presence (pin.stub is a
+   property backed by _stub_val) -- the first getattr/setattr version stamped
+   EXPLICIT stub values onto power rails and the router wire-routed 9-pin +5V
+   inside children (power_board 61w/0l -> 51w/7l, now restored).
+6. SUPPORT-BLOCK ABSORB (smart_schematic, after D.0 gate): a <=3-part authored
+   block, all support refdes classes (R/C/L/Y/SW/D/TP/JP/FB), whose non-power
+   nets land on exactly ONE other bigger block, merges into it (industry rule
+   9 / docs rule D: crystal+load caps, reset RC live INSIDE the MCU block).
+   Measured wlc: CLOCK->MCU, RESET->MCU; XTAL1/2 + RESET_N labels -> wires.
+   Part identity via `is` (SKiDL Part __eq__ is overloaded -- `in` silently
+   emptied the peer set). Kill switch SKIDL_ABSORB_SUPPORT=0.
+7. TITLE_BLOCK_KEEPOUT_MM=30 (sexp_schematic _fit_paper/_calc_sheet_tx):
+   page fit + centering reserve the bottom title-block band; content was
+   centered straight through "Sheet 1 of 1" (wlc relay block).
+8. add_pwr_flags: _NEEDS_DRIVER = POWER-IN only -- no more PWR_FLAGs stamped
+   on transistor bases / AREF (wlc 6 -> 2 flags; ERC still 0 errors).
+9. Island-merge RELAXED bridge exists but OFF by default (SKIDL_ISLAND_RELAX=1)
+   -- non-overlapping parallel hops span multiple switchboxes and detailed
+   routing fails every seed (measured arduino).
+MEASURED END STATE: arduino 46-49w/0l; power_board 61w/0l; stm32 116w/15l
+IN-MATRIX (the "environment-sensitive divergence" residual from 5j/5k is
+CURED by fix 5); wlc 81-88w/40l partial with CLOCK/RESET absorbed, PWR_FLAGs
+2, title block clear, ERC 0. REMAINING TAIL: wlc PROBE_SENSE + PUMP_RELAY
+children structurally unroutable at any seed (placement density -- the
+constraint-aware placement work, prio 85); label-mode blocks still show
+N$1-3/N$7 (unnamed base nets) and stacked label text.
+
+### Phase 5m — expand-retry for label children + gen-level flag leak (2026-09-16)  ✅ / ⬜ tail
+gen_schematic's expansion ladder (RoutingFailure -> expansion_factor*=1.5)
+never fired for child fallbacks (per-child containment means no raise).
+SHIPPED: (1) [expand-retry] -- label children while retries remain = re-place
+with 1.5x/2.25x room (smart_schematic passes retries=3, SKIDL_GEN_RETRIES);
+(2) the SAME cold-flag __dict__ snapshot/restore INSIDE gen_schematic's
+attempt loop -- attempt 1's stub_internal_nets flags leaked into attempt 2,
+whose children then "routed" trivially and SHIPPED attempt 1's labels while
+the wire-in-block gate saw no fallback (caught red-handed via
+SKIDL_NET_DEBUG=PROBE_LOW: candidate=True, no classify/repair writer, yet
+LABEL_EMIT stub=True). ⬜ TAIL: wlc PROBE_SENSE (J2 + 3x base-R/Q fan,
+get_next_terminal capacity) and PUMP_RELAY (J3 corner island) fail at EVERY
+seed/placer/expansion -- topology, not spacing; needs constraint-aware
+placement (prio 85). Their in-block nets (N$1-3/N$7, PROBE_*, PUMP_C*/N*,
+RELAY_COIL) remain labels via the partial tier, loudly.
+-> RESOLVED by Phase 5n.
+
+### Phase 5n — constraint-aware block placement: chain-stack + demand gaps + orient + uncross (2026-09-16)  ✅
+The 5m tail is CURED -- wlc routes FULLY WIRED (seed=13, placement=anchor,
+zero child fallbacks). Four cooperating passes, all pure connectivity+
+geometry (no part names, no per-circuit constants), all in
+`schematics/anchor_place.py`, wired into kicad9 `gen_schematic._hug_all`
+as: flow row/stack -> orient -> RE-pack -> uncross:
+1. **CHAIN-STACK** (in `flow_place_block`, kill SKIDL_CHAIN_STACK=0): a
+   block whose signal graph is one HUB (degree>=3) feeding >=2 multi-part
+   chains is laid out hub-LEFT + one row per chain, rows ordered by the
+   hub pin's own geometric order -> planar fan, zero forced crossings.
+   The old single tight row starved every channel through one corridor.
+2. **PER-PAIR DEMAND GAPS** (`_pair_gap`): row gap between two neighbours
+   = max(150*exp, (shared_signal_nets+2)*100*exp) -- a corridor's face
+   gets ~1 terminal slot per 50 mil, so a 3-net relay->terminal bundle
+   needs ~500 mil, not 150 (measured get_next_terminal starvation).
+3. **ORIENT-TO-NEIGHBORS** (`orient_to_neighbors`, kill
+   SKIDL_ORIENT_MULTI=0): try the 4 rotations of every 3..16-pin part,
+   score = sum of manhattan(pin -> its net's other-pin centroid), apply
+   when >8% better, then RE-run the row/stack pack (spans changed).
+   Cures the relay class: K1's contacts sat on the TOP edge facing away
+   from J3 and the coil on the BOTTOM facing away from the driver --
+   unreachable faces at any gap. Rotating K1 = the human layout.
+4. **BUNDLE UNCROSS** (`uncross_parallel_bundles`, kill SKIDL_UNCROSS=0):
+   a >=2-net parallel bundle whose pin order is inverted between the two
+   parts gets the LIGHTER part vertically mirrored (revert if the
+   inversion count doesn't drop) -- kills the PUMP_COM x PUMP_NC touch
+   shorts that raised RoutingFailure at every seed.
+Also: SKIDL_PLACEMENT_MODE=anchor|elk|legacy env override (debug A/B).
+MEASURED: pump_only + probe_only isolated repros seed=0 fully wired;
+full wlc "routed with wires (seed=13)" with orient(J2,K1,Q2,J3),
+uncross(J3), chain-stack(PROBE_SENSE 3 rows). ELK layered placement was
+A/B'd first and REJECTED: it fixed nothing (same fallbacks) and spread
+the MCU 83->186 cm^2. NOTE: repro fidelity matters -- an isolated block
+script must `net.stub = True` its power rails to match the full design's
+stubbing, or the router wires +5V/GND and fails differently.
+⬜ TAIL (pre-existing, exposed by a small 2-page repro `probe4.py`): on the
+SMALL-flatten path, detect_clusters overrides the AUTHORED block and splits
+parallel channels across clusters (J2 cluster kept R2 but exiled R3/R4 ->
+node of 8 parts, hub degree 2, no chain-stack possible -> all-label). The
+authored `with block(...)` grouping should win over re-clustering there,
+same as "explicit hierarchy always wins" does for pages.
+-> RESOLVED by Phase 5o (D.0 keep-block).
+
+### Phase 5o — quality convergence: best-seed file snapshot + deterministic heal-off + D.0 keep (2026-09-17)  ✅
+"First verified seed wins" made the SAME build flip-flop between a perfect
+sheet and a label-degraded one (wlc: 129w/14l vs 87w/31l run-to-run; the
+kicad-cli verify flap decides WHICH seed lands first). Shipped, all in
+smart_schematic.build:
+1. **BEST-SEED GATE** (SKIDL_BEST_SEED=0 kill): a wired- or partial-tier
+   seed that verifies but leaves in-block nets as labels
+   (`_in_block_stub_count`: stubbed nets whose real pins share one
+   block/hiertuple; power, NT-crossing and >fanout-cutoff nets excluded)
+   is NOT accepted -- its FILES are snapshotted (`<name>*.bestkeep`) and
+   the sweep keeps hunting a 0-stub seed (immediate accept). Last resort =
+   restore the kept bytes. NEVER regenerate a recorded seed: hidden state
+   drift makes regeneration non-reproducible (measured: recorded 5
+   in-block labels, regeneration produced 23+).
+2. **HEAL-OFF ON FALLBACK** (SKIDL_HEAL_OFF_ON_FALLBACK=0 kill): the FIRST
+   child fallback observed after ANY completed generation attempt disables
+   SKIDL_ORPHAN_HEAL for the rest of the sweep and retries that seed --
+   the old raise-path-only trigger was an accident of which seed crashed.
+   Dense fan children route without heal's synthetic bridges (measured
+   wlc: pure heal-off wires at seed=5; heal-on falls back at every seed).
+3. **COLD-TX PER SEED** (SKIDL_COLD_TX=0 kill): part.tx (+_flow_rowed) is
+   snapshotted once and restored at every attempt start -- the layout
+   passes mutate tx, so each seed's placement previously depended on the
+   seed HISTORY before it.
+4. **D.0 KEEP-BLOCK** (SKIDL_D0_KEEP_MIN, default 4): the small-design
+   block merge now fires only when EVERY authored block is tiny (<4
+   parts). A >=4-part authored block is a deliberate function; merging it
+   let detect_clusters split parallel channels (probe4: all-label ->
+   fully wired after this).
+5. Label-mode guards: orient/uncross skip parts/bundles whose signal pins
+   are all stubbed -- mirroring under decided label geometry dropped
+   dangling labels and broke even the all-label tier (3 missing groups).
+MEASURED END STATE: wlc 3/3 runs "routed with wires", 129-135w/14l, ZERO
+in-block labels (the 14 = cross-block SENSE/LED/PUMP_DRV pairs); probe4
+fully wired; geometry still varies slightly run-to-run (residual hidden
+state) but the QUALITY INVARIANT (0 in-block labels) holds every run.

@@ -58,7 +58,12 @@ def snap(sch_path):
     """Snap connection coordinates to the 1.27 mm grid. Returns # of coords moved."""
     try:
         return _snap_file(sch_path)
-    except Exception:
+    except Exception as exc:
+        try:
+            from skidl.schematics.net_classify import log_swallowed
+            log_swallowed("grid_snap", exc)
+        except Exception:
+            pass
         return 0  # never break a build over grid cosmetics
 
 

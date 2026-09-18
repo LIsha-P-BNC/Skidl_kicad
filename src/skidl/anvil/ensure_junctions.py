@@ -83,7 +83,12 @@ def ensure(sch_path):
     """Add every missing wire-junction record. Returns # of junctions added."""
     try:
         return _ensure(sch_path)
-    except Exception:
+    except Exception as exc:
+        try:
+            from skidl.schematics.net_classify import log_swallowed
+            log_swallowed("ensure_junctions", exc)
+        except Exception:
+            pass
         return 0  # never break a build over a healing pass
 
 

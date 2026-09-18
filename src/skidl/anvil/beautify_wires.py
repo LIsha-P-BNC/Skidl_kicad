@@ -33,7 +33,12 @@ def beautify(sch_path):
     """Return the number of wire segments removed (>=0), 0 if unchanged/failed."""
     try:
         return _beautify(sch_path)
-    except Exception:
+    except Exception as exc:
+        try:
+            from skidl.schematics.net_classify import log_swallowed
+            log_swallowed("beautify_wires", exc)
+        except Exception:
+            pass
         return 0  # never break a build over cosmetics
 
 

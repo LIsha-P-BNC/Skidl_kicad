@@ -36,7 +36,12 @@ def normalize(sch_path, min_exit_mm=2.54):
     """Lengthen too-short pin exits. Returns the number of exits lengthened."""
     try:
         return _normalize(sch_path, min_exit_mm)
-    except Exception:
+    except Exception as exc:
+        try:
+            from skidl.schematics.net_classify import log_swallowed
+            log_swallowed("normalize_exits", exc)
+        except Exception:
+            pass
         return 0  # never break a build over geometry cosmetics
 
 

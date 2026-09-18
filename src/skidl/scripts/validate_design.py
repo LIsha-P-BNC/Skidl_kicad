@@ -39,12 +39,21 @@ _SEVERITY_RANK = {ERROR: 0, WARN: 1, INFO: 2}
 
 # --- authoritative patterns (kept in sync with the generator) -------------------------
 
-# Mirror of _POWER_NET_RE in src/skidl/tools/kicad*/gen_schematic.py. Any name also
-# matching ``^\+`` is treated as power by the generator.
-POWER_NET_RE = re.compile(
-    r"^(\+\d[\d.]*V[\d]*|GND|AGND|DGND|PGND|VCC|VDD|VSS|VEE|VBUS|VBAT|AVCC|AVDD|DVCC|DVDD)$",
-    re.IGNORECASE,
-)
+# Power-net (render-as-power-symbol) classification -- canonical single source,
+# shared with the generator (was a hand-synced mirror of _POWER_NET_RE). Fallback
+# keeps this script usable if skidl is not importable for some reason.
+try:
+    from skidl.schematics.net_classify import is_power_symbol_net
+except Exception:
+    _POWER_NET_RE = re.compile(
+        r"^(\+\d[\d.]*V[\d]*|GND|AGND|DGND|PGND|VCC|VDD|VSS|VEE|VBUS|VBAT"
+        r"|AVCC|AVDD|DVCC|DVDD)$",
+        re.IGNORECASE,
+    )
+
+    def is_power_symbol_net(name):
+        name = name or ""
+        return bool(name.startswith("+") or _POWER_NET_RE.match(name))
 
 # Auto / placeholder net names that must never survive into a shipped design (NET-2).
 AUTO_NET_RE = re.compile(r"^(n\$\d+|wire\d+|net\d+)$", re.IGNORECASE)
@@ -392,7 +401,7 @@ class DesignValidator(ast.NodeVisitor):
                 "suffix (e.g. RESET_N) for the net name." % nm,
             )
 
-        is_power = bool(nm.startswith("+") or POWER_NET_RE.match(nm))
+        is_power = is_power_symbol_net(nm)
 
         # PWR-4: looks like a rail but won't be recognised as power.
         if not is_power:
@@ -493,7 +502,7 @@ class DesignValidator(ast.NodeVisitor):
         # are global by name, so they are exempt.
         if self.net_to_blocks:
             for nm in set(self.module_net_vars.values()):
-                if nm.startswith("+") or POWER_NET_RE.match(nm):
+                if is_power_symbol_net(nm):
                     continue
                 if not self.net_to_blocks.get(nm):
                     self.add(
@@ -640,7 +649,7 @@ def validate_netlist(path):
                 ref_nets.setdefault(ref, set()).add(nm)
 
     def is_power(nm):
-        return bool(nm and (nm.startswith("+") or POWER_NET_RE.match(nm)))
+        return is_power_symbol_net(nm)
 
     def is_ground(nm):
         return bool(nm and re.match(r"^[ADP]?GND$", nm, re.IGNORECASE))
@@ -867,12 +876,12 @@ def _print_matrix(validator):
         return
 
     def sort_key(n):
-        is_pwr = n.startswith("+") or bool(POWER_NET_RE.match(n))
+        is_pwr = is_power_symbol_net(n)
         return (0 if is_pwr else 1, n)
 
     for nm in sorted(names, key=sort_key):
         blocks = sorted(validator.net_to_blocks.get(nm, set()))
-        kind = "power" if (nm.startswith("+") or POWER_NET_RE.match(nm)) else "signal"
+        kind = "power" if is_power_symbol_net(nm) else "signal"
         target = ", ".join(blocks) if blocks else "(not passed to any block)"
         print("  %-6s %-14s -> %s" % (kind, nm, target))
     print("-" * 72)

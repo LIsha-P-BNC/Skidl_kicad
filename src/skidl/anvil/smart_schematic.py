@@ -260,7 +260,12 @@ def build(name=None, title="SKiDL-Generated Schematic", auto_stub_fanout=None,
         generate_netlist(file_=name + ".net")
 
     opts = dict(tool=KICAD9, top_name=name, title=title, auto_stub=True,
-                erc_max_iterations=8)
+                erc_max_iterations=8,
+                # 3 generation attempts = expansion ladder 1.0 -> 1.5 -> 2.25
+                # for the wire-in-block expand-retry (dense child blocks that
+                # fall back to labels get TWO chances at more room before the
+                # sweep moves on). Only failure paths pay the extra attempts.
+                retries=int(os.environ.get("SKIDL_GEN_RETRIES", "3")))
     if auto_stub_fanout is not None:
         opts["auto_stub_fanout"] = auto_stub_fanout
 
@@ -343,7 +348,23 @@ def build(name=None, title="SKiDL-Generated Schematic", auto_stub_fanout=None,
     _one_block_max = int(os.environ.get("SKIDL_ONE_BLOCK_MAX", "12"))
     _auth_groups = {str(getattr(p, "group", None))
                     for p in _real_parts if getattr(p, "group", None)}
-    if n_parts <= _one_block_max and len(_auth_groups) > 1:
+    # AUTHORED BLOCKS WIN (2026-09-16): D.0 targets a single function whose
+    # STAGES were over-boxed -- many TINY boxes (2-3 parts each). A design
+    # containing even one SUBSTANTIAL authored block (>= SKIDL_D0_KEEP_MIN
+    # parts, default 4) is deliberately partitioned -- e.g. a 10-part
+    # parallel-channel sensor block; merging it clears the tags, the
+    # re-clusterer then SPLITS the channels across clusters and the sheet
+    # degrades to all-label (measured probe4: PROBE SENSE 10 parts + MCU IF
+    # -> merged -> J2-cluster kept R2 but exiled R3/R4 -> unroutable).
+    _d0_keep_min = int(os.environ.get("SKIDL_D0_KEEP_MIN", "4"))
+    _blk_sizes = {}
+    for _p in _real_parts:
+        _g = getattr(_p, "group", None)
+        if _g:
+            _blk_sizes[str(_g)] = _blk_sizes.get(str(_g), 0) + 1
+    _max_blk = max(_blk_sizes.values()) if _blk_sizes else 0
+    if (n_parts <= _one_block_max and len(_auth_groups) > 1
+            and _max_blk < _d0_keep_min):
         for _p in _real_parts:
             try:
                 _p.group = None
@@ -352,6 +373,63 @@ def build(name=None, title="SKiDL-Generated Schematic", auto_stub_fanout=None,
         opts["suppress_block_boxes"] = True
         print(f">>> smart_schematic: {n_parts} parts / {len(_auth_groups)} blocks "
               "-> ONE function (D.0: merged over-split blocks; single clean sheet)")
+
+    # SUPPORT-BLOCK ABSORB (docs rule D / industry rule 9: an MCU block CONTAINS
+    # its reset circuit, crystal + load caps, and decoupling). A tiny authored
+    # block (<=3 parts, all discrete/support refdes classes -- R/C/L/Y/SW/D/TP)
+    # whose every non-power net lands on exactly ONE other, bigger block is a
+    # SUPPORT circuit of that block's anchor IC. Merge it: its parts then place
+    # and WIRE next to the IC instead of living in a distant 3-part box joined
+    # by labels (measured water_level_controller: CLOCK and RESET boxes 2400+
+    # mils from the ATmega). Blocks containing an IC/connector/relay (U/J/K)
+    # keep their identity (a DS18B20+pullup+decap sensor block is a real
+    # function, not support). Kill switch: SKIDL_ABSORB_SUPPORT=0.
+    if os.environ.get("SKIDL_ABSORB_SUPPORT", "1") != "0":
+        from skidl.schematics.net_classify import classify_net_role as _cnr_abs
+        _SUPPORT_REF = re.compile(r"^(R|C|L|Y|SW|D|TP|JP|FB)\d", re.IGNORECASE)
+        _by_group = {}
+        for _p in _real_parts:
+            _g = getattr(_p, "group", None)
+            if _g:
+                _by_group.setdefault(str(_g), []).append(_p)
+        _absorbed = []
+        for _g, _members in sorted(_by_group.items()):
+            if len(_members) > int(os.environ.get("SKIDL_ABSORB_MAX_PARTS", "3")):
+                continue
+            if not all(_SUPPORT_REF.match(str(getattr(_p, "ref", "") or ""))
+                       for _p in _members):
+                continue  # contains an IC/connector/relay -> a real function
+            _peers, _pure = set(), True
+            for _p in _members:
+                for _pin in getattr(_p, "pins", []):
+                    for _net in getattr(_pin, "nets", []):
+                        if _cnr_abs(_net) in ("power", "ground"):
+                            continue
+                        for _opin in getattr(_net, "pins", []):
+                            _op = getattr(_opin, "part", None)
+                            # Identity, not ==: SKiDL Part equality is overloaded
+                            # and treats distinct parts as equal, which emptied
+                            # _peers and silently disabled the whole rule.
+                            if _op is None or any(_op is _m for _m in _members):
+                                continue
+                            _og = getattr(_op, "group", None)
+                            if _og and str(_og) != _g:
+                                _peers.add(str(_og))
+                            elif not _og:
+                                _pure = False  # touches ungrouped parts
+            if _pure and len(_peers) == 1:
+                _target = _peers.pop()
+                if len(_by_group.get(_target, [])) > len(_members):
+                    for _p in _members:
+                        try:
+                            _p.group = _target
+                        except Exception:
+                            pass
+                    _by_group[_target].extend(_members)
+                    _absorbed.append(f"{_g} -> {_target}")
+        if _absorbed:
+            print(f">>> smart_schematic: absorbed {len(_absorbed)} support "
+                  f"block(s) into their anchor block ({'; '.join(_absorbed)})")
 
     # Does the SCRIPT itself provide structure? Two independent signals:
     #   * real SKiDL hierarchy (@subcircuit / Group) -> the root Node has children
@@ -870,20 +948,43 @@ def build(name=None, title="SKiDL-Generated Schematic", auto_stub_fanout=None,
     import time as _time
     _budget = float(os.environ.get("SKIDL_ROUTE_BUDGET_S", "240"))
 
+    # PLACEMENT-MODE OVERRIDE (debug / A-B): SKIDL_PLACEMENT_MODE=anchor|elk|legacy
+    # forces the placer for the whole build, overriding the auto decision
+    # ("legacy" strips the mode so the force-directed placer runs). Lets the
+    # ELK layered placer be A/B'd against anchor/legacy on the SAME circuit
+    # without editing the script.
+    _pm_env = os.environ.get("SKIDL_PLACEMENT_MODE", "").strip().lower()
+    if _pm_env in ("anchor", "elk"):
+        opts["placement_mode"] = _pm_env
+    elif _pm_env == "legacy":
+        opts.pop("placement_mode", None)
+
     # Build-level auto-fallback bookkeeping: if placement_mode="anchor" is
     # requested but the anchor layout can't be verified/published, the build
     # transparently retries with the legacy placer so a valid .anvil_sch is
     # ALWAYS produced. See docs/anchor_placer_design.md (P3 + acceptance gate).
-    _placer_used = "anchor" if opts.get("placement_mode") == "anchor" else "legacy"
+    _placer_used = opts.get("placement_mode") or "legacy"
+
+    # Snapshot/restore must capture the RAW __dict__ storage, not property-
+    # computed values: pin.stub is a property backed by _stub_val (installed
+    # above), so reading via getattr() and writing back via setattr() turns
+    # "unset -> classify dynamically" into an EXPLICIT value. Measured
+    # power_board: the old restore stamped stub values onto power rails, the
+    # router then wire-routed the 9-pin +5V inside children and every child
+    # collapsed (61w/0l -> 51w/7l). Exact __dict__ resurrection is a true
+    # no-op when nothing has changed.
+    _FLAG_MISS = object()
+    _NET_FLAG_KEYS = ("stub", "_stub", "_direct_wired")
+    _PIN_FLAG_KEYS = ("stub", "_stub_val", "direct_wired")
 
     def _snapshot_wire_flags():
-        """Record every net/pin wire-vs-label flag so a placer retry can start
-        from the exact cold state (completed generation attempts leave rescue/
-        stub flags on the SHARED circuit that change later classifications)."""
-        _ns = [(_n, getattr(_n, "stub", None), getattr(_n, "_stub", None),
-                getattr(_n, "_direct_wired", None))
+        """Record every net/pin wire-vs-label flag (raw storage, presence-
+        aware) so a retry starts from the exact cold state (completed
+        generation attempts leave rescue/stub flags on the SHARED circuit
+        that change later classifications)."""
+        _ns = [(_n, tuple(_n.__dict__.get(_k, _FLAG_MISS) for _k in _NET_FLAG_KEYS))
                for _n in builtins.default_circuit.nets]
-        _ps = [(_p, getattr(_p, "stub", None), getattr(_p, "direct_wired", None))
+        _ps = [(_p, tuple(_p.__dict__.get(_k, _FLAG_MISS) for _k in _PIN_FLAG_KEYS))
                for _prt in builtins.default_circuit.parts
                for _p in getattr(_prt, "pins", [])]
         return _ns, _ps
@@ -891,33 +992,167 @@ def build(name=None, title="SKiDL-Generated Schematic", auto_stub_fanout=None,
     def _restore_wire_flags(_snap):
         def _setb(_o, _k, _v):
             try:
-                if _v is None:
-                    if _k in getattr(_o, "__dict__", {}):
-                        delattr(_o, _k)
+                if _v is _FLAG_MISS:
+                    _o.__dict__.pop(_k, None)
                 else:
-                    setattr(_o, _k, _v)
+                    _o.__dict__[_k] = _v
             except Exception:
                 pass
         _ns, _ps = _snap
-        for _n, _s, _s2, _dw in _ns:
-            _setb(_n, "stub", _s)
-            _setb(_n, "_stub", _s2)
-            _setb(_n, "_direct_wired", _dw)
-        for _p, _s, _dw in _ps:
-            _setb(_p, "stub", _s)
-            _setb(_p, "direct_wired", _dw)
+        for _n, _vals in _ns:
+            for _k, _v in zip(_NET_FLAG_KEYS, _vals):
+                _setb(_n, _k, _v)
+        for _p, _vals in _ps:
+            for _k, _v in zip(_PIN_FLAG_KEYS, _vals):
+                _setb(_p, _k, _v)
 
+    # COLD PLACEMENT PER SEED (2026-09-17): the layout passes (flow row/
+    # chain-stack, orient, uncross, hug) MUTATE part.tx, and the placer
+    # starts from the current tx -- so every seed's layout depended on the
+    # HISTORY of seeds tried before it, and the same seed produced different
+    # sheets run-to-run (measured wlc: pure heal-off run wires legacy seed=5,
+    # the mid-sweep-heal-off run fails the identical combo). Snapshot every
+    # part's tx once, restore at each seed start (same discipline as the
+    # wire-flag snapshot) so each (placer, seed) attempt is reproducible.
+    # Kill switch SKIDL_COLD_TX=0.
+    def _snapshot_txs():
+        _s = []
+        for _prt in builtins.default_circuit.parts:
+            _s.append((_prt, getattr(_prt, "tx", None),
+                       "_flow_rowed" in _prt.__dict__))
+        return _s
+
+    def _restore_txs(_snap):
+        for _prt, _tx, _had_rowed in _snap:
+            try:
+                if _tx is not None:
+                    _prt.tx = _tx
+                if not _had_rowed:
+                    _prt.__dict__.pop("_flow_rowed", None)
+            except Exception:
+                pass
+
+    _tx_snap = _snapshot_txs()
     _flags_snap = _snapshot_wire_flags()
     routed_seed = None
+
+    # BEST-SEED GATE (2026-09-16): "first verified seed wins" shipped sheets
+    # where the CLASSIFIER stubbed in-block nets to labels even though a
+    # later seed wires them all (measured wlc: app accepted an early seed
+    # with 31 labels incl. in-block N$x/PROBE_*, while seed=13 gives
+    # 129w/14l with ONLY cross-block labels). A wired+verified seed with
+    # in-block label(s) is now recorded as BEST-SO-FAR and the sweep keeps
+    # hunting a PERFECT seed (0 in-block stubs = early exit, so fast
+    # circuits are untouched). Kill switch SKIDL_BEST_SEED=0.
+    _best_imperfect = None   # (in_block_stub_count, placement_mode, seed)
+
+    # The best imperfect sheet is kept as a FILE SNAPSHOT, not a seed to
+    # regenerate: regeneration proved non-reproducible (hidden circuit/env
+    # state drifts across attempts -- measured wlc: "5 in-block labels"
+    # recorded, regeneration produced 23+), while the copied files are the
+    # EXACT bytes that verified.
+    def _keep_best_files():
+        import shutil as _sh
+        for _src in _glob.glob(name + ".anvil_sch") + \
+                _glob.glob(name + "_*.anvil_sch") + _glob.glob(name + ".net"):
+            try:
+                _sh.copyfile(_src, _src + ".bestkeep")
+            except Exception:
+                pass
+
+    def _restore_best_files():
+        import shutil as _sh
+        _done = False
+        for _src in _glob.glob(name + "*.bestkeep"):
+            try:
+                _sh.copyfile(_src, _src[:-len(".bestkeep")])
+                _done = True
+            except Exception:
+                pass
+        return _done
+
+    def _drop_best_files():
+        for _src in _glob.glob(name + "*.bestkeep"):
+            try:
+                os.remove(_src)
+            except OSError:
+                pass
+
+    _drop_best_files()  # never inherit a previous build's snapshot
+
+    def _in_block_stub_count():
+        """Nets stubbed to labels whose every real pin lives inside ONE
+        functional block -- the wire-in-block rule violated per-net (the
+        child-fallback gate cannot see these). Power rails, NC nets,
+        cross-node nets (NetTerminal present) and nets over the fanout
+        cutoff (labelled BY DESIGN) are excluded."""
+        try:
+            from skidl.schematics.anchor_place import _net_power_kind
+        except Exception:
+            return 0
+        _fan_max = int(os.environ.get("SKIDL_WIRE_MAX_FANOUT", "4"))
+        _cnt = 0
+        for _net in builtins.default_circuit.nets:
+            try:
+                if type(_net).__name__ == "NCNet":
+                    continue
+                if not (getattr(_net, "_stub", False)
+                        or _net.__dict__.get("stub", False)
+                        or any(_p.__dict__.get("stub", False)
+                               or _p.__dict__.get("_stub_val", False)
+                               for _p in _net.pins)):
+                    continue
+                if _net_power_kind(_net) in ("rail", "ground"):
+                    continue
+                _keys = set()
+                _real = 0
+                _cross = False
+                for _p in _net.pins:
+                    _prt = getattr(_p, "part", None)
+                    if _prt is None:
+                        continue
+                    if (getattr(_prt, "ref_prefix", "") or "").upper() == "NT":
+                        _cross = True
+                        break
+                    _real += 1
+                    _g = getattr(_prt, "group", None)
+                    if _g:
+                        _keys.add(("g", str(_g)))
+                    else:
+                        try:
+                            _keys.add(("h", tuple(_prt.hiertuple)))
+                        except Exception:
+                            _keys.add(("_",))
+                if _cross or _real < 2 or len(_keys) != 1:
+                    continue
+                if _fan_max > 0 and _real > _fan_max:
+                    continue
+                _cnt += 1
+            except Exception:
+                pass
+        return _cnt
+
     for _placer_pass in range(2):
         _t0 = _time.time()
         for _i, sd in enumerate(seeds):
-            if _i and _time.time() - _t0 > _budget:
+            # a recorded imperfect seed means a fully-wired one may be a few
+            # seeds away -- worth double the hunt budget before settling.
+            _lim = _budget * (2.0 if _best_imperfect is not None else 1.0)
+            if _i and _time.time() - _t0 > _lim:
                 print(f">>> smart_schematic: wire-route budget exhausted "
-                      f"({int(_time.time() - _t0)}s > {int(_budget)}s after {_i} seed(s)) "
+                      f"({int(_time.time() - _t0)}s > {int(_lim)}s after {_i} seed(s)) "
                       f"-> trying partial-wire mode")
                 break
             _clean_sheets()  # each attempt starts clean -> no leftover _1 duplicate sheets
+            # COLD FLAGS PER SEED: a failed seed's child-fallback/_stub_pin flags
+            # otherwise leak into the next seed, whose children then "route"
+            # trivially as all-labels and pass every gate (the Phase 5i "flap
+            # residue" -- proven on arduino: seed 0 rejected, seed 1 accepted
+            # the SAME 24 leaked labels).
+            if os.environ.get("SKIDL_COLD_FLAGS", "1") != "0":
+                _restore_wire_flags(_flags_snap)
+            if os.environ.get("SKIDL_COLD_TX", "1") != "0":
+                _restore_txs(_tx_snap)
             try:
                 generate_schematic(seed=sd, auto_stub_fallback="raise", **opts)
             except Exception:
@@ -949,6 +1184,34 @@ def build(name=None, title="SKiDL-Generated Schematic", auto_stub_fanout=None,
                         continue
                 else:
                     continue  # this seed couldn't route -> try the next
+            # HEAL-OFF ON FALLBACK -- checked on EVERY completed attempt, not
+            # only gate-rejected ones: a seed whose children fell back can
+            # still FAIL VERIFY, skipping the wire-in-block gate entirely, and
+            # heal then stays ON for the whole sweep (measured wlc fix5:
+            # neither run ever disabled heal; pure SKIDL_ORPHAN_HEAL=0 wires
+            # the same design at seed=5). Disable heal at the FIRST observed
+            # fallback and retry this seed without it.
+            _fb_now = list(getattr(sys.modules.get("skidl.schematics.route"),
+                                   "CHILD_LABEL_FALLBACKS", []) or [])
+            if (_fb_now
+                    and os.environ.get("SKIDL_ORPHAN_HEAL", "1") != "0"
+                    and os.environ.get(
+                        "SKIDL_HEAL_OFF_ON_FALLBACK", "1") != "0"):
+                os.environ["SKIDL_ORPHAN_HEAL"] = "0"
+                print(">>> smart_schematic: child fallback observed with "
+                      "face-heal ON -> disabling SKIDL_ORPHAN_HEAL for the "
+                      "rest of the sweep and RETRYING THIS SEED "
+                      "(dense children route without synthetic heal bridges)")
+                _clean_sheets()
+                if os.environ.get("SKIDL_COLD_FLAGS", "1") != "0":
+                    _restore_wire_flags(_flags_snap)
+                if os.environ.get("SKIDL_COLD_TX", "1") != "0":
+                    _restore_txs(_tx_snap)
+                try:
+                    generate_schematic(seed=sd, auto_stub_fallback="raise",
+                                       **opts)
+                except Exception:
+                    continue  # heal-off retry couldn't route -> next seed
             _sanitize()  # fix lib_id paths before extracting the netlist for verify
             if verify_connectivity is None:
                 routed_seed = sd
@@ -994,6 +1257,56 @@ def build(name=None, title="SKiDL-Generated Schematic", auto_stub_fanout=None,
                     break
                 _sanitize()
             if ok:
+                # WIRE-IN-BLOCK GATE: a "wired" build in which a child block fell
+                # back to labels is NOT an acceptable wired sheet -- keep sweeping
+                # (next seed, then the legacy placer) before settling. Without
+                # this, a label child at anchor placement masks a fully-wired
+                # legacy layout (measured arduino: 13w/24l accepted vs 47w/0l).
+                # The partial/all-label tiers below remain the deliberate last
+                # resorts. Kill switch: SKIDL_LABEL_CHILD_GATE=0.
+                _fb_children = list(getattr(
+                    sys.modules.get("skidl.schematics.route"),
+                    "CHILD_LABEL_FALLBACKS", []) or [])
+                if (_fb_children
+                        and os.environ.get("SKIDL_LABEL_CHILD_GATE", "1") != "0"):
+                    print(f">>> smart_schematic: seed={sd} wired BUT "
+                          f"{len(_fb_children)} child block(s) fell back to labels "
+                          f"({', '.join(_fb_children)}) -> seed rejected "
+                          "(wire-in-block gate)")
+                    # HEAL-OFF ON FALLBACK (2026-09-17): a child fallback is
+                    # usually CAUSED by the orphan-heal's synthetic bridges
+                    # (unrealizable hops in dense children). Measured wlc:
+                    # heal-on -> PROBE_SENSE falls back at EVERY seed;
+                    # SKIDL_ORPHAN_HEAL=0 -> fully wired at seed=5. The old
+                    # behavior only disabled heal when a generation RAISED --
+                    # an accident of which seed crashed first, so identical
+                    # builds flip-flopped. Make it deterministic: the FIRST
+                    # child fallback turns heal off for the rest of the
+                    # sweep. Circuits whose children route under heal (stm32
+                    # orphan class) never hit this branch and keep heal.
+                    # Kill switch SKIDL_HEAL_OFF_ON_FALLBACK=0.
+                    if (os.environ.get("SKIDL_ORPHAN_HEAL", "1") != "0"
+                            and os.environ.get(
+                                "SKIDL_HEAL_OFF_ON_FALLBACK", "1") != "0"):
+                        os.environ["SKIDL_ORPHAN_HEAL"] = "0"
+                        print(">>> smart_schematic: child fallback with "
+                              "face-heal ON -> disabling SKIDL_ORPHAN_HEAL "
+                              "for the rest of the sweep (dense children "
+                              "route without synthetic heal bridges)")
+                    continue
+                _stubs = (_in_block_stub_count()
+                          if os.environ.get("SKIDL_BEST_SEED", "1") != "0"
+                          else 0)
+                if _stubs:
+                    if (_best_imperfect is None
+                            or _stubs < _best_imperfect[0]):
+                        _best_imperfect = (_stubs,
+                                           opts.get("placement_mode"), sd)
+                        _keep_best_files()
+                    print(f">>> smart_schematic: seed={sd} wired+verified but "
+                          f"{_stubs} in-block net(s) are labels -> best-seed "
+                          "gate keeps sweeping for a fully-wired seed")
+                    continue
                 routed_seed = sd
                 _rmsg = f" [repaired {_repaired} local net(s) -> labels]" if _repaired else ""
                 print(f">>> smart_schematic: routed with wires (seed={sd}); "
@@ -1021,6 +1334,7 @@ def build(name=None, title="SKiDL-Generated Schematic", auto_stub_fanout=None,
         print(">>> smart_schematic: anchor layout wouldn't wire-route -> "
               "retrying wired sweep with legacy placer")
         _restore_wire_flags(_flags_snap)
+        _restore_txs(_tx_snap)
         opts.pop("placement_mode", None)
         _placer_used = "legacy (anchor wouldn't wire)"
 
@@ -1041,22 +1355,62 @@ def build(name=None, title="SKiDL-Generated Schematic", auto_stub_fanout=None,
                       f"seed(s)) -> falling back to all-label mode")
                 break
             _clean_sheets()
+            # Same cold-flag hygiene as the wired sweep: without it this tier
+            # inherits the stub flags of the last REJECTED wired seed.
+            _restore_wire_flags(_flags_snap)
+            _restore_txs(_tx_snap)
             try:
                 generate_schematic(seed=sd, auto_stub_fallback="labels", **opts)
             except Exception:
+                if os.environ.get("SKIDL_SWEEP_DEBUG"):
+                    import traceback as _p_tb
+                    print(f">>> [sweep-debug] partial seed={sd} generation raised:")
+                    _p_tb.print_exc()
                 continue
             _sanitize()
             ok = True
+            _pmsg = ""
             if verify_connectivity is not None:
                 try:
-                    ok = verify_connectivity.verify(name)[0]
+                    ok, _pmsg = verify_connectivity.verify(name)[:2]
                 except Exception:
                     ok = True
             if ok:
+                # BEST-SEED GATE here too: the partial tier taking the FIRST
+                # verified seed made the same build flip-flop between a
+                # perfect sheet (wlc seed=13: zero in-block labels) and a
+                # degraded one (seed=5: PROBE_*/N$x labels). Keep the FILES
+                # of the best imperfect seed and keep sweeping for a clean
+                # one; restore the kept bytes only as the last resort.
+                _stubs_p = (_in_block_stub_count()
+                            if os.environ.get("SKIDL_BEST_SEED", "1") != "0"
+                            else 0)
+                if _stubs_p:
+                    if (_best_imperfect is None
+                            or _stubs_p < _best_imperfect[0]):
+                        _best_imperfect = (_stubs_p,
+                                           opts.get("placement_mode"), sd)
+                        _keep_best_files()
+                    print(f">>> smart_schematic: partial seed={sd} verified "
+                          f"but {_stubs_p} in-block net(s) are labels -> "
+                          "best-seed gate keeps sweeping")
+                    continue
                 routed_seed = sd
                 print(f">>> smart_schematic: partial wire route (seed={sd}); "
                       f"connectivity OK (some dense nets labeled)")
                 break
+            if os.environ.get("SKIDL_SWEEP_DEBUG"):
+                print(f">>> [sweep-debug] partial seed={sd} verify FAILED: {_pmsg!r}")
+        if routed_seed is None and _best_imperfect is not None:
+            # restore the kept best sheet -- the exact verified bytes, no
+            # regeneration (regeneration is not reproducible).
+            _bs_k, _bmode_k, _bsd_k = _best_imperfect
+            if _restore_best_files():
+                routed_seed = _bsd_k
+                _placer_used = _bmode_k or _placer_used
+                print(f">>> smart_schematic: no fully-wired seed anywhere -> "
+                      f"restored the kept best sheet (seed={_bsd_k}, "
+                      f"{_bs_k} in-block label(s), file snapshot)")
 
     if routed_seed is None:
         # LAST RESORT: force ALL non-power nets to labels (labels connect by name
@@ -1448,4 +1802,33 @@ def build(name=None, title="SKiDL-Generated Schematic", auto_stub_fanout=None,
     print(f">>> smart_schematic: {name}.net + {name}.anvil_sch + "
           f"{os.path.basename(pro)} ready (published atomically)")
     print(f">>> smart_schematic: placement = {_placer_used}")
+
+    # AUTHORITATIVE BUILD RESULT (gap H3): emit the FINAL verdict as structured
+    # JSON so the caller (skidl_mcp_server._finish_build) never has to infer
+    # success/mode by grepping free-form log text. Log-grep is fragile: a build
+    # that hit an early MISMATCH but then recovered via a fallback still carries
+    # the stale "all-label mode -> ...MISMATCH..." line, which the grep would
+    # wrongly read as a failure. This file records the state AT RETURN. Reaching
+    # here at all means connectivity verified (the not-_ok paths raise above) or
+    # the verifier was unavailable. Fail-safe: any error here is non-fatal; the
+    # server then falls back to the legacy log-grep, so behavior is unchanged.
+    try:
+        _routed = routed_seed is not None
+        _result = {
+            "schema": 1,
+            "name": name,
+            "verified": bool(locals().get("_ok", True)),
+            "verify_available": verify_connectivity is not None,
+            "routed": _routed,
+            "routed_seed": routed_seed,
+            "placer": _placer_used,
+            "schematic_mode": "wires" if _routed else "labels",
+        }
+        with open(os.path.join(_proj, name + ".build_result.json"),
+                  "w", encoding="utf-8") as _rf:
+            json.dump(_result, _rf, indent=2)
+    except Exception as _e:
+        warnings.warn(f"smart_schematic: build_result.json skipped: {_e}",
+                      RuntimeWarning)
+
     return sch, pro

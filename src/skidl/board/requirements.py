@@ -108,6 +108,22 @@ def generate_questionnaire(base: str, out_dir) -> dict:
         if amps >= 1.0:
             current_candidates.append((net_name, amps, basis))
 
+    # High-voltage nets (>=50 V heuristic, incl. mains): the IPC-2221
+    # spacing rows there EXCEED ordinary fab clearances, so a wrong voltage
+    # figure means a board that can arc. Only the user knows the real
+    # values -- ask, mirroring the currents question above.
+    voltage_candidates = []
+    declared_v = resolved.get("voltages", {})
+    from skidl.board.voltage_engine import estimate_net_voltage
+    for net_name in nets:
+        if _GROUND_RE.match(net_name or ""):
+            continue
+        if declared_v.get(net_name, {}).get("status") == "confirmed":
+            continue
+        volts, vbasis = estimate_net_voltage(net_name)
+        if volts >= 50.0:
+            voltage_candidates.append((net_name, volts, vbasis))
+
     connectors = sorted(
         ref for ref, c in comps.items()
         if _CONNECTOR_REF_RE.match(ref)
@@ -153,6 +169,24 @@ def generate_questionnaire(base: str, out_dir) -> dict:
             "omit the currents parameter; widths use the name-based "
             "heuristic estimates shown in the evidence, labeled unconfirmed",
             ev, ["currents"]))
+
+    if voltage_candidates:
+        evv = "; ".join(f"{n} ~{v:g} V ({b})" for n, v, b in
+                        sorted(voltage_candidates, key=lambda t: -t[1]))
+        questions.append(_q(
+            "net_voltages",
+            "These nets look HIGH-VOLTAGE -- what is the actual working "
+            "voltage of each (input and output rails included)?",
+            "Copper clearance follows the IPC-2221 spacing table; a wrong "
+            "voltage means clearances too small for the real potential "
+            "(risk of arcing). Without your numbers only name-based "
+            "heuristic ESTIMATES are used.",
+            ['declare per net: voltages={"NET": volts}',
+             "skip -- use the advisory heuristic estimates"],
+            "advisory heuristic estimates (unconfirmed)",
+            "omit the voltages parameter; clearances use the name-based "
+            "heuristic estimates shown in the evidence, labeled unconfirmed",
+            evv, ["voltages"]))
 
     mech_val = resolved.get("mechanical", {}).get("value") or {}
     if connectors and not (answered("mechanical")

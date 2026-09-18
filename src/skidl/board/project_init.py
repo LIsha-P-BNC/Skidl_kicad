@@ -235,7 +235,8 @@ def initialize_project(base: str, out_dir, layers=None, board_width=None,
     # currents_meta source:"user" means "arrived via the tool call", NOT
     # verified human input; never treat "confirmed" as ground truth for
     # safety-relevant logic.
-    for k in ("currents", "currents_meta", "requirements_asked",
+    for k in ("currents", "currents_meta", "voltages", "voltages_meta",
+              "requirements_asked",
               "copper_oz", "pad_to_mask_clearance", "engine_overrides",
               "user_edge_cuts"):
         if sidecar_prev.get(k) is not None and k not in sidecar:

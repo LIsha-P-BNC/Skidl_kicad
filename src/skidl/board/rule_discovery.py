@@ -300,6 +300,15 @@ def resolve_board_config(base: str, out_dir) -> dict:
               "status": (meta.get(net) or {}).get("status", "unconfirmed")}
         for net, amps in (sc.get("currents") or {}).items()}
 
+    # voltages: same shape as currents -- values in sidecar `voltages`,
+    # provenance in `voltages_meta`. Feeds the IPC-2221 clearance plan.
+    vmeta = sc.get("voltages_meta") or {}
+    out["voltages"] = {
+        net: {"volts": volts,
+              "source": (vmeta.get(net) or {}).get("source", "ai"),
+              "status": (vmeta.get(net) or {}).get("status", "unconfirmed")}
+        for net, volts in (sc.get("voltages") or {}).items()}
+
     # design-rule minimums, per-key: project > system > sidecar > profile
     # (the same order init's choose() walks).
     prof = get_profile(sc.get("manufacturer") or "jlcpcb")

@@ -1643,6 +1643,12 @@ MILS_TO_MM = 0.0254
 # every wire endpoint stays at least this far inside the sheet edge.
 PAGE_MARGIN_MM = 10.0
 
+# The KiCad title block + comment rows occupy a band along the BOTTOM of the
+# sheet (~25 mm tall). Content must never enter it: a uniform 10 mm margin with
+# vertical centering put bottom-row blocks straight through the title table
+# (measured water_level_controller: relay block overlapping "Sheet 1 of 1").
+TITLE_BLOCK_KEEPOUT_MM = 30.0
+
 
 def _fit_paper(bbox):
     """Choose a page that is GUARANTEED to contain *bbox* (mils) plus a margin
@@ -1660,7 +1666,8 @@ def _fit_paper(bbox):
     w = abs(bbox.w) if bbox.w and not math.isinf(bbox.w) else 0
     h = abs(bbox.h) if bbox.h and not math.isinf(bbox.h) else 0
     need_w = w * MILS_TO_MM + 2 * PAGE_MARGIN_MM
-    need_h = h * MILS_TO_MM + 2 * PAGE_MARGIN_MM
+    # Vertical: top margin + bottom TITLE-BLOCK keep-out band.
+    need_h = h * MILS_TO_MM + PAGE_MARGIN_MM + TITLE_BLOCK_KEEPOUT_MM
 
     for name, (pw, ph) in A_SIZES.items():
         if need_w <= pw and need_h <= ph:
@@ -1689,9 +1696,14 @@ def _calc_sheet_tx(bbox):
     """
     paper, pw, ph = _fit_paper(bbox)  # mm; page always contains bbox + margin
 
-    # Apply Y-flip + mils→mm in one transform, then center on page.
+    # Apply Y-flip + mils→mm in one transform, then center on the USABLE
+    # region: full width, but vertically between the top margin and the
+    # title-block keep-out band at the bottom (content must never enter it).
     page_bbox = bbox * Tx(a=MILS_TO_MM, d=-MILS_TO_MM)
-    page_ctr = Point(pw / 2, ph / 2)
+    page_ctr = Point(
+        pw / 2,
+        (PAGE_MARGIN_MM + (ph - TITLE_BLOCK_KEEPOUT_MM)) / 2,
+    )
     content_ctr = Point(
         (page_bbox.ll.x + page_bbox.ur.x) / 2,
         (page_bbox.ll.y + page_bbox.ur.y) / 2,
