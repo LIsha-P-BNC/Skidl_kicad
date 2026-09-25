@@ -176,10 +176,55 @@ def is_decoupling_cap(part):
     return bool(_DECAP_VALUE_RE.match(value))
 
 
+# Placement pulls a cap tight to its IC over any POWER rail they share, so
+# a 100nF HF bypass is not the only cap that belongs beside the part: the
+# 1u/10u/22u bulk/reservoir caps on the same VCC (AMS1117 in/out, an MCU
+# rail) want the short loop just as much. is_decoupling_cap stays the strict
+# ~100nF test for the schematic wire/label decision; placement uses this
+# broader value window instead. The find_decap_affinities safety still holds
+# -- a cap is pulled in ONLY when it sits on a power net shared with an
+# anchor IC, so a bulk cap off on some non-rail node is never snapped.
+_BYPASS_CAP_MIN_F = 1e-10   # 100 pF
+_BYPASS_CAP_MAX_F = 1e-4    # 100 uF
+_CAP_FARAD_RE = re.compile(r"^([\d.]+)([pnuµm]?)f?$", re.IGNORECASE)
+_CAP_FARAD_MULT = {"p": 1e-12, "n": 1e-9, "u": 1e-6, "µ": 1e-6, "m": 1e-3}
+
+
+def _cap_farads(part):
+    """Capacitance of a cap part's value ("100nF", "10u", "22uF") in farads,
+    or None when unparseable or the unit is ambiguous (a bare number)."""
+    value = str(getattr(part, "value", "") or "").strip().replace(" ", "")
+    m = _CAP_FARAD_RE.match(value)
+    if not m:
+        return None
+    try:
+        num = float(m.group(1))
+    except ValueError:
+        return None
+    mult = _CAP_FARAD_MULT.get(m.group(2).lower())
+    if mult is None:
+        return None    # bare number -> ambiguous unit, do not guess
+    return num * mult
+
+
+@export_to_all
+def is_power_bypass_cap(part):
+    """A 2-pin "C" part whose value lands in the bypass/bulk window
+    (100pF..100uF). Broader than :func:`is_decoupling_cap` (strict ~100nF);
+    used ONLY for placement affinity (:func:`find_decap_affinities`), which
+    additionally requires a shared power net to an anchor IC."""
+    if (getattr(part, "ref_prefix", "") or "").upper() != _DECAP_REF_PREFIX:
+        return False
+    if len(getattr(part, "pins", [])) != 2:
+        return False
+    f = _cap_farads(part)
+    return f is not None and _BYPASS_CAP_MIN_F <= f <= _BYPASS_CAP_MAX_F
+
+
 @export_to_all
 def find_decap_affinities(parts):
     """
-    Find nets that directly link a decoupling cap to an IC's power pin.
+    Find nets that directly link a bypass/bulk cap to an IC's power pin.
 
     Args:
         parts (list): Parts to inspect.
@@ -190,7 +235,7 @@ def find_decap_affinities(parts):
     """
     affinities = {}
     for part in parts:
-        if not is_decoupling_cap(part):
+        if not is_power_bypass_cap(part):
             continue
         for pin in part.pins:
             net = getattr(pin, "net", None)
