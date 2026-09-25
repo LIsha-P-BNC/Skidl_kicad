@@ -242,13 +242,36 @@ def _workflow_gate(base: str, code: str, confirm: bool):
     # plan/confirm gate: NEW project must have a user-approved plan.
     plan = _plan_load(base)
     if not plan:
+        # The per-turn server process is recreated every message, so a plan the
+        # AI presented to the user LAST turn but never persisted via mode='plan'
+        # has vanished by the time the user approves and this build arrives.
+        # confirm=True IS the user's approval (that is exactly what this gate's
+        # contract defines it to mean). Do NOT bounce the user back to
+        # re-register a plan they already saw and approved -- that is the loop
+        # that made the AI keep asking "no project on disk, start new?" forever.
+        # Auto-register the plan (synthesized from the confirmed body) and let
+        # the build proceed. With confirm=False there is genuinely no approval
+        # yet, so we still refuse and steer the AI to show a plan first.
+        if confirm:
+            _plan_save(base, {"plan": "(auto-registered on confirm=True: the "
+                                      "plan was shown to the user in-chat and "
+                                      "approved, but was not persisted via "
+                                      "mode='plan' before the per-turn server "
+                                      "restart)",
+                              "confirmed": True})
+            return None
         return {"ok": False, "status": "workflow_gate",
                 "error": "no design plan registered for this project. Call "
                          "build(name, mode='plan', code=<short human-readable "
-                         "plan: blocks, chosen parts + values, and any "
+                         "plan: the PROJECT NAME + folder that will be created, "
+                         "blocks, chosen parts + values, and any "
                          "user-input questions with their answers>), SHOW that "
                          "plan to the user, and only after the user explicitly "
-                         "approves call build again with confirm=True."}
+                         "approves call build again with confirm=True. If you "
+                         "ALREADY showed the user a plan earlier in THIS "
+                         "conversation and they approved it, that approval "
+                         "stands -- just call build(..., confirm=True) now; do "
+                         "NOT re-ask the user or claim the project is missing."}
     if not confirm and not plan.get("confirmed"):
         return {"ok": False, "status": "workflow_gate",
                 "error": "the registered plan has not been confirmed. Present "
@@ -295,6 +318,14 @@ server = FastMCP(
         "parts that are already placed is wrong even if this conversation has no "
         "memory of placing them -- the project on disk is the memory. Start the full "
         "workflow only for a genuinely NEW, unrelated design.\n"
+        "PRECEDENCE: 'open in the window' is only a hint for the FIRST message of a "
+        "conversation. Once THIS conversation has named or confirmed a design (e.g. "
+        "the user approved a new project's plan), every follow-up turn -- clicked "
+        "choice buttons included, such as adding a missing library part 'then build' "
+        "-- targets THAT conversation's project, even if a DIFFERENT project is "
+        "currently open in the app window. NEVER redirect a confirmed new design "
+        "into the unrelated open project, never adopt or rebuild the open project "
+        "because it happens to be on screen.\n"
         "HARD RULES -- these hold for EVERY circuit, no exceptions:\n"
         "0. BRANDING: the application is 'Anvil CAD' -- its schematic editor, "
         "PCB editor, libraries, files and API bridge are ALL Anvil CAD. NEVER "
@@ -367,13 +398,41 @@ server = FastMCP(
         "until (a) build(mode='rules') was called this session, (b) every IC/"
         "non-primitive part in the body was parts(action='describe')d, and "
         "(c) a plan was registered via build(mode='plan', code=<short plan: "
-        "blocks, parts+values, user questions+answers>), SHOWN to the user, "
+        "PROJECT NAME + folder to be created, blocks, parts+values, user "
+        "questions+answers>), SHOWN to the user, "
         "and the user explicitly approved -- then build with confirm=True. "
+        "ALWAYS call build(mode='plan') at the SAME time you present the plan "
+        "to the user (it persists the plan to disk); the in-app server process "
+        "restarts every message, so a plan you only wrote in chat is GONE by "
+        "the time the user approves. When the user then approves (a button "
+        "click or 'yes'/'ok'/'build it'), that approval is FINAL: immediately "
+        "call build(..., confirm=True) to build. Do NOT re-check whether the "
+        "project is on disk, do NOT re-run get_app_state to 'verify', and NEVER "
+        "reply 'no such project / did you mean to start a new design?' for a "
+        "design you yourself planned earlier in THIS conversation -- the plan "
+        "you showed IS the project; approving it means build it now. "
         "A build refused with status 'workflow_gate' means you skipped one of "
         "these steps; do the step it names, never work around it. NEVER pass "
         "confirm=True unless the user actually approved the plan. Extending "
         "an existing project skips the plan step but still requires describe "
         "for new parts.\n"
+        "11. LANGUAGE: always reply in the same language/style the user writes "
+        "in -- English gets English, Tamil gets Tamil, Tanglish (Tamil words "
+        "in Latin script) gets Tanglish, any other language likewise. Mirror "
+        "their mix naturally; keep technical terms (part numbers, net names, "
+        "file paths, tool output) in English within that reply. If the user "
+        "switches language mid-conversation, switch with them.\n"
+        "12. SPEED -- BATCH EVERY TOOL CALL: parts(action='search') and "
+        "parts(action='describe') both take a LIST in items -- ALWAYS collect "
+        "every part the design needs and make ONE search call and ONE describe "
+        "call for the whole design (or whole sheet), NEVER one call per part. "
+        "Every extra round trip replays the full conversation (including any "
+        "attached page images) to the model, so per-part calls make a big "
+        "design take 10x longer. Likewise read each PDF page image ONCE -- "
+        "transcribe it fully on first read and work from your transcription; "
+        "never re-read pages you already transcribed this conversation. For a "
+        "multi-sheet source document, prefer building SHEET BY SHEET (offer "
+        "sheet 1 first) so each turn stays short and the user sees progress.\n"
         "Do not design circuits by hand when these tools are available."
     ),
 )
@@ -2234,12 +2293,12 @@ def _instance_symbol_spans(text: str) -> list:
 
 def _backup_file(f: Path) -> str:
     """Copy f to f.<n>.bak (never clobbering) before we mutate it."""
+    import shutil
     i = 1
     while (f.parent / f"{f.name}.{i}.bak").exists():
         i += 1
     bak = f.parent / f"{f.name}.{i}.bak"
-    bak.write_text(f.read_text(encoding="utf-8", errors="replace"),
-                   encoding="utf-8")
+    shutil.copy2(f, bak)        # byte-perfect copy, mtime preserved
     return bak.name
 
 
@@ -2308,6 +2367,8 @@ def edit_schematic(name: str, op: str, ref: str = "", value: str = "",
     #      We locate the exact byte span and change only that, leaving the rest
     #      of the user's file identical. ----------------------------------
     changed_file = None
+    changed_files = []          # rename_net can touch several sheets
+    total_renamed = 0
     detail = {}
     for f in files:
         text = f.read_text(encoding="utf-8", errors="replace")
@@ -2339,9 +2400,11 @@ def edit_schematic(name: str, op: str, ref: str = "", value: str = "",
         elif op == "rename_net":
             pat = re.compile(r'(\((?:%s) ")%s(")' %
                              ("|".join(_LABEL_TAGS), re.escape(net)))
-            new_text, cnt = pat.subn(r"\g<1>" + new_name + r"\g<2>", text)
+            # lambda replacement: new_name is literal text, never regex escapes
+            new_text, cnt = pat.subn(
+                lambda m: m.group(1) + new_name + m.group(2), text)
             if cnt:
-                detail = {"net": net, "new_name": new_name, "labels_renamed": cnt}
+                total_renamed += cnt
                 out = new_text
 
         if out is not None:
@@ -2353,8 +2416,17 @@ def edit_schematic(name: str, op: str, ref: str = "", value: str = "",
             bak = _backup_file(f)
             f.write_text(out, encoding="utf-8")
             changed_file = f
+            changed_files.append({"file": f.name, "backup": bak})
             detail["backup"] = bak
-            break
+            if op != "rename_net":
+                break               # ref is unique -- done
+            # rename_net: keep going so the label is renamed on EVERY sheet,
+            # otherwise a cross-sheet net would split in two.
+
+    if op == "rename_net" and changed_files:
+        detail = {"net": net, "new_name": new_name,
+                  "labels_renamed": total_renamed,
+                  "files_changed": changed_files}
 
     if changed_file is None:
         if op in ("set_value", "delete_part"):
@@ -4966,11 +5038,14 @@ _LIVE_PORT = int(os.environ.get("ANVIL_MCP_PORT", "5571"))
 _LIVE_SCH_OPS = {
     "add_component", "add_wire", "add_label", "add_junction", "add_no_connect",
     "edit_value", "move_component", "delete_component", "delete_at", "snap_to_grid",
-    "annotate",
+    "annotate", "rotate_component", "set_property", "replace_part", "query_net",
+    "label_to_wire", "wire_to_label",
 }
 _LIVE_PCB_OPS = {
     "add_footprint", "move_footprint", "add_track", "add_via", "delete_track_at",
-    "set_text_variable", "capture_footprints",
+    "set_text_variable", "capture_footprints", "delete_footprint",
+    "change_footprint", "pack_footprints", "add_zone", "draw_board_outline",
+    "add_text", "ripup_net", "net_lengths",
 }
 
 
@@ -5060,7 +5135,16 @@ def edit_schematic_live(ops: list) -> dict:
     """Batch-edit the OPEN schematic in the running Anvil CAD app. ops = ORDERED list,
     each {"op": <name>, ...params} with op one of: add_component, add_wire, add_label,
     add_junction, add_no_connect, edit_value, move_component, delete_component,
-    delete_at, snap_to_grid, annotate. One user request with several changes = ONE call
+    delete_at, snap_to_grid, annotate, rotate_component (ref + angle_deg 0/90/180/270 +
+    optional mirror 'x'/'y'), set_property (ref + name + value + optional visible --
+    Footprint/MPN/Tolerance/any field), replace_part (ref + new lib_id + optional value --
+    swap the symbol keeping position/wires; verify pins after), query_net (read-only:
+    'net' name -> every pin on it across sheets, or 'reference' -> each pin's net --
+    answers "what is connected here?"), label_to_wire (net + optional keep_labels --
+    join same-named labels on the current sheet with real drawn wires), wire_to_label
+    (net -- remove its drawn wires on the current sheet, label every pin instead; the
+    "clean it up" request). Run ERC after either conversion. One user request with
+    several changes = ONE call
     with several ops (never one call per op). Params pass straight to the editor (e.g.
     add_component: lib_id/ref/value/x/y in mils; edit_value: ref+value; add_wire:
     x1/y1/x2/y2). Returns per-op ok/message so partial success is visible."""
@@ -5071,7 +5155,16 @@ def edit_schematic_live(ops: list) -> dict:
 def edit_board_live(ops: list) -> dict:
     """Batch-edit the OPEN board in the running Anvil CAD app. ops = ORDERED list, each
     {"op": <name>, ...params} with op one of: add_footprint, move_footprint, add_track,
-    add_via, delete_track_at, set_text_variable, capture_footprints. One call per user
+    add_via, delete_track_at, delete_footprint (by 'reference'), change_footprint
+    (reference + new 'fpid' -- swap package, keeps position/nets), pack_footprints
+    (optional refs[]/gap_mils/columns/x_mils/y_mils -- re-place parts in a tight grid
+    to reduce spacing), add_zone (points[]/rect + layer + net -- filled copper pour),
+    draw_board_outline (rect or points on Edge.Cuts; replace=true redraws), add_text
+    (text + x/y + layer default F.SilkS + size_mils), ripup_net (net -- delete all its
+    tracks/vias), net_lengths (read-only: routed vs straight length + detour_ratio per
+    net, sorted longest first -- answers "which connection is too long"; shorten =
+    ripup_net then reroute), set_text_variable, capture_footprints. move/delete_footprint
+    replies name the routed nets the edit affects. One call per user
     request; per-op results returned."""
     return _live_run_ops( ops, _LIVE_PCB_OPS, "board" )
 
@@ -5091,7 +5184,11 @@ def check_live(target: str = "erc", name: str = "") -> dict:
     if res.get( "ok" ):
         res["source"] = "live_editor"
         return res
-    if res.get( "not_reachable" ) and name:
+    # Fall back to the saved file not only when the app is unreachable, but also
+    # when the app answered "no schematic/PCB editor is open" -- either way the
+    # live engine cannot run, and a saved-file check is the honest next-best.
+    no_editor = "editor is open" in str( res.get( "message", "" ) )
+    if ( res.get( "not_reachable" ) or no_editor ) and name:
         base = _safe_name( name )
         if tool == "run_erc":
             sch = pdir( base ) / ( base + ".anvil_sch" )
@@ -5107,7 +5204,7 @@ def check_live(target: str = "erc", name: str = "") -> dict:
             out = _board_drc_gate( pcb )
             out["ok"] = bool( out.get( "drc_parsed" ) )
         out["source"] = "saved_file"
-        out["source_note"] = ( "app not open -- real engine run on the saved file; "
+        out["source_note"] = ( "live editor not available -- real engine run on the saved file; "
                                "settings honored as of last project save" )
         return out
     return res
