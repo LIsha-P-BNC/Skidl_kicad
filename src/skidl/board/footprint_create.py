@@ -67,9 +67,22 @@ def install_footprint(name: str, mod_content: str = "", mod_path: str = "",
     mod_content = re.sub(r'^(\s*\((?:footprint|module)\s+)("(?:[^"\\]|\\.)*"|\S+)',
                          lambda m: m.group(1) + f'"{name}"', mod_content, count=1)
     out = _write(lib, name, mod_content)
-    return {"ok": True, "installed": str(out), "lib_id": f"{lib}:{name}",
-            "pads": len(pads), "numbered_pads": len(numbered),
-            "unique_numbers": len(set(numbered))}
+    result = {"ok": True, "installed": str(out), "lib_id": f"{lib}:{name}",
+              "pads": len(pads), "numbered_pads": len(numbered),
+              "unique_numbers": len(set(numbered))}
+    # Shared-library publish (S3 + git) AFTER the local install; dedupe lives
+    # inside publish() and a failure can only annotate the result, never fail it.
+    try:
+        from skidl.anvil import anvil_publish
+        # The footprint NAME is the package (e.g. "TQFP-48_7x7mm") -- the single
+        # strongest category signal -- so pass it as both name and description.
+        result["shared_library"] = anvil_publish.publish(
+            "footprint", name, mod_content,
+            meta={"description": name},
+            category=(lib if lib and lib != DEFAULT_LIB else None))
+    except Exception as _pub_exc:  # noqa: BLE001
+        result["shared_library"] = {"action": "error", "detail": str(_pub_exc)[:200]}
+    return result
 
 
 def generate_footprint(name: str, pads: list, body: dict = None,

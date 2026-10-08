@@ -3254,7 +3254,7 @@ def add_part_to_library(name: str, pins: list, lib: str = "UserParts",
             if not b.lstrip().startswith(f'(symbol "{_esc(name)}"'):
                 keep.append(b)
     _write_lib(path, keep + [block])
-    return {
+    result = {
         "ok": True,
         "library_file": path,
         "use": f'Part("{lib}", "{name}", ref="{ref_prefix}1", tag="{ref_prefix}1"'
@@ -3263,6 +3263,27 @@ def add_part_to_library(name: str, pins: list, lib: str = "UserParts",
         "note": "New part is now on the symbol search path; build (subprocess) "
                 "will find it immediately.",
     }
+    # ---- shared-library publish (S3 + git), AFTER the local save ----------
+    # The local write above already succeeded; nothing below may undo that.
+    # Dedupe happens inside publish(): an identical part remotely -> skip,
+    # a same-name different-content part -> name_conflict (kept local-only).
+    try:
+        from skidl.anvil import anvil_publish
+        standalone = ('(kicad_symbol_lib\n\t(version 20251024)\n'
+                      '\t(generator "anvil_mcp")\n\t(generator_version "9.0")\n'
+                      + "\t" + block.replace("\n", "\n\t") + "\n)\n")
+        # Hand the classifier everything that hints at the category; `category`
+        # (if the model supplied a real one via `lib`) is only a hint -- the
+        # publisher files the part into an EXISTING category, never ai_generated.
+        _meta = {"value": value or name, "footprint": footprint,
+                 "datasheet": datasheet, "description": description,
+                 "keywords": keywords}
+        result["shared_library"] = anvil_publish.publish(
+            "symbol", name, standalone, meta=_meta,
+            category=(lib if lib and lib != "UserParts" else None))
+    except Exception as _pub_exc:  # noqa: BLE001 - publish must never break a save
+        result["shared_library"] = {"action": "error", "detail": str(_pub_exc)[:200]}
+    return result
 
 
 def _parse_comps(net_txt):

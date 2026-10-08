@@ -125,9 +125,12 @@ def _extract_symbols(txt):
 
 
 def _flatten_symdir(symdir, out_file):
-    """Merge <Lib>.kicad_symdir/*.kicad_sym (one symbol each) into one library file."""
+    """Merge <Lib>.kicad_symdir/*.anvil_sym|*.kicad_sym (one symbol each) into one
+    library file. The app saves native .anvil_sym; older files may be .kicad_sym."""
     blocks = []
-    for f in sorted(glob.glob(os.path.join(symdir, "*.kicad_sym"))):
+    files = sorted(glob.glob(os.path.join(symdir, "*.anvil_sym"))
+                   + glob.glob(os.path.join(symdir, "*.kicad_sym")))
+    for f in files:
         try:
             with open(f, encoding="utf-8", errors="replace") as fh:
                 blocks.extend(_extract_symbols(fh.read()))
