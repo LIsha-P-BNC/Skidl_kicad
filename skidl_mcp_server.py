@@ -374,6 +374,26 @@ server = FastMCP(
         "confirm=True unless the user actually approved the plan. Extending "
         "an existing project skips the plan step but still requires describe "
         "for new parts.\n"
+        "11. TEAM DESIGN SKILLS (shared memory): when the USER states a "
+        "lasting design preference, technique, part choice, placement or "
+        "routing rule -- or corrects you in a way that should hold for future "
+        "designs -- call skill(action='save', text=<one-line skill>, "
+        "quote=<the user's own verbatim words>, category=...). Save ONLY what "
+        "the user themself said: never your own suggestions, defaults, or "
+        "inferences, and never one-off project-specific values; the server "
+        "REJECTS a save whose quote is not found in the user's own messages. "
+        "If a statement contradicts a stored skill, save the new one with "
+        "supersedes=<its id from skill(action='list')>. If the user asks what "
+        "the team memory knows, call skill(action='list') and show it; to "
+        "forget one on request, skill(action='delete', skill_id=...). Stored "
+        "skills are injected into your instructions as TEAM DESIGN SKILLS -- "
+        "they are SUGGESTIONS to offer, never decisions to apply silently: "
+        "before a stored skill picks a part, topology, layer count, package "
+        "size, or routing value for the CURRENT project, present it as the "
+        "team default alongside alternatives (choice buttons) and design from "
+        "the user's answer; name every applied skill in the build(mode='plan') "
+        "text so the user approves them with the plan. Anything the user says "
+        "in the current conversation always overrides a stored skill.\n"
         "Do not design circuits by hand when these tools are available."
     ),
 )
@@ -4991,7 +5011,7 @@ _LIVE_SCH_OPS = {
 }
 _LIVE_PCB_OPS = {
     "add_footprint", "move_footprint", "add_track", "add_via", "delete_track_at",
-    "set_text_variable", "capture_footprints",
+    "set_track_width", "set_text_variable", "capture_footprints",
 }
 
 
@@ -5067,13 +5087,17 @@ def _live_run_ops(ops, allowed: set, side: str) -> dict:
 
 
 @server.tool()
-def read_live(target: str = "schematic") -> dict:
+def read_live(target: str = "schematic", include_tracks: bool = False) -> dict:
     """LIVE state of the OPEN editor in the running Anvil CAD app (NOT files on disk).
     target='schematic' (components/nets of the open schematic) or 'board' (footprints/
-    tracks of the open board). The in-app chat connects automatically; an external MCP
-    client must start its own AnvilCAD MCP session."""
-    tool = "get_board" if str( target ).lower().startswith( "b" ) else "get_schematic"
-    return _live_call( tool, {} )
+    tracks of the open board). include_tracks=True (board only) adds a per-segment dump
+    (start/end/layer/width_mils/net) -- use it to verify set_track_width/delete_track_at
+    edits. The in-app chat connects automatically; an external MCP client must start its
+    own AnvilCAD MCP session."""
+    if str( target ).lower().startswith( "b" ):
+        return _live_call( "get_board", { "include_tracks": bool( include_tracks ) } )
+
+    return _live_call( "get_schematic", {} )
 
 
 @server.tool()
@@ -5092,8 +5116,13 @@ def edit_schematic_live(ops: list) -> dict:
 def edit_board_live(ops: list) -> dict:
     """Batch-edit the OPEN board in the running Anvil CAD app. ops = ORDERED list, each
     {"op": <name>, ...params} with op one of: add_footprint, move_footprint, add_track,
-    add_via, delete_track_at, set_text_variable, capture_footprints. One call per user
-    request; per-op results returned."""
+    add_via, delete_track_at, set_track_width, set_text_variable, capture_footprints.
+    All positions/sizes are MILS. delete_track_at and set_track_width take x_mils/y_mils
+    of ANY point on the track's copper (not just an endpoint), optional radius_mils
+    (default 20) and optional case-insensitive layer (omit = all layers); on a miss the
+    error names the nearest candidate's layer and distance. set_track_width also needs
+    width_mils and edits tracks only (not vias). One call per user request; per-op
+    results returned."""
     return _live_run_ops( ops, _LIVE_PCB_OPS, "board" )
 
 
@@ -5134,6 +5163,76 @@ def check_live(target: str = "erc", name: str = "") -> dict:
     return res
 
 
+_SKILLS_MOD = None
+
+
+def _skills_mod():
+    """Import the shared skill store lazily; None when unavailable (external
+    MCP clients without the in-app env, or a broken payload). Loaded straight
+    from its file: anvil_skills.py is stdlib-only, and going through the skidl
+    package would drag in graphviz etc. just to touch team memory."""
+    global _SKILLS_MOD
+    if not os.environ.get("ANVIL_SKILLS_DIR"):
+        return None
+    if _SKILLS_MOD is not None:
+        return _SKILLS_MOD
+    try:
+        import importlib.util
+        path = SRC / "skidl" / "anvil" / "anvil_skills.py"
+        spec = importlib.util.spec_from_file_location("anvil_skills", str(path))
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        _SKILLS_MOD = mod
+        return mod
+    except Exception:  # noqa: BLE001 - skills must never break the server
+        return None
+
+
+@server.tool()
+@_quiet
+def skill(action: str, text: str = "", quote: str = "", category: str = "other",
+          skill_id: str = "", supersedes: str = "", confirm: bool = False) -> dict:
+    """Shared TEAM memory of design skills USERS stated in chat (synced to the
+    company S3 file every machine pulls at app start). actions:
+      save   -- store a skill the USER stated. Requires text (one-line rule) and
+                quote (the user's OWN verbatim words from THIS conversation --
+                the server rejects quotes not found in the user's messages, so
+                never save your own suggestions). category: circuit|parts|
+                placement|routing|power|workflow|other. supersedes=<id> archives
+                a contradicted skill. confirm=True only when the user explicitly
+                asked to remember it. An equivalent skill already on the server
+                is NOT duplicated -- its evidence_count is bumped instead.
+                Save promptly, in the same turn the user says it.
+      list   -- active skills with ids/status/evidence (confirm=True includes
+                archived ones).
+      update -- edit text/category by skill_id (new text needs a new quote).
+      delete -- forget one skill by skill_id (tombstoned). Ask the user before
+                deleting anything they did not explicitly ask to forget."""
+    mod = _skills_mod()
+    if mod is None:
+        return {"ok": False, "error": "skills not available in this session "
+                                      "(in-app Anvil CAD chat only)"}
+    act = str(action).strip().lower()
+    try:
+        if act == "save":
+            return mod.save_skill(text, quote, category=category,
+                                  supersedes=supersedes, confirm=confirm)
+        if act == "list":
+            return mod.list_skills(include_archived=confirm)
+        if act == "update":
+            return mod.update_skill(skill_id, text=text, quote=quote,
+                                    category=category)
+        if act == "delete":
+            if not skill_id:
+                return {"ok": False, "error": "delete needs skill_id "
+                                              "(get it from action='list')"}
+            return mod.delete_skill(skill_id)
+        return {"ok": False,
+                "error": "unknown action '%s' (save|list|update|delete)" % action}
+    except Exception as e:  # noqa: BLE001 - memory must never break a turn
+        return {"ok": False, "error": str(e)[:300]}
+
+
 @server.tool()
 def autoroute_live() -> dict:
     """Autoroute the board OPEN in the running Anvil CAD app, using the SAME bundled
@@ -5146,4 +5245,15 @@ def autoroute_live() -> dict:
 
 
 if __name__ == "__main__":
+    # Retry any skill pushes that were queued while offline / without creds.
+    # Cheap when the outbox is empty (one dir listing); network only when
+    # something is actually queued. stdout is the JSON-RPC channel -- keep it
+    # clean (same reason as _quiet).
+    try:
+        _mod = _skills_mod()
+        if _mod is not None:
+            with contextlib.redirect_stdout(sys.stderr):
+                _mod.drain_outbox()
+    except Exception:  # noqa: BLE001 - never block server start on memory
+        pass
     server.run()
