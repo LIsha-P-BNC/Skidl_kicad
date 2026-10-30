@@ -42,6 +42,43 @@ def _board_plot_prefs(pcb_path: Path) -> dict:
     return prefs
 
 
+def _fab_gerber_layers(pcb_path: Path) -> list:
+    """The layers a FAB needs, derived from the board's OWN copper stackup --
+    never the board's (layerselection ...) bitmask.
+
+    WHY: a machine-generated board carries a stale template layerselection that
+    plots the WRONG set (measured: it dropped Edge.Cuts + silkscreen and added
+    non-fab B/F_Adhesive + B/F_Courtyard). A gerber set with NO Edge.Cuts has no
+    board outline -- a fab cannot make the board, yet the export still reports
+    "ok" (a SILENT defect on EVERY board). So we always plot: every copper layer
+    the stackup actually has (F/In*/B) + the standard technical layers + the
+    mandatory Edge.Cuts. Dynamic over any layer count; empty silk/paste layers
+    export as harmless empty gerbers."""
+    import re as _re
+    copper = ["F.Cu", "B.Cu"]
+    try:
+        txt = pcb_path.read_text(encoding="utf-8", errors="replace")
+        m = _re.search(r"\(layers\b(.*?)\n\s*\)", txt, _re.S)
+        blk = m.group(1) if m else txt
+        found = _re.findall(r'"([A-Za-z0-9]+\.Cu)"', blk)
+        # F.Cu first, inner layers in order, B.Cu last -- the physical stack.
+        inner = [l for l in dict.fromkeys(found) if l not in ("F.Cu", "B.Cu")]
+        def _ord(l):
+            mm = _re.search(r"In(\d+)", l)
+            return int(mm.group(1)) if mm else 0
+        copper = (["F.Cu"] if "F.Cu" in found else []) \
+            + sorted(inner, key=_ord) \
+            + (["B.Cu"] if "B.Cu" in found else [])
+        if not copper:
+            copper = ["F.Cu", "B.Cu"]
+    except OSError:
+        pass
+    # Standard fab technical layers + the MANDATORY board outline.
+    tech = ["F.Mask", "B.Mask", "F.SilkS", "B.SilkS", "F.Paste", "B.Paste",
+            "Edge.Cuts"]
+    return copper + tech
+
+
 def export_manufacturing(pcb_path: Path, kicad_cli: str,
                           formats: list = None) -> dict:
     """Export fab files next to the board into <name>_fab/ and zip them
@@ -52,6 +89,18 @@ def export_manufacturing(pcb_path: Path, kicad_cli: str,
     pcb_path = Path(pcb_path)
     base = pcb_path.stem
     fab_dir = pcb_path.parent / f"{base}_fab"
+    # CLEAR stale outputs first: kicad-cli writes new files but never deletes
+    # old ones, so a re-export after a layer/stackup change would SHIP the stale
+    # gerbers alongside the new (measured: buck kept B_Adhesive/B_Courtyard from
+    # an earlier wrong export). The zip is the whole dir -> it must hold ONLY
+    # this run's files.
+    if fab_dir.exists():
+        for _f in fab_dir.iterdir():
+            if _f.is_file():
+                try:
+                    _f.unlink()
+                except OSError:
+                    pass
     fab_dir.mkdir(exist_ok=True)
     formats = formats or ["gerbers", "drill", "pos"]
     prefs = _board_plot_prefs(pcb_path)
@@ -80,13 +129,19 @@ def export_manufacturing(pcb_path: Path, kicad_cli: str,
                                 txt), encoding="utf-8")
                     notes["drill_marks"] = ("disabled in fab gerbers "
                                             "(board file untouched)")
+            # ALWAYS plot an explicit fab layer set derived from the board's own
+            # copper stackup -- NOT the board's (layerselection) bitmask, and
+            # NOT --board-plot-params (which RE-APPLIES that bitmask and so
+            # overrides --layers -- measured: buck's template bitmask dropped
+            # Edge.Cuts even WITH --layers present). A machine board's stale
+            # bitmask omits the outline (unmanufacturable) yet still reports
+            # "ok" -- a SILENT defect. --layers guarantees outline + standard
+            # set on every board. Origin stays consistent with the drill/pos
+            # files because our boards carry aux_axis_origin (0 0).
             cmd = [kicad_cli, "pcb", "export", "gerbers",
-                   "--output", str(fab_dir) + "/"]
-            if prefs["has_plot_params"]:
-                # the user's own Plot dialog settings (layers, format
-                # options, origin) exactly as saved in the board
-                cmd.append("--board-plot-params")
-            cmd.append(str(gerber_src))
+                   "--output", str(fab_dir) + "/",
+                   "--layers", ",".join(_fab_gerber_layers(pcb_path)),
+                   str(gerber_src)]
         elif fmt == "drill":
             cmd = [kicad_cli, "pcb", "export", "drill",
                    "--output", str(fab_dir) + "/",

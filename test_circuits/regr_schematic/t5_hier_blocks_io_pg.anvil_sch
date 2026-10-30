@@ -6,7 +6,7 @@
   (paper "A4")
   (title_block
     (title "SKiDL-Generated Schematic")
-    (date "2026-09-17")
+    (date "2026-10-14")
     (rev A)
     (company "BNC Energy")
     (comment 1 "Engineer: Anvil AI")
@@ -825,13 +825,11 @@
     (dnp no)
     (fields_autoplaced yes)
     (uuid d46b87cf-4363-5b96-b1f3-a7b358acabee)
-    (property "Reference" "R2"
-      (at 114.3 106.67999999999999 0)
+    (property "Reference" "R2" (at 118.11 106.67999999999999 0)
       (effects
         (font
           (size 1.27 1.27))))
-    (property "Value" "300"
-      (at 114.3 111.76 0)
+    (property "Value" "300" (at 118.11 111.76 0)
       (effects
         (font
           (size 1.27 1.27))))
@@ -1007,13 +1005,11 @@
     (dnp no)
     (fields_autoplaced yes)
     (uuid 03ac2ef0-20bb-53c6-b5a0-110c79088e44)
-    (property "Reference" "J2"
-      (at 163.83 106.67999999999999 90)
+    (property "Reference" "J2" (at 163.83 102.87 90)
       (effects
         (font
           (size 1.27 1.27))))
-    (property "Value" "3V3_OUT"
-      (at 163.83 111.76 90)
+    (property "Value" "3V3_OUT" (at 163.83 118.11 90)
       (effects
         (font
           (size 1.27 1.27))))
@@ -1056,13 +1052,11 @@
     (dnp no)
     (fields_autoplaced yes)
     (uuid 0591c62c-14a2-568f-ac26-f553dc54307d)
-    (property "Reference" "C4"
-      (at 173.99 97.78999999999999 0)
+    (property "Reference" "C4" (at 177.8 97.78999999999999 0)
       (effects
         (font
           (size 1.27 1.27))))
-    (property "Value" "100nF/50V"
-      (at 173.99 102.87 0)
+    (property "Value" "100nF/50V" (at 177.8 102.87 0)
       (effects
         (font
           (size 1.27 1.27))))

@@ -28,6 +28,31 @@ from skidl.geometry import BBox, Point, Segment, Tx, Vector, tx_rot_90
 
 __all__ = ["RoutingFailure", "GlobalRoutingFailure", "SwitchboxRoutingFailure"]
 
+# KNOWN GAP (documented 2026-10, bms_1s audit) -- WIRE OVER SYMBOL BODY /
+# WIRE THROUGH AN NC'D PIN:
+# The switchbox router routes in the channels BETWEEN part bboxes (each part
+# bbox edge becomes a track, see overview below), so its own wires avoid
+# bodies. But two later stages can still draw copper across a body or across
+# a no-connect-marked pin stub:
+#   1. Power stubs / label exits added in
+#      skidl/tools/kicad8/sexp_schematic.py (_power_symbol_to_sexp and
+#      net_label_to_sexp) are straight one-segment extensions from the pin;
+#      they know about OTHER stubs (collinear clamp) but NOT about part
+#      bodies or foreign NC pin stubs on the same row (seen: GND wire through
+#      Q1 pin 8's NC cross on the bms_1s PROTECTION block).
+#   2. The post passes skidl/anvil/beautify_wires.py and normalize_exits.py
+#      move/merge wire segments with no body-bbox test.
+# A robust fix is a POST-ROUTE pass over the finished .anvil_sch: build each
+# placed symbol's world body bbox from its lib_symbols rectangle (the exact
+# transform already exists in skidl/anvil/fix_ic_text.py:_lib_bodies/fix),
+# find wire segments whose interior crosses a bbox (excluding segments that
+# terminate on that symbol's own pins), and reroute the offending segment
+# around the bbox with two extra jogs, then re-run the connectivity guard
+# (skidl/anvil/verify_connectivity.py) and revert on any diff. NOT implemented
+# here: rerouting inside the flat file without the router's track/face model
+# can collide with other wires/labels and needs its own clearance search --
+# too risky for a spot fix (see WIRE_LABEL_RULES.md).
+
 
 ###################################################################
 #
@@ -1696,15 +1721,25 @@ class SwitchBox:
             multi_nets.discard(None)  # Ignore empty tracks.
 
             # Find possible intervals for multi-track nets.
+            # Sorted net iteration (determinism): multi_nets is a SET of Net
+            # objects, which iterates in id()/memory order -- varying per
+            # process. The first-fit connection loop below keeps whichever
+            # interval it sees first among equal-length candidates, so an
+            # unstable order here routes the same column differently between
+            # identical builds (measured on holdout_can_node: wire paths and
+            # crossing counts flipped run-to-run with placement identical).
             net_intervals = []
-            for net in multi_nets:
+            for net in sorted(multi_nets, key=lambda n: str(n.name)):
                 net_trk_idxs = [idx for idx, nt in enumerate(track_nets) if nt is net]
                 for index, trk1 in enumerate(net_trk_idxs[:-1], 1):
                     for trk2 in net_trk_idxs[index:]:
                         net_intervals.append(NetInterval(net, trk1, trk2))
 
-            # Sort interval lengths from smallest to largest.
-            net_intervals.sort(key=lambda ni: len(ni))
+            # Sort interval lengths from smallest to largest, with full
+            # deterministic tie-breaks (net name, then track span) so
+            # equal-length intervals never fall back to arrival order.
+            net_intervals.sort(
+                key=lambda ni: (len(ni), str(ni.net.name), ni.beg, ni.end))
             # Sort interval lengths from largest to smallest.
             # net_intervals.sort(key=lambda ni: -len(ni))
 
@@ -1719,7 +1754,11 @@ class SwitchBox:
                     column.append(net_interval)
 
             # Get the nets that have vertical wires in the column.
-            column_nets = set(intvl.net for intvl in column)
+            # Sorted iteration (determinism): this loop REMOVES and EXTENDS
+            # entries of `column`, so iterating the net SET in id() order
+            # changes the final column list order between identical builds.
+            column_nets = sorted(set(intvl.net for intvl in column),
+                                 key=lambda n: str(n.name))
 
             # Merge segments of each net in the column.
             for net in column_nets:
@@ -1777,7 +1816,9 @@ class SwitchBox:
             # or if there are terminals in rightward columns that need connections to this net.
             first_track = 0
             last_track = len(track_nets) - 1
-            column_nets = set([intvl.net for intvl in column])
+            # Sorted for the same determinism reason as connect_splits above.
+            column_nets = sorted(set(intvl.net for intvl in column),
+                                 key=lambda n: str(n.name))
             for net in column_nets:
                 # Get all the vertical intervals for this net in the current column.
                 net_intervals = [i for i in column if i.net is net]
@@ -2597,15 +2638,21 @@ class Router:
             global_route = GlobalRoute()
 
             # Faces with pins from which paths/routing originate.
-            # DETERMINISM: build the candidate list in PIN order (stable) --
-            # list(set-of-Faces) follows per-run id order, so the same random
-            # draw would start the route from a different face every run.
+            # DETERMINISM: build the candidate list, then SORT BY GEOMETRY.
+            # Pin order alone is NOT enough -- several pins share one face and
+            # which pin first claims it (plus pin.face assignment) varies per
+            # run, so the same random.choice landed on a different face and
+            # grew a different route tree (measured: holdout 3 output variants,
+            # first divergence at the very first choice). A geometric key
+            # (track, begin, end coordinates) is run-invariant.
             _seen_faces = set()
             _face_list = []
             for _p in node.get_internal_pins(net):
                 if _p.face not in _seen_faces:
                     _seen_faces.add(_p.face)
                     _face_list.append(_p.face)
+            _face_list.sort(key=lambda f: (
+                f.track.coord, f.beg.coord, f.end.coord))
             net_pin_faces = set(_face_list)
             start_faces = set(net_pin_faces)
 
@@ -2928,7 +2975,14 @@ class Router:
             while stubs:
                 trimmed_segments -= stubs
                 stubs = get_stubs(trimmed_segments)
-            return list(trimmed_segments)
+            # DETERMINISM: order by geometry -- list(set-of-Segments) follows
+            # per-run id order, and this list feeds remove_jogs()'s seeded
+            # random.shuffle, which permutes a DIFFERENT input order into a
+            # different jog-removal sequence every run (measured on
+            # holdout_can_node: wire paths/crossings flipped with placement
+            # identical; RNG trace diverged exactly at these shuffles).
+            return sorted(trimmed_segments,
+                          key=lambda s: (s.p1.x, s.p1.y, s.p2.x, s.p2.y))
 
         def remove_jogs_old(net, segments, wires, net_bboxes, part_bboxes):
             """Remove jogs in wiring segments.
@@ -3555,6 +3609,41 @@ class Router:
             CHILD_LABEL_FALLBACKS.clear()
 
         random.seed(options.get("seed"))
+
+        # SKIDL_ROUTE_TRACE=<file>: append one line per RNG consumption with a
+        # stable digest of the INPUT ORDER. Diffing the traces of two identical
+        # builds pinpoints the FIRST routing decision whose input order differs
+        # (the determinism leak) without guessing. Env-gated debug aid; no
+        # effect when unset.
+        import os as _os
+        _trace_path = _os.environ.get("SKIDL_ROUTE_TRACE")
+        if _trace_path and not getattr(random, "_skidl_traced", False):
+            random._skidl_traced = True   # guard: child.route() re-enters here
+            import hashlib as _hl
+
+            _real_choice, _real_shuffle = random.choice, random.shuffle
+
+            def _digest(seq):
+                try:
+                    body = "|".join(repr(getattr(e, "__dict__", None) or e)
+                                    for e in seq)
+                except Exception:
+                    body = str(len(seq))
+                return _hl.sha256(body.encode("utf-8", "replace")).hexdigest()[:10]
+
+            def _traced_choice(seq):
+                r = _real_choice(seq)
+                with open(_trace_path, "a", encoding="utf-8") as fh:
+                    fh.write(f"choice n={len(seq)} d={_digest(seq)} "
+                             f"pick={list(seq).index(r)}\n")
+                return r
+
+            def _traced_shuffle(seq):
+                with open(_trace_path, "a", encoding="utf-8") as fh:
+                    fh.write(f"shuffle n={len(seq)} d={_digest(seq)}\n")
+                return _real_shuffle(seq)
+
+            random.choice, random.shuffle = _traced_choice, _traced_shuffle
 
         # Remove any stuff leftover from a previous place & route run.
         node.rmv_routing_stuff()

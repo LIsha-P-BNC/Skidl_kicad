@@ -303,7 +303,7 @@ server = FastMCP(
         "whenever the user asks to design, create, build, or generate ANY electronic "
         "circuit, schematic, netlist, PCB/Anvil CAD project, or BOM -- even if they never "
         "mention 'Anvil CAD', 'MCP', or any tool name. A plain request like 'design a "
-        "555 LED blinker' or '5V power supply venum' means: call build(mode='rules') "
+        "555 LED blinker' or 'I need a 5V power supply' means: call build(mode='rules') "
         "first and follow that workflow exactly (parts(action='search') -> parts(action='describe') -> "
         "build -> poll build(mode='status') until done -> build(mode='open') once -> ask "
         "about BOM).\n"
@@ -416,12 +416,16 @@ server = FastMCP(
         "confirm=True unless the user actually approved the plan. Extending "
         "an existing project skips the plan step but still requires describe "
         "for new parts.\n"
-        "11. LANGUAGE: always reply in the same language/style the user writes "
-        "in -- English gets English, Tamil gets Tamil, Tanglish (Tamil words "
-        "in Latin script) gets Tanglish, any other language likewise. Mirror "
-        "their mix naturally; keep technical terms (part numbers, net names, "
-        "file paths, tool output) in English within that reply. If the user "
-        "switches language mid-conversation, switch with them.\n"
+        "11. LANGUAGE -- MATCH THE USER'S LATEST MESSAGE, STRICTLY: look at the "
+        "language of the user's MOST RECENT message and reply ONLY in that one. "
+        "If their latest message is in ENGLISH, reply ENTIRELY in English -- do "
+        "NOT slip into Tamil or Tanglish, not even a word or a mixed phrase. "
+        "Reply in Tamil ONLY if that message is Tamil; in Tanglish (Tamil in "
+        "Latin script) ONLY if that message is Tanglish; likewise for any other "
+        "language. Default to English when unsure. Never carry a language over "
+        "from an earlier turn or from the UI -- re-check every single message "
+        "and switch the instant the user switches. Technical terms (part "
+        "numbers, net names, file paths, tool output) stay in English regardless.\n"
         "12. SPEED -- BATCH EVERY TOOL CALL: parts(action='search') and "
         "parts(action='describe') both take a LIST in items -- ALWAYS collect "
         "every part the design needs and make ONE search call and ONE describe "
@@ -591,6 +595,84 @@ def _gather_files(base: str) -> dict:
     return files
 
 
+def _shrink_guard(base: str, new_code: str):
+    """SHEET-SHRINK gate. Every build fully regenerates the schematic from the
+    script it is given, so a script that contains FEWER @subcircuit sheets (or
+    drops most of the parts) than the existing <base>.py silently deletes the
+    sheets already drawn -- the classic failure when a multi-sheet PDF is built
+    'one sheet at a time' and the AI sends only the NEW sheet instead of the
+    full extended script. Block that; the fix is mode='source' -> extend ->
+    send the FULL script back. Returns an error dict to block, or None.
+    Overrides: <base>.rebuild_ok marker (adopt_project consent, NOT consumed
+    here -- _prebuild_guard still owns it) or SKIDL_MCP_NO_SHRINK_GUARD=1."""
+    if os.environ.get("SKIDL_MCP_NO_SHRINK_GUARD") == "1":
+        return None
+    d = pdir(base)
+    old_py = d / (base + ".py")
+    if not old_py.is_file():
+        return None
+    if (d / (base + ".rebuild_ok")).is_file():
+        return None            # user already consented to a full redraw
+    try:
+        old_src = old_py.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return None
+    sheet_re = re.compile(r"^\s*@subcircuit\b", re.MULTILINE)
+    old_sheets = len(sheet_re.findall(old_src))
+    new_sheets = len(sheet_re.findall(new_code))
+    old_parts = _parts_in_code(old_src)
+    new_parts = _parts_in_code(new_code)
+    dropped = old_parts - new_parts
+    # SHEET-FILE FLOOR (robust to programmatically-generated sheets): the static
+    # scan sees only literal @subcircuit text, so a design whose sheets come from
+    # a loop/factory reports 0 and a sheet-drop slips through. The sub-sheet FILES
+    # already on disk are a reliable floor -- if the new script has fewer
+    # @subcircuit sections than there are existing sub-sheet files, it is dropping
+    # sheets regardless of how they were authored.
+    import glob as _g
+    old_sheet_files = len(_g.glob(str(d / (base + "_*.anvil_sch"))))
+    shrunk_sheets = (old_sheets > 0 and new_sheets < old_sheets) \
+        or (old_sheet_files > 1 and new_sheets < old_sheet_files)
+    # >half the existing LITERAL parts missing = a partial script that would wipe
+    # the rest. Kept literal-only: a programmatic new script legitimately has 0
+    # literal parts, so counting the old netlist against it would false-block
+    # every loop-built rebuild. TWO signals:
+    #  (a) unique part TYPES dropped (device:r, connector:..., ...) -- catches a
+    #      design that drops whole kinds of parts; needs >=4 distinct types.
+    #  (b) literal Part() INSTANCE count -- a small design (R1,R2,D1,D2,J1 = 5
+    #      instances but only 3 types) wiped to 1 instance is a real drop the
+    #      type-set misses. Applied only when the NEW code itself has literal
+    #      parts (instance count > 0); a programmatic new script (0 literals)
+    #      skips it so a legitimate loop-built rebuild never false-blocks.
+    _inst_re = re.compile(r"\bPart\(\s*[\"']")
+    old_inst = len(_inst_re.findall(old_src))
+    new_inst = len(_inst_re.findall(new_code))
+    shrunk_types = len(old_parts) >= 4 and len(dropped) * 2 > len(old_parts)
+    shrunk_inst = new_inst > 0 and old_inst >= 4 and new_inst * 2 < old_inst
+    shrunk_parts = shrunk_types or shrunk_inst
+    if not (shrunk_sheets or shrunk_parts):
+        return None
+    return {
+        "ok": False,
+        "status": "build_blocked_shrink",
+        "error": (f"This script would DELETE existing work: project '{base}' "
+                  f"currently has {old_sheets} @subcircuit sheet(s) and "
+                  f"{len(old_parts)} part(s), but the new script has only "
+                  f"{new_sheets} sheet(s) and {len(new_parts)} part(s) "
+                  f"({len(dropped)} existing parts missing). A build fully "
+                  "regenerates the schematic from the script, so anything not "
+                  "in the script is destroyed. BLOCKED."),
+        "fix": ("Adding a sheet/section? Call build(mode='source', name='" +
+                base + "'), APPEND the new sheet to that existing script, and "
+                "send back the FULL script -- all previous sheets included, "
+                "never shortened or summarized."),
+        "intentional_removal": ("If the user truly wants the design reduced/"
+                                "redrawn from scratch, call adopt_project "
+                                "first (it records consent), then rebuild."),
+        "missing_parts_sample": sorted(dropped)[:20],
+    }
+
+
 def _prebuild_guard(base: str):
     """HARD overwrite gate -- the enforcement behind the LOOK-BEFORE-ACT rule.
     A build deletes and regenerates the schematic, which destroys everything
@@ -604,14 +686,26 @@ def _prebuild_guard(base: str):
     sch = d / (base + ".anvil_sch")
     if not sch.is_file():
         return None
-    import shutil
-    for ext in (".anvil_sch", ".anvil_pro", ".net"):
-        f = d / (base + ext)
+    import shutil, glob as _glob
+    _to_backup = [d / (base + ext) for ext in (".anvil_sch", ".anvil_pro", ".net")]
+    # Hierarchical sub-sheets (base_*.anvil_sch) are deleted+regenerated too --
+    # back them up as well, or a hand-edited page is lost with no recovery copy.
+    _to_backup += [Path(p) for p in _glob.glob(str(d / (base + "_*.anvil_sch")))]
+    for f in _to_backup:
         if f.is_file():
             try:
-                shutil.copy2(f, d / (base + ext + ".prebuild.bak"))
-            except OSError:
-                pass
+                shutil.copy2(f, f.with_name(f.name + ".prebuild.bak"))
+            except OSError as exc:
+                # A build DELETES these next. If we could not back one up (disk
+                # full, file locked by the open editor, permission denied),
+                # ABORT rather than destroy the only copy.
+                return {
+                    "ok": False, "status": "backup_failed",
+                    "error": (f"could not back up '{base}{ext}' before the "
+                              f"build would overwrite it ({exc}). Aborted to "
+                              "avoid data loss -- free up disk / close the file "
+                              "in the editor and retry."),
+                }
     parts, _nets = _design_counts(base, d)
     if _owner_of(base, d, parts) != "user":
         return None
@@ -702,6 +796,26 @@ def _finish_build(base: str) -> dict:
             pass
     files = _gather_files(base)
     ok = bool(files.get("net") and files.get("anvil_sch")) and rc == 0
+    # CRASH-SAFETY RESTORE: _start_build deletes the old outputs up front (so a
+    # stale schematic is never mistaken for this build's result), which means a
+    # build that DIES mid-way -- crash, kill, emergency stop -- would leave the
+    # project EMPTY. The previous version is never gone (*.prebuild.bak), but
+    # the user should not have to know that: when the build failed AND the
+    # output is missing, put the previous version back automatically.
+    restored = []
+    if not ok and not files.get("anvil_sch"):
+        import shutil as _sh, glob as _gl
+        d = pdir(base)
+        for bak in _gl.glob(str(d / (base + "*.prebuild.bak"))):
+            orig = Path(bak[:-len(".prebuild.bak")])
+            if not orig.exists():
+                try:
+                    _sh.copy2(bak, orig)
+                    restored.append(orig.name)
+                except OSError:
+                    pass
+        if restored:
+            files = _gather_files(base)
     # Script-mode hierarchical builds may emit schematic+netlist WITHOUT a
     # .anvil_pro (plain generate_schematic path) -- the app then refuses
     # to open the project ("does not appear to be a KiCad project file",
@@ -767,6 +881,13 @@ def _finish_build(base: str) -> dict:
         "generated": files,
         "log": log[-6000:],  # tail is where errors/summary live
     }
+    if restored:
+        res["previous_version_restored"] = restored
+        res["restore_note"] = ("The build failed before producing a schematic, "
+                               "so the PREVIOUS version was restored from its "
+                               "automatic backup -- the project is NOT empty. "
+                               "Tell the user their last good schematic is "
+                               "intact; fix the build error and rebuild.")
     # NEVER report a schematic the verifier said is WRONG as a success.
     if result_json:
         # Trust the FINAL structured verdict: it records connectivity at return,
@@ -775,11 +896,26 @@ def _finish_build(base: str) -> dict:
         if ok and result_json.get("verify_available") and not result_json.get("verified", True):
             res["ok"] = False
             res["status"] = "failed"
-            res["error"] = (
-                "schematic connectivity NOT verified -- the .anvil_sch is WRONG "
-                "(do not use or show it); the .net netlist is still valid for PCB "
-                "layout. Tell the user exactly this."
-            )
+            _ke = result_json.get("kicad_erc_errors")
+            if result_json.get("netlist_verified", True) and _ke:
+                # Netlist is logically fine but the DRAWN sheet has real KiCad
+                # ERC errors (geometric disconnection) -- the schematic is wrong
+                # to SHOW/ship even though the .net is usable for PCB.
+                res["error"] = (
+                    f"{_ke} REAL KiCad ERC error(s) on the drawn schematic -- a "
+                    "pin/wire/power symbol is not electrically connected (run "
+                    "check_live('erc') to list them). The .anvil_sch is WRONG to "
+                    "ship; the .net netlist is still valid. NEVER report this "
+                    "build as ERC-clean."
+                )
+            else:
+                res["error"] = (
+                    "schematic connectivity NOT verified -- the .anvil_sch is WRONG "
+                    "(do not use or show it); the .net netlist is still valid for PCB "
+                    "layout. Tell the user exactly this."
+                )
+        if result_json.get("kicad_erc_errors") is not None:
+            res["kicad_erc_errors"] = result_json.get("kicad_erc_errors")
     else:
         # Legacy fallback (no structured verdict): the all-label fallback prints
         # its verify result; MISMATCH there means shorts / missing connections.
@@ -1440,9 +1576,22 @@ def _owner_of(base: str, pdir_path: Path, parts: int) -> str:
             gen = (mo.group(1).lower() if mo else "")
         except OSError:
             pass
-        if gen == "skidl":
-            return "ai"                 # our generated sheet, not re-saved
-        return "user"                   # eeschema-saved or foreign generator
+        if gen != "skidl":
+            return "user"               # root eeschema-saved or foreign gen
+        # Root still ours -- but a HIERARCHICAL project's sub-sheet may have been
+        # hand-edited while the root tag stayed "skidl". Any sub-sheet flipped to
+        # a non-skidl generator makes the whole project user-owned (so the build
+        # guard protects + backs up the edited page instead of destroying it).
+        import glob as _g
+        for _sub in _g.glob(str(pdir_path / (base + "_*.anvil_sch"))):
+            try:
+                _h = open(_sub, encoding="utf-8", errors="replace").read(4000)
+            except OSError:
+                continue
+            _m = re.search(r'\(generator\s+"?([\w-]+)"?', _h)
+            if _m and _m.group(1).lower() != "skidl":
+                return "user"
+        return "ai"                     # our generated sheets, not re-saved
     if py.is_file():
         return "ai"
     return "unknown"
@@ -1671,6 +1820,141 @@ def _stale_outputs(base: str):
     return None
 
 
+def _net_partition(net_text: str):
+    """Parse a netlist into [(net_name, frozenset{(ref,pin), ...}), ...].
+    kicad-cli's schematic export AUTO-NAMES any net the schematic does not
+    label (Net-(D1-K) vs the .py's 'N1'), so net NAMES are not comparable
+    across the two -- but the TOPOLOGY (which pins share a net) is. This
+    returns both so callers can compare by topology and still recover names."""
+    out = []
+    nstart = net_text.find("(nets")
+    section = net_text[nstart:] if nstart != -1 else net_text
+    for nm in re.finditer(r'\(net\b.*?\(name\s+"([^"]*)"(.*?)(?=\(net\b|\(nets\b|\Z)',
+                          section, re.DOTALL):
+        pins = frozenset(
+            (node.group(1), node.group(2))
+            for node in re.finditer(
+                r'\(node\s+\(ref\s+"([^"]*)"\)\s*\(pin\s+"([^"]*)"',
+                nm.group(2), re.DOTALL))
+        if pins:
+            out.append((nm.group(1), pins))
+    return out
+
+
+def _net_topology(net_text: str) -> set:
+    """STRUCTURAL connectivity, name- AND pin-number-independent: the set of
+    {refs} groups (one per net). Compares which PARTS each net ties together,
+    ignoring (a) net names (sch export auto-names) and (b) pin-number swaps --
+    the engine's orientation flip legitimately swaps a symmetric passive's pin
+    1<->2, which changes (ref,pin) but NOT the circuit, so a (ref,pin) compare
+    would false-trigger on every flipped part. Ref-level catches only REAL
+    edits (a part added/removed, or wired to a different neighbour)."""
+    return {frozenset(r for r, _p in pins) for _name, pins in _net_partition(net_text)}
+
+
+def _sync_netlist_from_schematic(base: str):
+    """UNIVERSAL schematic->netlist reconcile (ECO/forward-annotation). The
+    .py generates both .anvil_sch and .net, but a schematic edit by ANY path
+    -- edit_schematic_live, edit_schematic (surgical), or a hand edit in the
+    app -- changes only .anvil_sch, leaving .net (and the .py) behind. Before
+    a fresh PCB build, regenerate the netlist DIRECTLY from the CURRENT
+    schematic (kicad-cli, the standard KiCad path) and compare connectivity to
+    the stored .net; if they differ, the schematic is the truth -- back up the
+    stale .net and replace it with the schematic-derived one so the board
+    matches what the user sees. Returns a warning dict when it reconciled, or
+    None (no schematic / unchanged / tool unavailable -> leave .net as is).
+    Kill switch SKIDL_SCH_NET_SYNC=0."""
+    if os.environ.get("SKIDL_SCH_NET_SYNC") == "0":
+        return None
+    d = pdir(base)
+    sch = d / (base + ".anvil_sch")
+    net = d / (base + ".net")
+    if not sch.is_file() or not net.is_file():
+        return None
+    cli = _find_kicad_cli_path()
+    if not cli:
+        return None
+    tmp = d / (base + ".from_sch.net")
+    try:
+        proc = subprocess.run(
+            [cli, "sch", "export", "netlist", "--output", str(tmp), str(sch)],
+            capture_output=True, text=True, timeout=120,
+            env=_subprocess_env(), cwd=str(d),
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        if proc.returncode != 0 or not tmp.is_file():
+            return None                      # export failed -> keep existing net
+        new_txt = tmp.read_text(encoding="utf-8", errors="replace")
+        old_txt = net.read_text(encoding="utf-8", errors="replace")
+        # EXPORT-SANITY GUARD: a flaky/partial kicad-cli export (empty or a
+        # fraction of the components) must NEVER silently overwrite a good
+        # netlist. Count (comp ...) refs on each side; bail if the export lost
+        # components rather than trusting it. A real user DELETE shrinks the
+        # netlist too, but losing MORE THAN HALF of the parts is export failure,
+        # not an edit -- keep the known-good netlist and let the build proceed.
+        def _comp_refs(txt):
+            m = re.search(r"\(components\b.*?\)\s*(?=\(nets\b|\Z)", txt, re.DOTALL)
+            seg = m.group(0) if m else txt
+            return set(re.findall(r'\(comp\s*\(ref\s+"([^"]*)"', seg)) \
+                or set(re.findall(r'\(comp\b[^)]*?\(ref\s+"([^"]*)"', seg))
+        old_refs, new_refs = _comp_refs(old_txt), _comp_refs(new_txt)
+        if not new_refs or (old_refs and len(new_refs) * 2 < len(old_refs)):
+            tmp.unlink(missing_ok=True)
+            return None                      # export looks broken -> keep old net
+        if _net_topology(new_txt) == _net_topology(old_txt):
+            tmp.unlink(missing_ok=True)
+            return None                      # same wiring -> netlist is current
+        # Diverged: the schematic was edited after the netlist. Schematic wins,
+        # but PRESERVE meaningful net names (GND/+5V/VIN) from the old netlist
+        # wherever the pin-group is unchanged -- the sch export would otherwise
+        # replace 'GND' with 'Net-(...)' and break power/pour detection.
+        old_name_by_refs = {frozenset(r for r, _p in pins): name
+                            for name, pins in _net_partition(old_txt)}
+        # Build the rename map, then apply it ONLY inside the (nets ...) section
+        # (where "(name ...)" is always a net name, never a component field) and
+        # SKIP any target name already in use by another net -- a blind global
+        # replace could merge two nets into one short/short or clobber a field.
+        new_parts = _net_partition(new_txt)
+        used = {name for name, _ in new_parts}
+        remap = {}
+        for new_name, pins in new_parts:
+            old_name = old_name_by_refs.get(frozenset(r for r, _p in pins))
+            if old_name and old_name != new_name and old_name not in used:
+                remap[new_name] = old_name
+                used.discard(new_name)
+                used.add(old_name)
+        if remap:
+            nstart = new_txt.find("(nets")
+            if nstart != -1:
+                head, sec = new_txt[:nstart], new_txt[nstart:]
+                for nn, on in remap.items():
+                    sec = sec.replace(f'(name "{nn}")', f'(name "{on}")')
+                new_txt = head + sec
+        import shutil
+        bak = d / (base + ".net.presync.bak")
+        shutil.copy2(net, bak)
+        net.write_text(new_txt, encoding="utf-8")
+        tmp.unlink(missing_ok=True)
+        return {
+            "schematic_netlist_resynced": True,
+            "note": ("The schematic was edited after the netlist was built (a "
+                     "live/surgical/manual edit). The netlist was regenerated "
+                     "FROM the current schematic so the board matches what you "
+                     "see; the old netlist is backed up as "
+                     f"'{bak.name}'. WARNING: '{base}.py' is now behind the "
+                     "schematic -- a future rebuild from the .py would lose "
+                     "this manual edit unless it is re-applied in the script."),
+            "netlist_backup": str(bak),
+        }
+    except Exception:
+        return None                          # never block a build over the sync
+    finally:
+        try:
+            if tmp.is_file() and tmp.stat().st_size == 0:
+                tmp.unlink(missing_ok=True)
+        except OSError:
+            pass
+
+
 def _board_fingerprint_path(base: str) -> Path:
     return pdir(base) / (base + ".board_fingerprint.json")
 
@@ -1722,6 +2006,25 @@ def _detect_manual_edits(base: str):
     if '(generator "skidl_board")' not in head:
         return ("board was SAVED from the PCB editor (generator is no longer "
                 "skidl_board) -- it contains the user's manual layout work")
+    # MTIME FALLBACK when no fingerprint sidecar exists: the generator token
+    # alone is weak (a tool that rewrites it back to skidl_board, or a lost
+    # sidecar, would read as machine-generated and let a rebuild clobber the
+    # edit). If the board file is NEWER than the source that would regenerate it
+    # (.net / .py), it was touched after the last pipeline build -- treat as a
+    # possible manual edit so the rebuild asks for force instead of silently
+    # overwriting.
+    if not fp.is_file():
+        try:
+            pcb_m = pcb.stat().st_mtime
+            srcs = [pdir(base) / (base + e) for e in (".net", ".py")]
+            newest_src = max((s.stat().st_mtime for s in srcs if s.is_file()),
+                             default=0)
+            if newest_src and pcb_m > newest_src + 2:
+                return ("board file is newer than the netlist/source and has no "
+                        "pipeline fingerprint -- it may hold manual edits; "
+                        "rebuild with force=True only if you mean to discard them")
+        except OSError:
+            pass
     return None
 
 
@@ -2300,6 +2603,117 @@ def _backup_file(f: Path) -> str:
     bak = f.parent / f"{f.name}.{i}.bak"
     shutil.copy2(f, bak)        # byte-perfect copy, mtime preserved
     return bak.name
+
+
+def _span_prop_value(span_text: str, key: str):
+    """Current value of (property "<key>" "<val>" ...) inside one symbol span."""
+    m = re.search(r'\(property\s+"' + re.escape(key) + r'"\s+"([^"]*)"', span_text)
+    return m.group(1) if m else None
+
+
+def _list_sch_refs(files) -> list:
+    out = []
+    for f in files:
+        try:
+            text = f.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        for (s, e) in _instance_symbol_spans(text):
+            r = _span_prop_value(text[s:e], "Reference")
+            if r:
+                out.append({"ref": r})
+    return out
+
+
+@server.tool()
+def sync_schematic_from_board(name: str, apply: bool = False) -> dict:
+    """REVERSE process (PCB -> schematic back-annotation). After the board is
+    edited (a footprint/package swap, a value or field change on the PCB), push
+    those ATTRIBUTE changes back into the .anvil_sch so the schematic matches
+    the board again. apply=False (default) DRY-RUNS and lists what would change;
+    apply=True writes them (a .bak backup is kept, the file re-parsed to prove
+    it is still valid).
+
+    SCOPE -- the standard, safe back-annotation scope: per-reference FOOTPRINT
+    and VALUE (and it reports refs present on only one side). CONNECTIVITY is
+    NOT back-annotated: nets/wiring flow FORWARD only (design them in the
+    schematic); copper on a board is not a logical net, so a rewire on the PCB
+    cannot be pushed back -- re-make a connectivity change in the schematic.
+    After applying, '<name>.py' is behind the schematic; a future .py rebuild
+    would revert these fields unless re-applied in the script -- the result
+    says so."""
+    base, d = _resolve_project(name)
+    pcb = d / (base + ".anvil_pcb")
+    if not pcb.is_file():
+        return {"ok": False, "error": f"no board found: {pcb} -- create_pcb first"}
+    files = _sch_files(base, d)
+    if not files:
+        return {"ok": False, "error": f"no .anvil_sch found for '{base}' in {d}"}
+    try:
+        from skidl.board.pcb_reverse import parse_pcb
+    except Exception as exc:
+        return {"ok": False, "error": f"board reader unavailable: {exc!r}"}
+    try:
+        board = parse_pcb(str(pcb))
+    except Exception as exc:
+        return {"ok": False, "error": f"could not parse board: {exc!r}"}
+    board_by_ref = {c["ref"]: c for c in board.get("components", []) if c.get("ref")}
+
+    changes, applied_files = [], []
+    for f in files:
+        text = f.read_text(encoding="utf-8", errors="replace")
+        new_text = text
+        for (s, e) in _instance_symbol_spans(text):
+            span = text[s:e]
+            ref = _span_prop_value(span, "Reference")
+            if not ref or ref not in board_by_ref:
+                continue
+            bcomp = board_by_ref[ref]
+            new_span = span
+            for key, bval in (("Footprint", bcomp.get("footprint")),
+                              ("Value", bcomp.get("value"))):
+                if bval is None:
+                    continue
+                cur = _span_prop_value(new_span, key)
+                if cur is not None and cur != bval:
+                    changes.append({"ref": ref, "field": key,
+                                    "schematic": cur, "board": bval})
+                    new_span = re.sub(
+                        r'(\(property\s+"' + re.escape(key) + r'"\s+")[^"]*(")',
+                        lambda mo: mo.group(1) + bval.replace("\\", "\\\\") + mo.group(2),
+                        new_span, count=1)
+            if new_span != span:
+                new_text = new_text.replace(span, new_span, 1)
+        if apply and new_text != text:
+            _backup_file(f)
+            try:
+                from simp_sexp import Sexp
+                Sexp(new_text)                       # prove still valid
+            except Exception as exc:
+                return {"ok": False, "error": f"edit would corrupt {f.name}: "
+                                              f"{exc!r} -- aborted, nothing written"}
+            f.write_text(new_text, encoding="utf-8")
+            applied_files.append(f.name)
+
+    only_on_board = sorted(set(board_by_ref) -
+                           {c["ref"] for c in _list_sch_refs(files)})
+    res = {"ok": True, "changes": changes, "change_count": len(changes),
+           "refs_only_on_board": only_on_board, "applied": bool(apply and changes)}
+    if not changes:
+        res["note"] = ("Schematic already matches the board (no footprint/value "
+                       "differences). Connectivity is not compared here -- it "
+                       "flows forward from the schematic only.")
+    elif apply:
+        res["applied_files"] = applied_files
+        res["note"] = ("Back-annotated footprint/value from the board into the "
+                       "schematic. WARNING: '" + base + ".py' is now behind the "
+                       "schematic -- a future rebuild from the .py would revert "
+                       "these fields unless they are re-applied in the script.")
+    else:
+        res["note"] = ("DRY RUN -- call sync_schematic_from_board(name, "
+                       "apply=True) to write these back-annotations (a .bak "
+                       "backup is kept). Connectivity is never back-annotated.")
+    return res
 
 
 @server.tool()
@@ -2998,6 +3412,9 @@ def build(name: str, code: str = "", mode: str = "body",
     gate = _workflow_gate(base, code, confirm)
     if gate:
         return gate
+    shrink = _shrink_guard(base, code)
+    if shrink:
+        return shrink
     if mode == "script":
         # Strip GUI-launch lines to stay SKiDL-only (no external app window).
         # Pass 1: the whole call, incl. multi-line arg lists (one nesting
@@ -3158,6 +3575,45 @@ def open_in_anvilcad(name: str, view: str = "project") -> dict:
 #  Custom parts -> BOM -> design rules
 # ============================================================================
 CACHE = os.path.join(os.path.expanduser("~"), "skidl_symbols")  # anvil_libs cache
+
+
+def _register_lib_in_editor_tables(lib: str, lib_path: str) -> list:
+    """Make an AI/user-created symbol library VISIBLE in the app's own
+    'Add Symbol' picker. The schematic editor reads %APPDATA%/anvil/<ver>/
+    sym-lib-table, NOT the SKiDL cache -- so a part written only to the cache
+    builds fine but never shows in the picker. Add a row for `lib` pointing at
+    the absolute cache file to EVERY anvil config dir on this machine (1.0,
+    1.2, 2.0 -- whichever the installed binary uses). Idempotent: skips a
+    table that already lists the lib. The editor's loader accepts either
+    extension (.kicad_sym here vs the install's .anvil_sym) via its sibling-
+    extension fallback, so the cache file loads directly. Returns the tables
+    touched."""
+    appdata = os.environ.get("APPDATA") or os.path.join(
+        os.path.expanduser("~"), "AppData", "Roaming")
+    anvil_root = os.path.join(appdata, "anvil")
+    touched = []
+    if not os.path.isdir(anvil_root):
+        return touched
+    uri = lib_path.replace("\\", "/")
+    row = (f'  (lib (name "{lib}")(type "Anvil")(uri "{uri}")'
+           f'(options "")(descr "AI/user-created parts"))\n')
+    for ver in os.listdir(anvil_root):
+        tbl = os.path.join(anvil_root, ver, "sym-lib-table")
+        if not os.path.isfile(tbl):
+            continue
+        try:
+            txt = open(tbl, encoding="utf-8", errors="replace").read()
+            if f'(name "{lib}")' in txt:
+                continue                       # already registered
+            idx = txt.rstrip().rfind(")")      # insert before the closing paren
+            if idx < 0:
+                continue
+            new = txt[:idx] + row + txt[idx:]
+            open(tbl, "w", encoding="utf-8").write(new)
+            touched.append(tbl)
+        except OSError:
+            pass
+    return touched
 
 _PIN_TYPES = {"input", "output", "bidirectional", "tri_state", "passive", "free",
               "unspecified", "power_in", "power_out", "open_collector",
@@ -3326,14 +3782,22 @@ def add_part_to_library(name: str, pins: list, lib: str = "UserParts",
             if not b.lstrip().startswith(f'(symbol "{_esc(name)}"'):
                 keep.append(b)
     _write_lib(path, keep + [block])
+    registered = _register_lib_in_editor_tables(lib, path)
     return {
         "ok": True,
         "library_file": path,
         "use": f'Part("{lib}", "{name}", ref="{ref_prefix}1", tag="{ref_prefix}1"'
                + (f', footprint="{footprint}"' if footprint else "") + ")",
         "pins_added": len(norm),
-        "note": "New part is now on the symbol search path; build (subprocess) "
-                "will find it immediately.",
+        "editor_tables_updated": registered,
+        "note": ("New part is now on the symbol search path; build (subprocess) "
+                 "will find it immediately." + (
+                     " It is also registered in the app's Add Symbol picker "
+                     f"under the '{lib}' library (reopen the symbol chooser to "
+                     "see it)." if registered else
+                     " NOTE: could not register it in the app's symbol picker "
+                     "(no anvil config dir found); it builds but won't appear "
+                     "in the manual Add Symbol list until the app is run once.")),
     }
 
 
@@ -3662,6 +4126,18 @@ def create_pcb(name: str, route=None,
     matches the netlist pin-for-pin; otherwise say exactly what is missing.
     After success, open with build(mode='open')(name, view='pcb')."""
     base = _safe_name(name)
+    # CUSTOM-FOLDER RESOLVE: build may have put this project in a custom folder,
+    # but the per-turn server restart clears _PROJECT_DIRS, so pdir(base) would
+    # fall back to OUT/base and every gate + output below (stale/manual/shrink
+    # checks, the .net lookup, the ECO sync) would silently target the WRONG,
+    # empty dir. Re-discover the real home and register it so pdir(base) is right.
+    if base not in _PROJECT_DIRS:
+        try:
+            _rb, _rd = _resolve_project(name)
+            if _rd and Path(_rd).is_dir() and Path(_rd) != (OUT / base):
+                _PROJECT_DIRS[base] = Path(_rd)
+        except Exception:
+            pass
     # ROUTE MODE: place -> ASK -> route. Default asks before routing so the
     # user (not the engine) decides. Accepts bool for back-compat and the
     # natural words a user/AI would pass. Fully dynamic -- no design assumed.
@@ -3805,6 +4281,10 @@ def create_pcb(name: str, route=None,
     if stale:
         return {"ok": False, "status": "stale_source",
                 "error": stale}
+    # ECO: if the schematic was edited after the netlist (live/surgical/manual
+    # edit, by AI or by hand), regenerate the netlist from the schematic so the
+    # board matches what the user sees. Surfaced in the result, not blocking.
+    _sch_sync = _sync_netlist_from_schematic(base)
     setup_changed, _cur = _setup_hash_state(base)
 
     # KiCad IS TRUTH: read the saved files, diff against the last build's
@@ -3910,7 +4390,7 @@ def create_pcb(name: str, route=None,
               else "placement (overlap-free, size-fit) -> DRC check "
                    "(the board is left UNROUTED on purpose -- you will ASK "
                    "the user before routing)")
-    return {"ok": True, "status": "pcb_building", "elapsed_s": 0,
+    _started = {"ok": True, "status": "pcb_building", "elapsed_s": 0,
             "route_mode": route_mode,
             "note": (f"PCB build STARTED in the background: {_stage}, with "
                      "automatic placement fallbacks. Poll with "
@@ -3918,6 +4398,11 @@ def create_pcb(name: str, route=None,
                      "longer 'pcb_building'. Small boards finish in ~1 min; "
                      "a 150-part board can take 10-30 min -- this call will "
                      "NEVER time out again.")}
+    if _sch_sync:
+        _started["schematic_netlist_resynced"] = True
+        _started["eco_note"] = _sch_sync["note"]
+        _started["netlist_backup"] = _sch_sync["netlist_backup"]
+    return _started
 
 
 @server.tool()
@@ -4531,11 +5016,22 @@ def review_design(name: str) -> dict:
     verified. Manufacturing export requires the human to read this and
     then approve_design."""
     base = _safe_name(name)
+    if base not in _PROJECT_DIRS:
+        try:
+            _rb, _rd = _resolve_project(name)
+            if _rd and Path(_rd).is_dir() and Path(_rd) != (OUT / base):
+                _PROJECT_DIRS[base] = Path(_rd)
+        except Exception:
+            pass
     if not (pdir(base) / (base + ".anvil_pcb")).is_file():
         return {"ok": False, "error": "no board -- run create_pcb first"}
     stale = _stale_outputs(base)
     if stale:
         return {"ok": False, "status": "stale_source", "error": stale}
+    # A schematic edited after the last build (live/surgical/manual) leaves the
+    # netlist behind; reconcile from the schematic so the review is run against
+    # what the user actually sees, not a stale netlist.
+    _rev_sync = _sync_netlist_from_schematic(base)
     code = f'''
 import sys, json
 sys.path.insert(0, {json.dumps(str(SRC))})
@@ -5044,8 +5540,8 @@ _LIVE_SCH_OPS = {
 _LIVE_PCB_OPS = {
     "add_footprint", "move_footprint", "add_track", "add_via", "delete_track_at",
     "set_text_variable", "capture_footprints", "delete_footprint",
-    "change_footprint", "pack_footprints", "add_zone", "draw_board_outline",
-    "add_text", "ripup_net", "net_lengths",
+    "change_footprint", "pack_footprints", "add_zone", "delete_zone",
+    "draw_board_outline", "add_text", "ripup_net", "net_lengths",
 }
 
 
@@ -5158,8 +5654,11 @@ def edit_board_live(ops: list) -> dict:
     add_via, delete_track_at, delete_footprint (by 'reference'), change_footprint
     (reference + new 'fpid' -- swap package, keeps position/nets), pack_footprints
     (optional refs[]/gap_mils/columns/x_mils/y_mils -- re-place parts in a tight grid
-    to reduce spacing), add_zone (points[]/rect + layer + net -- filled copper pour),
-    draw_board_outline (rect or points on Edge.Cuts; replace=true redraws), add_text
+    to reduce spacing), add_zone (points[]/rect + layer + net -- filled copper pour,
+    solid pad-connect + remove-islands; re-adding same net+layer refreshes), delete_zone
+    (net + optional layer -- drop pours so you can pour AFTER routing: delete pours ->
+    autoroute -> re-add pours -> DRC), draw_board_outline (rect or points on Edge.Cuts;
+    replace=true redraws), add_text
     (text + x/y + layer default F.SilkS + size_mils), ripup_net (net -- delete all its
     tracks/vias), net_lengths (read-only: routed vs straight length + detour_ratio per
     net, sorted longest first -- answers "which connection is too long"; shorten =

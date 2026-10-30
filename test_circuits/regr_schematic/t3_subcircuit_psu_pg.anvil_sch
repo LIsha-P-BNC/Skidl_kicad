@@ -6,7 +6,7 @@
   (paper "A4")
   (title_block
     (title "SKiDL-Generated Schematic")
-    (date "2026-09-17")
+    (date "2026-10-14")
     (rev A)
     (company "regr")
     (comment 1 "Engineer: T3")
@@ -651,13 +651,11 @@
     (dnp no)
     (fields_autoplaced yes)
     (uuid e2c6ea83-a851-53a5-b1bc-00bce7a73328)
-    (property "Reference" "J1"
-      (at 130.81 96.52 90)
+    (property "Reference" "J1" (at 130.81 92.71 90)
       (effects
         (font
           (size 1.27 1.27))))
-    (property "Value" "DC_IN"
-      (at 130.81 101.60000000000001 90)
+    (property "Value" "DC_IN" (at 130.81 107.95 90)
       (effects
         (font
           (size 1.27 1.27))))
@@ -700,13 +698,11 @@
     (dnp no)
     (fields_autoplaced yes)
     (uuid af70ee5b-764d-5d65-9196-e6e348432f72)
-    (property "Reference" "U1"
-      (at 146.05 91.44 90)
+    (property "Reference" "U1" (at 146.05 80.01 90)
       (effects
         (font
           (size 1.27 1.27))))
-    (property "Value" "AMS1117-3.3"
-      (at 146.05 96.52000000000001 90)
+    (property "Value" "AMS1117-3.3" (at 146.05 108.28 90)
       (effects
         (font
           (size 1.27 1.27))))
@@ -749,13 +745,11 @@
     (dnp no)
     (fields_autoplaced yes)
     (uuid 8a8a3c90-578f-556a-8f8c-bcba591d9175)
-    (property "Reference" "C1"
-      (at 156.21 92.71 0)
+    (property "Reference" "C1" (at 160.02 92.71 0)
       (effects
         (font
           (size 1.27 1.27))))
-    (property "Value" "10uF"
-      (at 156.21 97.79 0)
+    (property "Value" "10uF" (at 160.02 97.79 0)
       (effects
         (font
           (size 1.27 1.27))))
@@ -796,13 +790,11 @@
     (dnp no)
     (fields_autoplaced yes)
     (uuid e9283f1e-4e0f-5766-bf2a-9dffe4c7d07d)
-    (property "Reference" "C2"
-      (at 166.37 93.97999999999999 0)
+    (property "Reference" "C2" (at 170.18 93.97999999999999 0)
       (effects
         (font
           (size 1.27 1.27))))
-    (property "Value" "22uF"
-      (at 166.37 99.06 0)
+    (property "Value" "22uF" (at 170.18 99.06 0)
       (effects
         (font
           (size 1.27 1.27))))
@@ -847,14 +839,200 @@
   
   
   
-  (wire
-    (pts
-      (xy 147.32 106.68)
-      (xy 147.32 114.3))
-    (stroke
-      (width 0)
-      (type default))
-    (uuid c724e6a1-b63c-5103-aee9-7cbe98dfbb65))
+  	(wire
+		(pts
+			(xy 147.32 106.68)
+			(xy 147.32 114.3)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "9d2d52d0-4a8c-f804-21a4-562efcce53a8")
+	)
+	(wire
+		(pts
+			(xy 166.37 92.71)
+			(xy 166.37 85.09)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "cd739068-f0e7-6738-3529-b5535750e507")
+	)
+	  	(wire
+  		(pts
+  			(xy 133.35 73.66) (xy 146.05 73.66)
+  		)
+  		(stroke
+  			(width 0)
+  			(type default)
+  		)
+  		(uuid "face79ba-650d-591c-8af1-e56371431053")
+  	)
+  	(wire
+  		(pts
+  			(xy 146.05 73.66) (xy 156.21 73.66)
+  		)
+  		(stroke
+  			(width 0)
+  			(type default)
+  		)
+  		(uuid "3c18c5c3-0f3f-5a0b-ac0c-6491028f41f7")
+  	)
+	(wire
+		(pts
+			(xy 133.35 93.98)
+			(xy 133.35 73.66)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "b11b2f41-fa90-0246-0bdd-01d54148e14c")
+	)
+	(wire
+		(pts
+			(xy 146.05 81.28)
+			(xy 146.05 73.66)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "46362911-41e2-94e2-f07c-83ccd3471eab")
+	)
+	(wire
+		(pts
+			(xy 156.21 91.44)
+			(xy 156.21 73.66)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "ae43ccd6-aec8-734a-06a0-0b76bc4c4405")
+	)
+	  	(wire
+  		(pts
+  			(xy 128.27 109.22) (xy 144.78 109.22)
+  		)
+  		(stroke
+  			(width 0)
+  			(type default)
+  		)
+  		(uuid "65e2a1fa-92b5-5568-b91f-fa42eeeda453")
+  	)
+  	(wire
+  		(pts
+  			(xy 144.78 109.22) (xy 156.21 109.22)
+  		)
+  		(stroke
+  			(width 0)
+  			(type default)
+  		)
+  		(uuid "36b853da-583f-510f-a2b0-9c749451c527")
+  	)
+  	(wire
+  		(pts
+  			(xy 156.21 109.22) (xy 166.37 109.22)
+  		)
+  		(stroke
+  			(width 0)
+  			(type default)
+  		)
+  		(uuid "95225eb4-92fa-57b2-a4b7-c425699f715c")
+  	)
+	(wire
+		(pts
+			(xy 128.27 93.98)
+			(xy 128.27 97.79)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "0582da5a-c11c-e30e-93ee-ed71f2fcb1b6")
+	)
+	(wire
+		(pts
+			(xy 128.27 97.79)
+			(xy 124.46 97.79)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "9a24c643-fb70-f31d-7722-04ee66dd8fde")
+	)
+	(wire
+		(pts
+			(xy 124.46 97.79)
+			(xy 124.46 100.33)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "780b92cf-f1bd-2944-de9d-4fc5ecba4dd9")
+	)
+	(wire
+		(pts
+			(xy 124.46 100.33)
+			(xy 128.27 100.33)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "002ab38b-8e83-76c8-9ee1-49412f5c3a84")
+	)
+	(wire
+		(pts
+			(xy 128.27 100.33)
+			(xy 128.27 109.22)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "00824e0e-3012-9d70-9cc0-faae6d0529c9")
+	)
+	(wire
+		(pts
+			(xy 144.78 106.68)
+			(xy 144.78 109.22)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "db2a6db5-546d-9936-4310-cc697da1ca5d")
+	)
+	(wire
+		(pts
+			(xy 156.21 99.06)
+			(xy 156.21 109.22)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "b25bcb17-223e-2744-aff8-6b4f547fde79")
+	)
+	(wire
+		(pts
+			(xy 166.37 100.33)
+			(xy 166.37 109.22)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "880346e9-b483-f192-124b-769bbc7f02f3")
+	)
+
   (symbol
     (lib_id "power:+3.3V")
     (at 147.32 114.3 0)
@@ -901,14 +1079,7 @@
   
   
   
-  (wire
-    (pts
-      (xy 166.37 92.71)
-      (xy 166.37 85.09))
-    (stroke
-      (width 0)
-      (type default))
-    (uuid 3fe4c46a-cbce-5fcc-ba1c-d710436f2f5b))
+  
   (symbol
     (lib_id "power:+3.3V")
     (at 166.37 85.09 0)
@@ -998,55 +1169,15 @@
       (project "SKiDL-Generated"
         (path "/218b5f90-a139-55d3-a988-331ecbe7ee0c"
           (reference "#PWR001")
-          (unit 1)))))    (wire
-  	(pts
-  		(xy 133.35 73.66) (xy 146.05 73.66)
-  	)
-  	(stroke
-  		(width 0)
-  		(type default)
-  	)
-  	(uuid "face79ba-650d-591c-8af1-e56371431053")
-  )
-  (wire
-  	(pts
-  		(xy 146.05 73.66) (xy 156.21 73.66)
-  	)
-  	(stroke
-  		(width 0)
-  		(type default)
-  	)
-  	(uuid "3c18c5c3-0f3f-5a0b-ac0c-6491028f41f7")
-  )
-  (wire
-    (pts
-      (xy 133.35 93.98)
-      (xy 133.35 73.66))
-    (stroke
-      (width 0)
-      (type default))
-    (uuid 4822e8dd-f436-5e1f-a158-9799c2c31b54))
-  (wire
-    (pts
-      (xy 146.05 81.28)
-      (xy 146.05 73.66))
-    (stroke
-      (width 0)
-      (type default))
-    (uuid b3203747-e062-554d-98cf-f3ae82f2b508))
+          (unit 1)))))  
+  
+  
   (junction
     (at 146.05 73.66)
     (diameter 0)
     (color 0 0 0 0)
     (uuid 8389ce8e-557c-586c-a156-92c94f2d58dd))
-  (wire
-    (pts
-      (xy 156.21 91.44)
-      (xy 156.21 73.66))
-    (stroke
-      (width 0)
-      (type default))
-    (uuid 7e2874c6-0343-588a-befb-6151632d796d))
+  
 (symbol
     (lib_id "power:GND")
     (at 128.27 109.22 0)
@@ -1086,82 +1217,25 @@
       (project "SKiDL-Generated"
         (path "/218b5f90-a139-55d3-a988-331ecbe7ee0c"
           (reference "#PWR002")
-          (unit 1)))))    (wire
-  	(pts
-  		(xy 128.27 109.22) (xy 144.78 109.22)
-  	)
-  	(stroke
-  		(width 0)
-  		(type default)
-  	)
-  	(uuid "65e2a1fa-92b5-5568-b91f-fa42eeeda453")
-  )
-  (wire
-  	(pts
-  		(xy 144.78 109.22) (xy 156.21 109.22)
-  	)
-  	(stroke
-  		(width 0)
-  		(type default)
-  	)
-  	(uuid "36b853da-583f-510f-a2b0-9c749451c527")
-  )
-  (wire
-  	(pts
-  		(xy 156.21 109.22) (xy 166.37 109.22)
-  	)
-  	(stroke
-  		(width 0)
-  		(type default)
-  	)
-  	(uuid "95225eb4-92fa-57b2-a4b7-c425699f715c")
-  )
-  (wire
-    (pts
-      (xy 128.27 93.98)
-      (xy 128.27 109.22))
-    (stroke
-      (width 0)
-      (type default))
-    (uuid 4dfe6a8e-dd74-5cfe-998a-cc37f7324485))
-  (wire
-    (pts
-      (xy 144.78 106.68)
-      (xy 144.78 109.22))
-    (stroke
-      (width 0)
-      (type default))
-    (uuid c9ec8ffc-6a36-5bcb-8bb3-b9f03f64566c))
+          (unit 1)))))  
+  
+  
   (junction
     (at 144.78 109.22)
     (diameter 0)
     (color 0 0 0 0)
     (uuid 517f7f85-db79-5147-b084-e7281e4ab9e7))
-  (wire
-    (pts
-      (xy 156.21 99.06)
-      (xy 156.21 109.22))
-    (stroke
-      (width 0)
-      (type default))
-    (uuid e27918ec-bdd2-519e-a078-192e29a5e0e0))
+  
   (junction
     (at 156.21 109.22)
     (diameter 0)
     (color 0 0 0 0)
     (uuid bbde8a36-98da-5cf9-a0a4-9e5b07c4d1e0))
-  (wire
-    (pts
-      (xy 166.37 100.33)
-      (xy 166.37 109.22))
-    (stroke
-      (width 0)
-      (type default))
-    (uuid 9b62c753-ccaf-5ea9-92bb-6e7c36a2aba5))
+  
 
   (symbol
     (lib_id "power:PWR_FLAG")
-    (at 133.35 83.82 0)
+    (at 133.35 73.66 0)
     (unit 1)
     (exclude_from_sim no)
     (in_bom yes)
@@ -1170,25 +1244,25 @@
     (fields_autoplaced yes)
     (uuid 2828b064-98bb-5896-aea4-5bffc4ec37a3)
     (property "Reference" "#FLG03"
-      (at 133.35 81.915 0)
+      (at 133.35 71.755 0)
       (effects
         (font
           (size 1.27 1.27))
         (hide yes)))
     (property "Value" "PWR_FLAG"
-      (at 133.35 80.01 0)
+      (at 133.35 69.85 0)
       (effects
         (font
           (size 1.27 1.27))
         (hide yes)))
     (property "Footprint" ""
-      (at 133.35 83.82 0)
+      (at 133.35 73.66 0)
       (effects
         (font
           (size 1.27 1.27))
         (hide yes)))
     (property "Datasheet" ""
-      (at 133.35 83.82 0)
+      (at 133.35 73.66 0)
       (effects
         (font
           (size 1.27 1.27))
@@ -1200,10 +1274,4 @@
         (path "/218b5f90-a139-55d3-a988-331ecbe7ee0c"
           (reference "#FLG03")
           (unit 1)))))
-  (junction
-    (at 133.35 83.82)
-    (diameter 0)
-    (color 0 0 0 0)
-    (uuid 29de77a9-a840-5271-8015-b0443c556f79)
-  )
 )

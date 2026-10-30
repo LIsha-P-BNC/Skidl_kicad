@@ -30,14 +30,20 @@ schematics/cluster.py + net_classify.py via the duck-typed view shims.
 
 from __future__ import annotations
 import math
+import os as _os
 import re
 
 from skidl.board.model import BoardModel, Footprint
 from skidl.board.place.simple import (
     GRID, GAP, EDGE_MARGIN,
-    _build_views, _size, _world_bbox, _overlap, _snap,
+    _build_views, _size, _world_bbox, _copper_bbox, _overlap, _snap,
     count_courtyard_overlaps,
 )
+
+# Copper-to-board-edge pull/clamp (mm). Above the KiCad board-setup edge
+# clearance (0.5mm default) AND safe against the 0.5mm placement grid snap
+# (a snapped copper edge still lands >= 0.5mm from a snapped outline edge).
+EDGE_CU = 1.0
 
 from skidl.schematics.cluster import (
     classify_block_role,
@@ -68,8 +74,34 @@ GLOBAL_OPT = True       # connectivity-driven block optimization
 # overlap-free, the congestion estimate stays under the ceiling, and
 # the weighted HPWL does not regress.
 UTIL_FLOOR = 0.35            # professional lower packing bound
-DENSIFY_GAPS = (1.0, 0.5)    # mm courtyard gaps tried, tightest last
+DENSIFY_GAPS = (1.0, 0.5, 0.3, 0.2)   # mm courtyard gaps, tightest last
+# measured: _compact at the default 2.0 mm gap is a NO-OP (holdout util
+# 0.113 -> 0.113); ALL density comes from the densify ladder's tighter gaps
+# (0.5 mm reached only 0.203). 0.3/0.2 mm are above the ~0.15 mm fab floor
+# and still gated hard by congestion (DENSIFY_CONGESTION) + zero-overlap, so
+# an unroutable rung is rejected and rolled back -- the ladder simply stops
+# at the tightest rung each board can take.
 DENSIFY_CONGESTION = 1.0     # peak demand/capacity ceiling while tightening
+# HPWL growth a densify rung may add. TI reference boards (TIDA-00949/01447/
+# 01450: ~43-78 parts/1000mm2 vs our ~10-26) pack TIGHT and explicitly trade
+# a little extra wire length for a small board ("small circuit -> small
+# board"). A flat +5% ceiling rejected every tightening on sparse boards
+# (measured: holdout stuck at 20% util because the 1.0mm rung cost +9.6%
+# HPWL). So the ceiling is UTILIZATION-AWARE: far below the floor, allow more
+# HPWL growth to buy compactness; at/above the floor, hold the tight +5%.
+# Congestion (DENSIFY_CONGESTION) and zero-overlap stay HARD -- they, not
+# HPWL, protect routability, so relaxing wire length can't ship an unroutable
+# board. Dynamic: the slack scales with each board's own deficit, no per-
+# board tuning.
+DENSIFY_HPWL_BASE = 1.05     # ceiling at/above the util floor
+DENSIFY_HPWL_MAX = 1.40      # ceiling at zero utilization (max slack)
+
+
+def _densify_hpwl_ceiling(util_before):
+    """HPWL-growth multiplier allowed while densifying, scaled by how far the
+    board sits below UTIL_FLOOR (pure, testable)."""
+    deficit = min(1.0, max(0.0, UTIL_FLOOR - util_before) / UTIL_FLOOR)   # 0..1
+    return DENSIFY_HPWL_BASE + (DENSIFY_HPWL_MAX - DENSIFY_HPWL_BASE) * deficit
 
 
 def place_board_rules(board: BoardModel, mech=None) -> dict:
@@ -82,6 +114,33 @@ def place_board_rules(board: BoardModel, mech=None) -> dict:
     immovable and the outline authoritative."""
     if not board.footprints:
         return {"placed": 0, "placer": "rules"}
+
+    # EARLY AREA PRE-CHECK: a fixed outline the parts physically cannot
+    # occupy must fail HERE with the honest area numbers, not after the
+    # whole legalization stack gives up with "left N overlaps" (measured:
+    # tracker asked 100x80 for parts needing ~2x that area -> 378-overlap
+    # crash instead of a usable answer). Professional boards top out
+    # around 60-70% courtyard utilization -- above that, routing room is
+    # gone even if the rectangles tile.
+    if mech and mech.width and mech.height and not mech.grow:
+        from skidl.board.place.mech import MechanicalFitError
+        fixed_refs0 = set(mech.fixed_refs or ())
+        boxes = [fp.courtyard_world_bbox() for fp in board.footprints
+                 if fp.ref not in fixed_refs0]
+        needed = sum((b[2] - b[0]) * (b[3] - b[1]) for b in boxes if b)
+        avail = mech.width * mech.height - sum(
+            (x2 - x1) * (y2 - y1) for (x1, y1, x2, y2) in
+            (mech.obstacle_boxes or ()))
+        if avail > 0 and needed > 0.70 * avail:
+            side = (needed / 0.5) ** 0.5   # suggest ~50% utilization
+            raise MechanicalFitError(
+                f"parts need ~{needed:.0f} mm2 of courtyard but the fixed "
+                f"{mech.width}x{mech.height} mm board offers only "
+                f"{avail:.0f} mm2 usable ({needed / avail:.0%} utilization; "
+                "practical ceiling ~70%). ASK THE USER for a bigger board "
+                f"-- roughly {side:.0f}x{side:.0f} mm or an equivalent "
+                "rectangle -- or to drop parts.",
+                needed_mm2=needed, board_mm2=avail)
 
     if not GLOBAL_OPT:
         return _place_once(board, mech, use_affinity=False)
@@ -99,6 +158,18 @@ def place_board_rules(board: BoardModel, mech=None) -> dict:
         board.outline = outline or None
         board.keepouts = keepouts
 
+    # ROUTABILITY-AWARE RANKING: pick the candidate that will ROUTE best, not
+    # just the one with the shortest wire. "You can't judge a placement until
+    # you try to route it" -- so score each candidate by weighted HPWL blended
+    # with its congestion peak (the routing-demand proxy congestion_map already
+    # computes): a slightly longer layout that leaves routing corridors open
+    # beats a tight one the router then chokes on. SKIDL_ROUTE_AWARE=0 falls
+    # back to the pure-HPWL selector.
+    import os as _os
+    from skidl.board.place.metrics import congestion_map
+    route_aware = _os.environ.get("SKIDL_ROUTE_AWARE") != "0"
+    CONGESTION_PENALTY = 0.6      # peak_ratio 1.0 -> +60% effective cost
+
     base_snap = snapshot()
     candidates = []
     for use_aff in (False, True):
@@ -106,17 +177,26 @@ def place_board_rules(board: BoardModel, mech=None) -> dict:
         # apply_fixed added MH* footprints already; positions restore fine.
         rep = _place_once(board, mech, use_affinity=use_aff)
         hp = (rep.get("quality") or {}).get("weighted_hpwl_mm")
-        candidates.append((hp if hp is not None else float("inf"),
+        hp = hp if hp is not None else float("inf")
+        try:
+            peak = float(congestion_map(board).get("peak_ratio", 0.0) or 0.0)
+        except Exception:
+            peak = 0.0
+        score = hp * (1.0 + CONGESTION_PENALTY * peak) if route_aware else hp
+        candidates.append((score, hp, peak,
                            rep.get("courtyard_overlaps", 99),
                            use_aff, rep, snapshot()))
-    # Prefer zero overlaps, then lower weighted HPWL, then role order.
-    candidates.sort(key=lambda c: (c[1], c[0], c[2]))
+    # Prefer zero overlaps, then the routability-blended score, then role order.
+    candidates.sort(key=lambda c: (c[3], c[0], c[4]))
     best = candidates[0]
-    restore(best[4])
-    rep = best[3]
-    rep["ordering"] = "affinity-chain" if best[2] else "role-order"
-    rep["ordering_hpwl_mm"] = {
-        ("affinity-chain" if c[2] else "role-order"): c[0]
+    restore(best[6])
+    rep = best[5]
+    rep["ordering"] = "affinity-chain" if best[4] else "role-order"
+    rep["selected_by"] = ("hpwl+congestion" if route_aware else "hpwl")
+    rep["ordering_score"] = {
+        ("affinity-chain" if c[4] else "role-order"):
+            {"hpwl_mm": round(c[1], 1), "congestion_peak": round(c[2], 2),
+             "score": round(c[0], 1)}
         for c in candidates}
     return rep
 
@@ -149,9 +229,12 @@ def _place_once(board: BoardModel, mech=None, use_affinity=False) -> dict:
     clusters = [c & non_conn_set for c in detect_clusters(non_conn)]
     clusters = [c for c in clusters if c]
 
-    decap_to_ic = {}
-    for _net, (decap, ic) in find_decap_affinities(views).items():
-        decap_to_ic.setdefault(decap, ic)
+    # Per-CAP pairing (find_decap_pairs): the net-keyed find_decap_affinities
+    # collapses to ONE cap per shared +V rail, stranding every other decap in
+    # a foreign block so the supply-pad snap never fires for them (measured
+    # on holdout_can_node: C5/C6/C7 landed in foreign blocks).
+    from skidl.schematics.cluster import find_decap_pairs
+    decap_to_ic = dict(find_decap_pairs(views))
 
     # Decaps link to their IC over POWER nets, which cluster detection
     # deliberately ignores -- so a decap usually lands OUTSIDE its IC's
@@ -225,6 +308,7 @@ def _place_once(board: BoardModel, mech=None, use_affinity=False) -> dict:
     max_col_h = 0.0
     block_reports = []
     close_pairs = set()   # (decap/crystal, anchor) pairs allowed TIGHT
+    crystal_to_ic = {}    # crystal view -> its anchor IC view (loop re-assert)
     row_idx = 0
     row_members = []   # (block, row_idx, x_start, width)
     for block in ordered_blocks:
@@ -232,7 +316,8 @@ def _place_once(board: BoardModel, mech=None, use_affinity=False) -> dict:
             row_y += row_h + GAP * BLOCK_GAP_MULT
             col_x, row_h = 0.0, 0.0
             row_idx += 1
-        w, h = _place_block(block, col_x, decap_to_ic, close_pairs)
+        w, h = _place_block(block, col_x, decap_to_ic, close_pairs,
+                            crystal_to_ic)
         if row_y:
             for v in block:
                 v.fp.y = v.fp.y + row_y
@@ -287,8 +372,28 @@ def _place_once(board: BoardModel, mech=None, use_affinity=False) -> dict:
                            (x2 - x1) / 2, (y2 - y1) / 2)))
     fixed_set = {fp.ref for fp in statics}
     all_fps = fps + statics
+
+    # SKIDL_PLACE_TRACE=1: report utilization after each legalization stage,
+    # so the weak link (block layout vs compact vs densify) is MEASURED, not
+    # guessed. stderr-only, env-gated.
+    import os as _os
+    _ptrace = _os.environ.get("SKIDL_PLACE_TRACE")
+
+    def _ptr(stage):
+        if _ptrace:
+            import sys as _sys
+            from skidl.board.place.metrics import utilization as _u
+            try:
+                print(f"[place] {stage}: util={_u(board):.3f} "
+                      f"overlaps={count_courtyard_overlaps(board)}",
+                      file=_sys.stderr, flush=True)
+            except Exception:
+                pass
+
+    _ptr("after block-layout+connectors")
     _deoverlap(all_fps, heavy={v.fp.ref for v in anchors},
                allowed_close=close_pairs, fixed=fixed_set)
+    _ptr("after deoverlap")
     # Compaction: professional boards pack 35-50% of the area; without a
     # pull-back pass the de-overlap pushes leave a sparse layout (7%
     # utilization measured on the tracker). Tetris-pack everything
@@ -298,6 +403,7 @@ def _place_once(board: BoardModel, mech=None, use_affinity=False) -> dict:
         _compact(all_fps, allowed_close=close_pairs, fixed=fixed_set)
         _deoverlap(all_fps, heavy={v.fp.ref for v in anchors},
                    allowed_close=close_pairs, fixed=fixed_set)
+    _ptr("after compact")
     fixed_outline = ((mech.width, mech.height)
                      if mech and mech.width and mech.height else None)
     _shift_and_fit(board, fps,
@@ -315,14 +421,79 @@ def _place_once(board: BoardModel, mech=None, use_affinity=False) -> dict:
                        fixed_outline=fixed_outline, statics=statics)
 
     # Small circuit -> small board: with no mechanical spec, tighten a
-    # sparse layout toward the professional utilization floor. Under a
-    # mechanical outline the enclosure fixes the board size, so packing
-    # tighter buys nothing.
+    # sparse layout toward the professional utilization floor.
     density = (_densify(board, fps, anchors, close_pairs,
                         left_conn, right_conn)
                if mech is None else None)
+    _ptr("after densify")
+
+    # RE-ASSERT CRYSTAL LOOPS. The snap in _place_block pins each crystal beside
+    # its IC's XTAL pads, but the GLOBAL compact/densify only honor `fixed`
+    # inside _place_block -- globally the tiny crystal tetris-packs toward the
+    # min corner independently of its big IC, stranding the XTAL net on a long
+    # haul that crosses foreign nets (measured holdout_can_node: Y1 ended 25mm
+    # from U2 -> FreeRouting shorted OSC2 across CAN_H, DRC-fatal every run).
+    # Re-snap each crystal beside its IC on the FINAL geometry, then de-overlap
+    # (the crystal<->IC close pair keeps them tight; other parts yield). Pure
+    # geometry + net sharing -- DYNAMIC over any crystal/IC, no part names.
+    reasserted = []
+    if _os.environ.get("SKIDL_CRYSTAL_REASSERT", "1") == "0":
+        crystal_to_ic = {}   # kill switch (A/B); leaves the stranded-crystal bug
+    # Only on a FREE (non-mechanical) board: re-snapping a crystal onto its IC
+    # needs slack to absorb the shove, which a board with fixed items/keepouts
+    # (mech) does not have -- there it forced an unrecoverable overlap that
+    # hard-failed the build (measured: stm32 U1<->U2). On mech boards the crystal
+    # keeps its densified spot. The overlap rollback below is the extra guard
+    # for a dense FREE board.
+    if crystal_to_ic and mech is None:
+        # OVERLAP-GUARDED: snapshot first. Re-snapping a crystal onto its IC on a
+        # DENSE board can shove the IC's neighbours and the single de-overlap
+        # cannot recover -> a courtyard overlap that hard-fails the whole build
+        # (measured: stm32 U1<->U2). Roll back the re-assert if it leaves MORE
+        # overlaps than before -- the tight XTAL loop is a WANT, never worth an
+        # overlapping (unmanufacturable) board.
+        ovl_before = count_courtyard_overlaps(board)
+        snap = {fp.ref: (fp.x, fp.y, fp.rotation) for fp in fps}
+        for cr_v, ic_v in sorted(crystal_to_ic.items(), key=lambda kv: kv[0].ref):
+            pads = _anchor_pads_on_shared_nets(cr_v, ic_v, power_only=False)
+            if pads:
+                _snap_beside(cr_v.fp, ic_v.fp, pads)
+                reasserted.append((cr_v.fp.ref, ic_v.fp.ref))
+        if reasserted:
+            _deoverlap(all_fps, heavy={v.fp.ref for v in anchors},
+                       allowed_close=close_pairs, fixed=fixed_set)
+            if count_courtyard_overlaps(board) > ovl_before:
+                for fp in fps:
+                    fp.x, fp.y, fp.rotation = snap[fp.ref]
+                reasserted = []
+                _ptr("crystal re-assert ROLLED BACK (would overlap)")
+            else:
+                _ptr("after crystal re-assert")
+
+    # AUTO-SIZE only: grow the outline so no pad copper sits within EDGE_CU of
+    # the board edge (copper_edge_clearance). Pure translate+grow -> cannot add
+    # an overlap. A fixed user outline cannot grow, so it is skipped there.
+    if mech is None and _os.environ.get("SKIDL_EDGE_GROW", "1") != "0":
+        _grow_outline_for_copper(board, fps)
+        _ptr("after edge-clearance grow")
 
     if fixed_outline:
+        # FIT THE USER'S BOARD: when the user gave a board size, the parts must
+        # go INSIDE it. If the natural (professionally-spaced) placement spills
+        # past the fixed outline, COMPACT it (gap tightening, same stack as the
+        # auto-size densify) to fit -- only when it genuinely cannot fit does
+        # _check_mech_fit raise with the honest area numbers. (Previously
+        # densify was skipped under a mechanical outline, so a placement that
+        # overflowed a FEASIBLE board failed instead of being packed in.)
+        def _fits():
+            try:
+                _check_mech_fit(board, fps, mech)
+                return True
+            except Exception:
+                return False
+        if not _fits():
+            _densify(board, fps, anchors, close_pairs, left_conn, right_conn,
+                     target_wh=fixed_outline)
         # Clamp <-> keepout push can ping-pong a part; a few bounded
         # resolve rounds settle it before the honest fit check.
         for _ in range(3):
@@ -339,10 +510,37 @@ def _place_once(board: BoardModel, mech=None, use_affinity=False) -> dict:
         if count_courtyard_overlaps(board, ignore={r for r in fixed_set
                                                    if r.startswith("__KO")}):
             _rescue_overlaps(board, fps, fixed_set, fixed_outline)
+        # SNAPPED-PAIR SEPARATION: a cluster snap (crystal/decap beside its IC,
+        # an allowed_close pair) can place the satellite with its courtyard
+        # OVERLAPPING the IC's -- _deoverlap deliberately skips allowed_close
+        # pairs, _rescue_overlaps often can't improve the count without
+        # breaking the pair, and the final count then hard-fails the whole
+        # fixed-size build (measured: U1<->Y1 at EVERY size 20x18..25x22).
+        # Close means close, not overlapping: push the satellite just clear.
+        if count_courtyard_overlaps(board, ignore={r for r in fixed_set
+                                                   if r.startswith("__KO")}):
+            _separate_close_overlaps(board, fps, close_pairs, fixed_outline)
         _check_mech_fit(board, fps, mech)
 
     overlaps = count_courtyard_overlaps(board, ignore={r for r in fixed_set
                                                        if r.startswith("__KO")})
+    # Name the colliding pairs when legalization lost: "left N overlaps" with
+    # no refs is undebuggable for the user (measured: ESP32-WROOM-32's 48mm
+    # antenna-keepout courtyard vs an edge header on a 70mm board). The bbox
+    # is the same test count_courtyard_overlaps uses.
+    overlap_pairs = []
+    if overlaps:
+        real = [fp for fp in board.footprints
+                if not fp.ref.startswith("__KO")]
+        for i in range(len(real)):
+            ab = real[i].courtyard_world_bbox()
+            if not ab:
+                continue
+            for j in range(i + 1, len(real)):
+                bb = real[j].courtyard_world_bbox()
+                if bb and ab[0] < bb[2] and bb[0] < ab[2] \
+                        and ab[1] < bb[3] and bb[1] < ab[3]:
+                    overlap_pairs.append((real[i].ref, real[j].ref))
     if fixed_outline:
         maxx, maxy = fixed_outline
     elif board.outline:
@@ -360,8 +558,10 @@ def _place_once(board: BoardModel, mech=None, use_affinity=False) -> dict:
         "connectors_left": [v.ref for v in left_conn],
         "connectors_right": [v.ref for v in right_conn],
         "decaps": {d.ref: ic.ref for d, ic in decap_to_ic.items()},
+        "crystals": {c.ref: ic.ref for c, ic in crystal_to_ic.items()},
         "board_size_mm": (round(maxx, 1), round(maxy, 1)),
         "courtyard_overlaps": overlaps,
+        "overlap_pairs": overlap_pairs,
         "mechanical_fixed": sorted(r for r in fixed_set
                                    if not r.startswith("__KO")),
         "density": density,
@@ -369,6 +569,104 @@ def _place_once(board: BoardModel, mech=None, use_affinity=False) -> dict:
         "quality": _quality_metrics(board),
         "rf": _apply_rf_rules(board, rf_views),
     }
+
+
+def _separate_close_overlaps(board, fps, close_pairs, outline_wh):
+    """Minimal separation for allowed_close pairs whose courtyards OVERLAP.
+    allowed_close means 'may sit closer than GAP', never 'may overlap' -- but
+    the snap passes can land a satellite (crystal/decap) ON its IC's
+    courtyard, and _deoverlap skips these pairs by design. Push the lighter
+    part (fewer pins) of each overlapping close pair outward along the axis
+    needing the smallest move (+0.3mm clearance), clamped inside the fixed
+    outline. Pure geometry; runs only when overlaps remain after rescue."""
+    by_ref = {fp.ref: fp for fp in fps}
+    W, H = (outline_wh or (None, None))
+    if _os.environ.get("SKIDL_PLACE_DEBUG"):
+        print(f">>> [sep-debug] close_pairs={sorted(tuple(sorted(p)) for p in (close_pairs or []))}")
+    for pair in (close_pairs or []):
+        refs = list(pair) if not isinstance(pair, dict) else list(pair)
+        if len(refs) != 2:
+            continue
+        a, b = by_ref.get(refs[0]), by_ref.get(refs[1])
+        if a is None or b is None:
+            continue
+        ab, bb = _world_bbox(a), _world_bbox(b)
+        ox = min(ab[2], bb[2]) - max(ab[0], bb[0])
+        oy = min(ab[3], bb[3]) - max(ab[1], bb[1])
+        if _os.environ.get("SKIDL_PLACE_DEBUG"):
+            print(f">>> [sep-debug] {refs}: ox={ox:.2f} oy={oy:.2f} a={ab} b={bb}")
+        if ox <= 0 or oy <= 0:
+            continue                       # close but not overlapping: fine
+        mover, other = (a, b) if len(getattr(a, "pads", [])) <= \
+                                 len(getattr(b, "pads", [])) else (b, a)
+
+        def _clamp(fp):
+            if not (W and H):
+                return
+            x1, y1, x2, y2 = _world_bbox(fp)
+            if x1 < 0.5: fp.x += 0.5 - x1
+            if y1 < 0.5: fp.y += 0.5 - y1
+            x1, y1, x2, y2 = _world_bbox(fp)
+            if x2 > W - 0.5: fp.x -= x2 - (W - 0.5)
+            if y2 > H - 0.5: fp.y -= y2 - (H - 0.5)
+
+        n0 = count_courtyard_overlaps(board)
+
+        def _pair_clear():
+            # The pair must separate AND the board's TOTAL overlap count must
+            # improve -- an escape that dumps the satellite onto ANOTHER part
+            # (measured: Y1 cleared U1 then landed on C1+R1) is no escape.
+            a1, b1 = _world_bbox(mover), _world_bbox(other)
+            pair_ok = (min(a1[2], b1[2]) - max(a1[0], b1[0]) <= 0
+                       or min(a1[3], b1[3]) - max(a1[1], b1[1]) <= 0)
+            return pair_ok and count_courtyard_overlaps(board) < n0
+
+        # Try every escape direction (smallest move first); a push toward a
+        # near edge gets clamped straight back into the overlap (measured:
+        # crystal below a DIP on a 20mm-tall board), so test the RESULT and
+        # keep the first direction that actually clears -- also trying a
+        # 50/50 split where the anchor gives way half the distance.
+        home_m = (mover.x, mover.y, mover.rotation)
+        home_o = (other.x, other.y)
+        done = False
+        # Try the mover in BOTH orientations: a long satellite (12mm HC49
+        # crystal) that cannot fit beside its anchor lying down often fits
+        # standing up (rotated 90) -- the pair passes never try rotation.
+        for extra_rot in (0, 90):
+            mover.x, mover.y, mover.rotation = home_m
+            mover.rotation = (home_m[2] + extra_rot) % 360
+            # Directional ESCAPE distances (full penetration, not the
+            # symmetric overlap): to clear in +x the mover's LEFT edge must
+            # pass the other's RIGHT edge, etc. Recomputed per orientation.
+            mb_, ob_ = _world_bbox(mover), _world_bbox(other)
+            cands = sorted([
+                (ob_[2] - mb_[0] + 0.3, 1, 1),   # +x
+                (mb_[2] - ob_[0] + 0.3, 1, -1),  # -x
+                (ob_[3] - mb_[1] + 0.3, 0, 1),   # +y
+                (mb_[3] - ob_[1] + 0.3, 0, -1),  # -y
+            ])
+            for dist, axis, sgn in cands:
+                for split in (False, True):
+                    mover.x, mover.y = home_m[0], home_m[1]
+                    other.x, other.y = home_o
+                    dm = dist if not split else dist / 2 + 0.15
+                    if axis == 1:
+                        mover.x += sgn * dm
+                        if split: other.x -= sgn * dm
+                    else:
+                        mover.y += sgn * dm
+                        if split: other.y -= sgn * dm
+                    _clamp(mover); _clamp(other)
+                    if _pair_clear():
+                        done = True
+                        break
+                if done:
+                    break
+            if done:
+                break
+        if not done:                       # genuinely no room: restore all
+            mover.x, mover.y, mover.rotation = home_m
+            other.x, other.y = home_o
 
 
 def _rescue_overlaps(board, fps, fixed_set, outline_wh):
@@ -522,7 +820,8 @@ def _check_mech_fit(board, fps, mech):
             needed_mm2=needed, board_mm2=W * H, worst_refs=outside[:8])
 
 
-def _densify(board, fps, anchors, close_pairs, left_conn, right_conn):
+def _densify(board, fps, anchors, close_pairs, left_conn, right_conn,
+             target_wh=None):
     """Utilization-driven gap tightening (small circuit -> small board).
     Re-runs the legalization stack (_compact -> _deoverlap ->
     _shift_and_fit) at each DENSIFY_GAPS rung; a rung is accepted only
@@ -531,20 +830,37 @@ def _densify(board, fps, anchors, close_pairs, left_conn, right_conn):
     a tighter board that routes worse is not an improvement. Snapped
     decap/crystal pairs keep their closeness via allowed_close. Stops at
     the first rung that reaches UTIL_FLOOR; a failed rung restores the
-    previous state and stops."""
+    previous state and stops.
+
+    `target_wh=(W, H)` switches it to FIT-THE-BOARD mode: the user gave a
+    fixed outline and the parts overflow it, so pack them to fit INSIDE
+    (W, H). In that mode it keeps tightening past UTIL_FLOOR until the
+    parts fit, and accepts a rung even if the weighted HPWL grows (fitting
+    the user's enclosure outranks wire length) -- it still never accepts an
+    overlapping rung. Returns a report dict."""
     from skidl.board.place.metrics import (
         congestion_map, utilization, weighted_hpwl)
 
+    fit_mode = target_wh is not None
     before = utilization(board)
     report = {"utilization_before": before, "utilization_after": before,
-              "target": UTIL_FLOOR, "gap_mm": GAP}
-    if before >= UTIL_FLOOR:
+              "target": UTIL_FLOOR, "gap_mm": GAP,
+              "mode": "fit-board" if fit_mode else "util-floor"}
+    if not fit_mode and before >= UTIL_FLOOR:
         return report
 
     heavy = {v.fp.ref for v in anchors}
     left = {v.fp.ref for v in left_conn}
     right = {v.fp.ref for v in right_conn}
     hpwl0 = weighted_hpwl(board)
+
+    def _within_target():
+        W, H = target_wh
+        for fp in fps:
+            x1, y1, x2, y2 = _world_bbox(fp)
+            if x1 < -0.01 or y1 < -0.01 or x2 > W + 0.01 or y2 > H + 0.01:
+                return False
+        return True
 
     def snapshot():
         return ({fp.ref: (fp.x, fp.y, fp.rotation) for fp in fps},
@@ -557,6 +873,7 @@ def _densify(board, fps, anchors, close_pairs, left_conn, right_conn):
         board.outline = outline or None
 
     good = snapshot()
+    report["rungs"] = []
     for gap in DENSIFY_GAPS:
         _compact(fps, allowed_close=close_pairs, gap=gap)
         _deoverlap(fps, heavy=heavy, allowed_close=close_pairs, gap=gap)
@@ -565,14 +882,32 @@ def _densify(board, fps, anchors, close_pairs, left_conn, right_conn):
         _shift_and_fit(board, fps, left_edge=left, right_edge=right,
                        gap=gap, edge=max(2.0, gap * 2))
         peak = congestion_map(board).get("peak_ratio", 0.0)
-        if (count_courtyard_overlaps(board)
-                or peak > DENSIFY_CONGESTION
-                or weighted_hpwl(board) > hpwl0 * 1.05):
+        # Always reject an overlapping rung. Off fit-mode also reject on
+        # congestion / HPWL regression; in fit-mode those are tolerated
+        # because the goal is to get the parts inside the user's board.
+        ovl = count_courtyard_overlaps(board)
+        hpwl = weighted_hpwl(board)
+        hpwl_ceiling = hpwl0 * _densify_hpwl_ceiling(before)
+        bad = ovl > 0
+        if not fit_mode:
+            bad = bad or peak > DENSIFY_CONGESTION or hpwl > hpwl_ceiling
+        # WHY a rung was rejected, not just that it was -- without this the
+        # report says "stopped at 2.0mm" and the cause is invisible
+        # (measured holdout: stuck at 14.9% util with no clue which guard).
+        report["rungs"].append({
+            "gap": gap, "overlaps": ovl, "congestion_peak": round(peak, 2),
+            "hpwl": round(hpwl, 1), "hpwl_limit": round(hpwl_ceiling, 1),
+            "utilization": round(utilization(board), 3),
+            "accepted": not bad})
+        if bad:
             restore(good)
             break
         good = snapshot()
         report["gap_mm"] = gap
-        if utilization(board) >= UTIL_FLOOR:
+        if fit_mode:
+            if _within_target():
+                break            # fits now -> done (keep tightening otherwise)
+        elif utilization(board) >= UTIL_FLOOR:
             break
     report["utilization_after"] = utilization(board)
     return report
@@ -582,11 +917,14 @@ def _densify(board, fps, anchors, close_pairs, left_conn, right_conn):
 # Block internals
 # ---------------------------------------------------------------------------
 
-def _place_block(block, col_x, decap_to_ic, close_pairs=None):
+def _place_block(block, col_x, decap_to_ic, close_pairs=None,
+                 crystal_to_ic=None):
     """Place one functional block in a column starting at col_x. The
     biggest anchor sits at the column center; decaps/crystals snap
     pad-aware beside it; remaining satellites ring around. Returns the
-    (width, height) the column consumed."""
+    (width, height) the column consumed. `crystal_to_ic` (out-param): records
+    each snapped crystal->anchor so the loop can be RE-ASSERTED after the
+    global densify, which would otherwise strand the crystal (see _place_once)."""
     anchors = [v for v in find_anchor_parts(block)]
     satellites = [v for v in block if v not in anchors]
 
@@ -657,6 +995,8 @@ def _place_block(block, col_x, decap_to_ic, close_pairs=None):
                 _snap_beside(v.fp, main.fp, target_pads)
                 if close_pairs is not None:
                     close_pairs.add(frozenset((v.fp.ref, main.fp.ref)))
+                if crystal_to_ic is not None:
+                    crystal_to_ic[v] = main
                 continue
         ring.append(v)
 
@@ -1033,6 +1373,10 @@ def _shift_and_fit(board, fps, left_edge, right_edge,
         fp.y = _snap(fp.y - miny)
 
     if fixed_outline:
+        # The user's board size is AUTHORITATIVE and can be tight -- do NOT
+        # force a copper edge-clearance here (it over-constrains a dense fixed
+        # board into overlaps; the honest "enlarge the board" error fires
+        # instead). Edge clearance on a fixed board is the auto-grow path's job.
         W, H = fixed_outline
         for fp in fps:
             bbox = _world_bbox(fp)
@@ -1079,3 +1423,38 @@ def _shift_and_fit(board, fps, left_edge, right_edge,
 
     board.outline = [(0.0, 0.0), (_snap(maxx), 0.0),
                      (_snap(maxx), _snap(maxy)), (0.0, _snap(maxy))]
+
+
+def _grow_outline_for_copper(board, fps, clearance=EDGE_CU):
+    """Final AUTO-SIZE pass: guarantee no PAD COPPER sits within `clearance` of
+    the board edge -- KiCad copper_edge_clearance (measured: stm32 J2/J3 headers,
+    whose pins overhang their courtyard, hung over the Edge.Cuts a courtyard-
+    fitted outline drew).
+
+    This ONLY ever TRANSLATES all parts uniformly and GROWS the rectangular
+    outline -- it never moves a part relative to another, so it can NEVER create
+    a courtyard overlap (the reason _shift_and_fit must not be made copper-aware:
+    its per-part edge pulls shoved dense boards like stm32 into U1<->U2 overlaps).
+    Auto-size only; a fixed user outline cannot grow. Returns mm grown (dx,dy,...)."""
+    if not board.outline or not fps:
+        return None
+    ox = max(p[0] for p in board.outline)
+    oy = max(p[1] for p in board.outline)
+    cbs = [_copper_bbox(fp) for fp in fps]
+    cminx = min(b[0] for b in cbs)
+    cminy = min(b[1] for b in cbs)
+    cmaxx = max(b[2] for b in cbs)
+    cmaxy = max(b[3] for b in cbs)
+    # Translate so the left/top-most copper clears the origin edge.
+    dx = max(0.0, clearance - cminx)
+    dy = max(0.0, clearance - cminy)
+    if dx or dy:
+        for fp in fps:
+            fp.x = _snap(fp.x + dx)
+            fp.y = _snap(fp.y + dy)
+        cmaxx += dx
+        cmaxy += dy
+    W = _snap(max(ox, cmaxx + clearance))
+    H = _snap(max(oy, cmaxy + clearance))
+    board.outline = [(0.0, 0.0), (W, 0.0), (W, H), (0.0, H)]
+    return (dx, dy, W, H)

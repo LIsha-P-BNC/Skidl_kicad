@@ -6,7 +6,7 @@
   (paper "A4")
   (title_block
     (title "SKiDL-Generated Schematic")
-    (date "2026-09-17")
+    (date "2026-10-14")
     (rev A)
     (company "regr")
     (comment 1 "Engineer: T3")
@@ -704,13 +704,11 @@
     (dnp no)
     (fields_autoplaced yes)
     (uuid 346cf330-39be-5a37-8132-ef837c8fa760)
-    (property "Reference" "R1"
-      (at 111.76 93.97999999999999 0)
+    (property "Reference" "R1" (at 115.57 93.97999999999999 0)
       (effects
         (font
           (size 1.27 1.27))))
-    (property "Value" "1k"
-      (at 111.76 99.06 0)
+    (property "Value" "1k" (at 115.57 99.06 0)
       (effects
         (font
           (size 1.27 1.27))))
@@ -798,13 +796,11 @@
     (dnp no)
     (fields_autoplaced yes)
     (uuid e04f32ce-abbd-5da6-b281-7039ee66901d)
-    (property "Reference" "R2"
-      (at 134.62 93.97999999999999 0)
+    (property "Reference" "R2" (at 138.43 93.97999999999999 0)
       (effects
         (font
           (size 1.27 1.27))))
-    (property "Value" "1k"
-      (at 134.62 99.06 0)
+    (property "Value" "1k" (at 138.43 99.06 0)
       (effects
         (font
           (size 1.27 1.27))))
@@ -892,13 +888,11 @@
     (dnp no)
     (fields_autoplaced yes)
     (uuid 0435480c-8592-56a0-a0f0-d9c5691b08aa)
-    (property "Reference" "R3"
-      (at 157.48 95.25 0)
+    (property "Reference" "R3" (at 161.29 95.25 0)
       (effects
         (font
           (size 1.27 1.27))))
-    (property "Value" "1k"
-      (at 157.48 100.33000000000001 0)
+    (property "Value" "1k" (at 161.29 100.33000000000001 0)
       (effects
         (font
           (size 1.27 1.27))))
@@ -986,13 +980,11 @@
     (dnp no)
     (fields_autoplaced yes)
     (uuid 026d9aa0-e177-5b34-98b5-ea1a23350620)
-    (property "Reference" "C3"
-      (at 180.34 93.97999999999999 0)
+    (property "Reference" "C3" (at 184.15 93.97999999999999 0)
       (effects
         (font
           (size 1.27 1.27))))
-    (property "Value" "100nF"
-      (at 180.34 99.06 0)
+    (property "Value" "100nF" (at 184.15 99.06 0)
       (effects
         (font
           (size 1.27 1.27))))
@@ -1031,7 +1023,7 @@
       (font
         (size 1.27 1.27))
       (justify right))
-    (uuid ddbc290a-b0da-56e3-9aab-caa8da79ce20))
+    (uuid a66a9e3e-9db6-54e7-9cb3-d2aa38c3ed09))
   
   
   (label "N$1"
@@ -1040,7 +1032,7 @@
       (font
         (size 1.27 1.27))
       (justify left))
-    (uuid ecaed2f0-04ff-56e1-b075-1f317cf535c9))
+    (uuid 5e415ac4-0e4d-5738-9c5c-cfc7776adb7e))
   
   
   (label "N$2"
@@ -1049,7 +1041,7 @@
       (font
         (size 1.27 1.27))
       (justify right))
-    (uuid 23132ffb-50f7-5341-a2d7-b2879fbbeee1))
+    (uuid 39b16d25-b93e-57f9-a631-5abe922a027e))
   
   
   (label "N$2"
@@ -1066,7 +1058,7 @@
       (font
         (size 1.27 1.27))
       (justify left))
-    (uuid 680a2d8e-37a2-54d4-a850-f7b0e41380d6))
+    (uuid 7781b6bf-9f2a-5b73-a2dd-a61aba5c6c0b))
   (label "N$3"
     (at 157.48 101.6 270)
     (effects
@@ -1094,7 +1086,7 @@
       (font
         (size 1.27 1.27))
       (justify left))
-    (uuid b036f40f-6ad8-577e-8900-427de68054e2))
+    (uuid 5c80b40c-e69b-5a5e-bffb-3c7467ea6f41))
 (symbol
     (lib_id "power:+3.3V")
     (at 111.76 85.09 0)

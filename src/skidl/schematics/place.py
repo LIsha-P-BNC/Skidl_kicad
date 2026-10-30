@@ -735,7 +735,13 @@ def overlap_force(part, parts, **options):
 
     # Compute the overlap force of the bbox of this part with every other part.
     total_force = Vector(0, 0)
-    for other_part in set(parts) - {part}:
+    # Sorted, stable iteration (determinism): a bare set iterates in id()/
+    # memory order, which varies per process (ASLR). Float vector sums are
+    # rounding-order-dependent and the _rand variant draws one RNG value per
+    # overlapping pair, so an unstable order changes the result even with a
+    # pinned seed -> half-grid placement jitter between identical builds.
+    for other_part in sorted(set(parts) - {part},
+                             key=lambda p: str(getattr(p, "ref", "") or "")):
         other_part_bbox = other_part.place_bbox * other_part.tx
 
         # No force unless parts overlap.
@@ -779,7 +785,13 @@ def overlap_force_rand(part, parts, **options):
 
     # Compute the overlap force of the bbox of this part with every other part.
     total_force = Vector(0, 0)
-    for other_part in set(parts) - {part}:
+    # Sorted, stable iteration (determinism): a bare set iterates in id()/
+    # memory order, which varies per process (ASLR). Float vector sums are
+    # rounding-order-dependent and the _rand variant draws one RNG value per
+    # overlapping pair, so an unstable order changes the result even with a
+    # pinned seed -> half-grid placement jitter between identical builds.
+    for other_part in sorted(set(parts) - {part},
+                             key=lambda p: str(getattr(p, "ref", "") or "")):
         other_part_bbox = other_part.place_bbox * other_part.tx
 
         # No force unless parts overlap.

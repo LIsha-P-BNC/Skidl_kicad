@@ -166,6 +166,83 @@ def export_from_schematic(name):
     return None
 
 
+def _compare_netlists(intended_net, drawn_net, sym=frozenset()):
+    """PURE pin-partition diff of two already-written netlists. No subprocess.
+
+    Returns (unwanted, missing, lost):
+      unwanted = pin-groups present in `drawn_net` but NOT in `intended_net` (short).
+      missing  = intended pin-groups absent from `drawn_net` (broken wire).
+      lost     = pins the intended netlist mentions that never appear in `drawn_net`
+                 (a dropped symbol / 1-pin net the group check is blind to).
+    Factored out of verify() so both verify() and proved_broken() share ONE
+    deterministic comparison, and so the comparison is unit-testable without
+    kicad-cli (feed it a crafted "drawn" netlist directly).
+    """
+    intended = _partition(intended_net, sym)
+    drawn = _partition(drawn_net, sym)
+    lost = sorted(_pins(intended_net, sym) - _pins(drawn_net, sym))
+    unwanted = sorted(sorted(g) for g in (drawn - intended))
+    missing = sorted(sorted(g) for g in (intended - drawn))
+    return unwanted, missing, lost
+
+
+def defects(name, intended_net=None):
+    """Canonical set of connectivity DEFECT signatures of <name>.anvil_sch vs the
+    intended netlist -- or ``None`` when that cannot be DETERMINED (no intended
+    netlist, no kicad-cli, or a flaky export).
+
+    Returns a frozenset of tagged signatures:
+      ("short", (pins...))  -- a pin-group drawn but NOT intended (unwanted short)
+      ("break", (pins...))  -- an intended pin-group absent from the schematic
+      ("lost",  "REF.PIN")  -- an intended pin not rendered at all
+
+    The None-vs-empty-vs-populated tristate is the whole point: a guard must be
+    able to tell "this sheet is clean" (empty) from "I could not check" (None).
+    Collapsing those -- as verify()'s single ok=False bool did -- is what let a
+    flaky export masquerade as breakage. And comparing two defect SETS (before a
+    pass vs after it) is what lets a guard revert a pass ONLY for the defects THAT
+    PASS introduced, never for defects the sheet already carried (e.g. a router-
+    dropped net): a text-only pass on an already-imperfect sheet must not be
+    blamed for that sheet's pre-existing break.
+    """
+    intended_net = intended_net or (name + ".net")
+    if not os.path.exists(intended_net) or not os.path.exists(KICAD_CLI):
+        return None  # cannot be determined
+    out = export_from_schematic(name)
+    if not out:
+        return None  # export flaked -> undeterminable (NOT "clean", NOT "broken")
+    try:
+        sym = _symmetric_refs()
+        unwanted, missing, lost = _compare_netlists(intended_net, out, sym)
+    finally:
+        try:
+            os.remove(out)
+        except OSError:
+            pass
+    sig = set()
+    for g in unwanted:
+        sig.add(("short", tuple(g)))
+    for g in missing:
+        sig.add(("break", tuple(g)))
+    for p in lost:
+        sig.add(("lost", p))
+    return frozenset(sig)
+
+
+def proved_broken(name, intended_net=None):
+    """True ONLY when the schematic PROVABLY differs from the intended netlist
+    (an unwanted short, a missing net, or a pin not rendered at all).
+
+    Thin ABSOLUTE wrapper over defects(): None (undeterminable) and the empty set
+    (clean) both yield False, so an unverifiable run is never reported as broken.
+    A guard that runs on a sheet the router may have left imperfect should prefer
+    the RELATIVE check (defects-before vs defects-after the pass) so it reverts
+    only the defects the pass itself introduced; use proved_broken only when the
+    baseline is known-clean.
+    """
+    return bool(defects(name, intended_net))
+
+
 def verify(name, intended_net=None):
     """Compare schematic-extracted connectivity to the intended SKiDL netlist.
 
@@ -180,6 +257,12 @@ def verify(name, intended_net=None):
     unverified output on a machine that genuinely has no kicad-cli). If
     kicad-cli is available but cannot export the schematic, returns ok=False:
     approving an unverified schematic would hide an unwanted short or broken wire.
+
+    NOTE: ok=False conflates "proven mismatch" with "could not verify", and a
+    mismatch here is ABSOLUTE (vs the intended netlist), so it also fires for a
+    defect the router left BEFORE any post-pass ran. A guard deciding whether a
+    single geometry pass broke anything should use defects() (tri-state) and
+    compare its result before vs after the pass -- see defects()/proved_broken().
     """
     intended_net = intended_net or (name + ".net")
     if not os.path.exists(intended_net):
@@ -194,15 +277,11 @@ def verify(name, intended_net=None):
     if not out:
         return False, "verify failed (kicad-cli could not export schematic netlist)", [], []
     sym = _symmetric_refs()
-    intended = _partition(intended_net, sym)
-    drawn = _partition(out, sym)
-    lost = sorted(_pins(intended_net, sym) - _pins(out, sym))
+    unwanted, missing, lost = _compare_netlists(intended_net, out, sym)
     try:
         os.remove(out)
     except OSError:
         pass
-    unwanted = sorted(sorted(g) for g in (drawn - intended))
-    missing = sorted(sorted(g) for g in (intended - drawn))
     ok = not unwanted and not missing and not lost
     if ok:
         msg = "OK -- schematic connectivity == intended (no unwanted/missing wires)"

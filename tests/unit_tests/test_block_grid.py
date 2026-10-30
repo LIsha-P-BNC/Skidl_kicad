@@ -15,7 +15,12 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO / "src"))
 
-from skidl.schematics.anchor_place import _grid_assign, _grid_coords  # noqa: E402
+from skidl.schematics.anchor_place import (  # noqa: E402
+    _affinity_slot_map,
+    _grid_assign,
+    _grid_coords,
+    _is_chain_graph,
+)
 
 
 def _rects(coords, dims):
@@ -86,3 +91,109 @@ def test_columns_and_rows_align():
         assert len(xs) == 1, f"column {c} lefts not aligned: {xs}"
     for r, ys in by_row.items():
         assert len(ys) == 1, f"row {r} tops not aligned: {ys}"
+
+
+# ---- WI-5: chain guard + affinity-aware slot assignment -------------------
+
+def test_chain_graph_detected():
+    # 4 blocks in a line (PSU chain): 0-1-2-3 -> the grid must decline.
+    aff = {(0, 1): 5.0, (1, 2): 3.0, (2, 3): 4.0}
+    assert _is_chain_graph(4, aff)
+
+
+def test_empty_affinity_is_chain():
+    # No inter-block nets: nothing for a grid to optimize -> decline.
+    assert _is_chain_graph(3, {})
+
+
+def test_hub_graph_is_not_chain():
+    # MCU hub touching 3 blocks (degree 3) -> grid engages.
+    aff = {(0, 1): 5.0, (0, 2): 3.0, (0, 3): 4.0}
+    assert not _is_chain_graph(4, aff)
+
+
+def test_cycle_is_not_chain():
+    # A ring (cycle) has n edges: not a path -> grid may engage.
+    aff = {(0, 1): 1.0, (1, 2): 1.0, (2, 3): 1.0, (0, 3): 1.0}
+    assert not _is_chain_graph(4, aff)
+
+
+def test_affinity_map_anchor_keeps_centre():
+    rows, cols, slots = _grid_assign(5)
+    aff = {(0, 1): 5.0, (0, 2): 3.0, (0, 3): 4.0, (0, 4): 1.0}
+    m = _affinity_slot_map(5, slots, aff)
+    assert m[0] == slots[0], "anchor must keep the centre cell"
+    assert len(set(m)) == 5, "every block needs a distinct cell"
+
+
+def test_affinity_map_strong_partner_adjacent():
+    # Block 3 is the anchor's strongest partner -> it must sit in a cell
+    # ADJACENT (Manhattan distance 1) to the anchor's centre cell.
+    rows, cols, slots = _grid_assign(5)
+    aff = {(0, 3): 10.0, (0, 1): 1.0, (0, 2): 1.0, (1, 2): 1.0, (0, 4): 1.0}
+    m = _affinity_slot_map(5, slots, aff)
+    d = abs(m[3][0] - m[0][0]) + abs(m[3][1] - m[0][1])
+    assert d == 1, f"strongest partner at distance {d}, expected 1"
+
+
+def test_affinity_map_empty_degrades_to_ring_order():
+    # No affinity: the map must equal today's behaviour (block i -> slots[i]).
+    rows, cols, slots = _grid_assign(6)
+    m = _affinity_slot_map(6, slots, {})
+    assert m == slots[:6]
+
+
+def test_affinity_map_deterministic():
+    rows, cols, slots = _grid_assign(7)
+    aff = {(0, 1): 2.0, (0, 2): 2.0, (1, 3): 1.5, (2, 4): 1.5, (0, 5): 0.5}
+    assert _affinity_slot_map(7, slots, aff) == _affinity_slot_map(7, slots, aff)
+
+
+# ---- WI-5: skip_power affinity (rails must not hide the chain) ------------
+
+class _MockPin:
+    def __init__(self, part, net):
+        self.part = part
+        self.net = net
+        net.pins.append(self)
+
+
+class _MockNet:
+    def __init__(self, name):
+        self.name = name
+        self.pins = []
+
+
+class _MockPart:
+    def __init__(self):
+        self.pins = []
+
+
+def _mock_blocks_chain_plus_rail():
+    """3 blocks: signal chain 0-1-2 PLUS a +5V rail touching all three --
+    the buck shape that defeated the chain guard."""
+    from skidl.schematics.cluster import block_affinity_matrix
+
+    parts = [_MockPart() for _ in range(3)]
+    sig01 = _MockNet("REG_IN")
+    sig12 = _MockNet("REG_OUT")
+    rail = _MockNet("+5V")
+    for net, members in ((sig01, (0, 1)), (sig12, (1, 2)), (rail, (0, 1, 2))):
+        for i in members:
+            parts[i].pins.append(_MockPin(parts[i], net))
+    blocks = [{parts[0]}, {parts[1]}, {parts[2]}]
+    return block_affinity_matrix, blocks
+
+
+def test_rail_hides_chain_without_skip_power():
+    bam, blocks = _mock_blocks_chain_plus_rail()
+    aff = bam(blocks)                      # default: rail included
+    assert (0, 2) in aff, "rail edge expected in default affinity"
+    assert not _is_chain_graph(3, aff), "rail makes the graph non-chain"
+
+
+def test_skip_power_restores_chain():
+    bam, blocks = _mock_blocks_chain_plus_rail()
+    aff = bam(blocks, skip_power=True)     # rail excluded
+    assert (0, 2) not in aff, "+5V edge must be gone with skip_power"
+    assert _is_chain_graph(3, aff), "signal-only graph is the 0-1-2 chain"

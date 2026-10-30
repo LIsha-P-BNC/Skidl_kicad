@@ -143,16 +143,51 @@ def route_with_freerouting(dsn_path: Path, ses_path: Path,
             # unrouted)") into progress_file so pollers see LIVE status
             # instead of a 66-minute black box (user-friendliness for
             # genuinely long routing).
-            import re as _re3, time as _time
+            import re as _re3, time as _time, threading as _threading
+            import queue as _queue
             proc = subprocess.Popen(
                 cmd, cwd=str(dsn_path.parent),
                 stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT, text=True,
                 creationflags=no_window)
             out_lines = []
+            # Drain stdout on a DAEMON thread so timeout_s is enforced even when
+            # FreeRouting goes SILENT. A blocking `for line in proc.stdout` in
+            # THIS thread only reaches a deadline check when the NEXT line
+            # arrives -- so a silent stall (JVM GC pause, deadlock, stuck
+            # optimization that prints nothing) never times out, and since the
+            # caller has no outer timeout, build_pcb() hangs forever. The reader
+            # feeds a queue; the main loop below blocks on the queue with a
+            # bounded wait, so it wakes to re-check the wall-clock deadline
+            # regardless of whether any output is flowing.
+            _lines_q = _queue.Queue()
+
+            def _pump(pipe, sink, q):
+                try:
+                    for ln in pipe:
+                        sink.append(ln)
+                        q.put(ln)
+                finally:
+                    q.put(None)        # sentinel: stdout reached EOF
+
+            _reader = _threading.Thread(
+                target=_pump, args=(proc.stdout, out_lines, _lines_q),
+                daemon=True)
+            _reader.start()
+
             deadline = _time.time() + timeout_s
-            for line in proc.stdout:
-                out_lines.append(line)
+            timed_out = False
+            while True:
+                remaining = deadline - _time.time()
+                if remaining <= 0:
+                    timed_out = True
+                    break
+                try:
+                    line = _lines_q.get(timeout=min(remaining, 1.0))
+                except _queue.Empty:
+                    continue           # woke only to RE-CHECK the deadline
+                if line is None:
+                    break              # stdout closed -> process is finishing
                 if progress_file:
                     m = _re3.search(
                         r"pass #(\d+).*?(?:\((\d+) unrouted\))?\s*$", line)
@@ -166,15 +201,18 @@ def route_with_freerouting(dsn_path: Path, ses_path: Path,
                                 pf.write(f"routing pass {m.group(1)}{suffix}\n")
                         except OSError:
                             pass
-                if _time.time() > deadline:
-                    proc.kill()
-                    break
-            proc.wait(timeout=30)
-            if _time.time() > deadline:
+            if timed_out:
+                proc.kill()
+                try:
+                    proc.wait(timeout=30)
+                except Exception:
+                    pass
                 last = {"ok": False,
                         "error": f"FreeRouting exceeded {timeout_s}s budget",
                         "jar": jar}
                 continue
+            proc.wait(timeout=30)
+            _reader.join(timeout=5)    # out_lines complete for the parse below
         except Exception as exc:
             try:
                 proc.kill()

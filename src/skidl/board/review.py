@@ -304,11 +304,13 @@ def _intent_checks(base, out_dir) -> dict:
 
     # -- decoupling distance ------------------------------------------------
     from skidl.board.place.simple import _build_views
-    from skidl.schematics.cluster import find_decap_affinities
+    from skidl.schematics.cluster import find_decap_pairs
     views, _nets = _build_views(board)
-    pairs = {}
-    for _net, (decap, ic) in find_decap_affinities(list(views.values())).items():
-        pairs.setdefault(decap.ref, ic.ref)
+    # Per-CAP pairing: the net-keyed variant collapses to one cap per shared
+    # +V rail, so the review would silently skip every other decap's
+    # distance check (see cluster.find_decap_pairs docstring).
+    pairs = {decap.ref: ic.ref
+             for decap, ic in find_decap_pairs(list(views.values())).items()}
     for decap_ref, ic_ref in sorted(pairs.items()):
         d = _decap_distance(board, decap_ref, ic_ref)
         if d is None:

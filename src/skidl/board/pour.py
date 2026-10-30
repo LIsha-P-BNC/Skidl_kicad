@@ -204,40 +204,118 @@ def assign_pour_layers(board: BoardModel, pour_decisions: dict) -> tuple:
     return assignments, reroute, warnings
 
 
+def inner_plane_power_nets(assignments: dict, decisions: dict) -> set:
+    """Power rails poured ONLY on dedicated INNER plane(s) -- the ones to keep
+    OUT of the DSN (they are planes, like GND) and fan out with vias. A rail
+    poured on its own (outer) pad layer ties directly and is NOT here."""
+    out = set()
+    for name, layers in (assignments or {}).items():
+        if decisions.get(name) != "power":
+            continue
+        plane = set(layers or ())
+        if plane and plane.isdisjoint({"F.Cu", "B.Cu"}):
+            out.add(name)
+    return out
+
+
+def plan_power_fanout_vias(board: BoardModel, assignments: dict,
+                           decisions: dict) -> tuple:
+    """Via-drop each inner-plane POWER pad onto its plane -- CLEARANCE-CHECKED
+    against the board's CURRENT copper, so call it AFTER routing (like the GND
+    stitch re-plan). Returns (vias, unreached).
+
+    When a power rail pours ONLY on a dedicated INNER plane, the router does not
+    reliably fan its outer pads down to the plane (measured: stm32 +3.3V 31
+    unconnected at 4L, plane reserved but unreached). Drop a THROUGH via at each
+    outer SMD pad so the pad bonds to the plane fill -- but ONLY where the via
+    clears every other-net pad/track/via (a via-in-pad on a 0.5mm-pitch QFP pin
+    collides with its neighbours -> clearance/hole DRC; skip those). THT pads
+    span all layers already. `unreached` = pads that could NOT get a clean via
+    (their net must stay routable so the router still connects them)."""
+    all_cu = set(copper_layers(board))
+    default = (board.net_classes or {}).get("Default", {})
+    vsize = float(default.get("via_size", 0.8) or 0.8)
+    vdrill = float(default.get("via_drill", 0.4) or 0.4)
+    clr = max(float(default.get("clearance", 0.2) or 0.2), 0.2)
+    vias, unreached = [], set()
+    for name in sorted(inner_plane_power_nets(assignments, decisions)):
+        plane = set(assignments[name])
+        net = board.nets.get(name)
+        if net is None:
+            continue
+        for ref, number in net.pad_refs:
+            try:
+                fp = board.footprint(ref)
+            except KeyError:
+                continue
+            pad = _find_pad(fp, number)
+            if pad is None:
+                continue
+            if pad.pad_type == "thru_hole" or pad.drill > 0:
+                continue                  # spans all layers -> on the plane
+            if _pad_cu_layers(fp, pad, all_cu) & plane:
+                continue                  # pad already sits on a pour layer
+            pt = fp.pad_world_xy(pad)
+            if (_via_clears_copper(board, pt, name, vsize / 2.0, clr)
+                    and not _too_close(pt, vias, vsize)):
+                vias.append(Via(net=name, at=(round(pt[0], 3), round(pt[1], 3)),
+                                size=vsize, drill=vdrill, layers=("F.Cu", "B.Cu")))
+            else:
+                unreached.add(name)       # a pad the router must still reach
+    return vias, unreached
+
+
 def prepare_power_pours(board: BoardModel, currents: dict = None,
                         spacing_mm: float = 5.0) -> tuple:
     """One call from pipeline.build_pcb (after placement, before routing):
     decide pours, assign layers, emit zones + stitching vias, and return the
     nets to EXCLUDE from the DSN.
 
-    Only GROUND is excluded -- it pours on every layer its pads occupy, so
-    the router has nothing to add. POWER stays IN the DSN: it pours only on
-    its dedicated inner plane, and its outer-layer pads are routed to vias
-    that land on that plane (option b -- Specctra has no per-layer net
-    exclusion; confirmed against the .dsn grammar, every layer is
-    (type signal) and net classes are global). The asymmetry in
-    assign_pour_layers makes the exclusion set fall out for free: exactly
-    the ground nets, whose every pad already sits on a poured layer.
+    GROUND is excluded (pours on every pad layer). An INNER-PLANE-ONLY POWER
+    rail is ALSO excluded now + gets per-pad fanout vias (plan_power_fanout_vias):
+    relying on the router to fan outer pads down to the reserved plane ("option
+    b") was measured to FAIL (stm32 +3.3V 31 unconnected at 4L -- plane reserved,
+    pads unreached), so we drop the vias ourselves and keep the rail out of the
+    DSN. A power rail poured on its own (outer) pad layer still ties directly and
+    is NOT excluded -- so 2-layer / SMD-power boards are unchanged.
 
-    Returns (exclude, zones, vias, overrides, warnings)."""
+    Returns (exclude, zones, stitch_vias, overrides, warnings)."""
     decisions = plan_pours(board, currents)
     assignments, _reroute, warns = assign_pour_layers(board, decisions)
     zones = emit_zones(board, assignments, decisions)
     vias, vwarns = plan_stitching_vias(board, assignments, spacing_mm)
-    overrides = compute_pad_overrides(board, assignments)
+    overrides = compute_pad_overrides(board, assignments, decisions)
     exclude = {name for name, role in decisions.items()
                if role == "ground" and name in assignments}
+    # Inner-plane power rails are planes too -> keep them OUT of the DSN; their
+    # pads bond to the plane via post-route fanout vias (plan_power_fanout_vias).
+    exclude |= inner_plane_power_nets(assignments, decisions)
     return exclude, zones, vias, overrides, warns + vwarns
 
 
-def compute_pad_overrides(board: BoardModel, assignments: dict) -> list:
+def compute_pad_overrides(board: BoardModel, assignments: dict,
+                          decisions: dict = None) -> list:
     """Per-pad zone-connect overrides for poured nets. Zones connect pads
     SOLID by default (the starvation lesson); this overrides THROUGH-HOLE
     pads to thermal relief (zone_connect 1) so they stay hand-solderable --
     a solid pour wicks heat off a THT joint. SMD pads keep the solid
-    default (no override). Returns list[PadConnectOverride]."""
+    default (no override). Returns list[PadConnectOverride].
+
+    EXCEPTION -- the GROUND plane stays SOLID even for THT pads. Ground is
+    the largest, densest pour: its THT pads (regulator/connector grounds)
+    are exactly where auto-routed copper crowds the pad and the thermal
+    spokes cannot all form -> KiCad 'starved_thermal' (zone min spoke count),
+    a hard DRC error (measured: L7805 GND pad on holdout_can_node). Solid is
+    also the electrically correct choice there (lowest-impedance return path,
+    best heatsinking for a power part). Power-plane THT pads keep thermal
+    relief: those pours are small/dedicated, rarely starve, and the
+    hand-solder benefit is worth keeping. `decisions` is the net->role map
+    (plan_pours); absent -> every THT pad thermal (legacy behaviour)."""
+    decisions = decisions or {}
     overrides = []
     for name in assignments:                     # poured nets only
+        if decisions.get(name) == "ground":
+            continue                             # ground plane: solid, no starve
         net = board.nets.get(name)
         if net is None:
             continue

@@ -38,7 +38,12 @@ GRID = 0.5          # mm placement grid
 GAP = 2.0           # mm minimum courtyard-to-courtyard gap -- generous on
                     # purpose: tight packing walls off pads and makes the
                     # autorouter fail (measured on the NE555 board)
-EDGE_MARGIN = 4.0   # mm board-edge to courtyard margin (routing corridor)
+EDGE_MARGIN = 2.0   # mm board-edge to courtyard margin (routing corridor).
+                    # TI reference boards run ~0.5-2 mm edge clearance; the old
+                    # 4 mm added a full 8 mm to every board dimension, which on
+                    # a small board is a disproportionate area tax (holdout
+                    # board-util 0.22 at 4 mm -> 0.27 at 2 mm, no packing
+                    # change). 2 mm keeps a safe depanel/route corridor.
 
 _REF_PREFIX_RE = re.compile(r"^([A-Za-z_#]+)")
 
@@ -126,6 +131,29 @@ def _world_bbox(fp: Footprint):
     return bbox
 
 
+def _copper_bbox(fp: Footprint):
+    """World bbox of the footprint's COPPER: courtyard UNION every pad.
+
+    Outline fitting and edge-connector flush-pulls must clear PAD COPPER, not
+    the courtyard -- an edge header's courtyard ends at its body while the
+    pins/pads overhang toward (and past) the board edge, so a courtyard-based
+    outline slices the pads -> KiCad copper_edge_clearance errors (measured:
+    stm32 J2/J3 SWD+power headers hung over the Edge.Cuts). A pad's half-extent
+    uses max(size_x, size_y)/2 -- a rotation-independent conservative radius."""
+    boxes = []
+    cb = fp.courtyard_world_bbox()
+    if cb is not None:
+        boxes.append(cb)
+    for pad in getattr(fp, "pads", []):
+        px, py = fp.pad_world_xy(pad)
+        h = max(pad.size_x, pad.size_y) / 2.0
+        boxes.append((px - h, py - h, px + h, py + h))
+    if not boxes:
+        return (fp.x - 2.5, fp.y - 2.5, fp.x + 2.5, fp.y + 2.5)
+    return (min(b[0] for b in boxes), min(b[1] for b in boxes),
+            max(b[2] for b in boxes), max(b[3] for b in boxes))
+
+
 def _overlap(a, b, margin=GAP):
     """Overlap (dx, dy) of two bboxes incl. `margin`; None if clear."""
     ax1, ay1, ax2, ay2 = a
@@ -157,9 +185,10 @@ def place_board(board: BoardModel) -> dict:
 
     connectors = [v for v in views if is_connector_part(v)]
     anchors = [v for v in find_anchor_parts(views) if v not in connectors]
-    decap_by_part = {}   # decap _PartView -> ic _PartView
-    for _net, (decap, ic) in find_decap_affinities(views).items():
-        decap_by_part.setdefault(decap, ic)
+    # Per-CAP pairing: the net-keyed find_decap_affinities collapses to one
+    # cap per shared +V rail (see cluster.find_decap_pairs docstring).
+    from skidl.schematics.cluster import find_decap_pairs
+    decap_by_part = dict(find_decap_pairs(views))   # decap view -> ic view
     # Functional caps (555 CONT, crystal load, comp/bootstrap): tie to an IC
     # via a SIGNAL pin, so find_decap_affinities (VCC-only) misses them and
     # they'd scatter into 'others' -- too far to route. Pull them beside their

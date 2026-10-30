@@ -333,7 +333,27 @@ def build(name=None, title="SKiDL-Generated Schematic", auto_stub_fanout=None,
     # crowded and a per-section sheet split earns its keep. Scale-free: same rule
     # for a 5-part or a 500-part circuit, just a different side of the threshold.
     _hier_min = int(os.environ.get("SKIDL_HIER_MIN_PARTS", "50"))
-    big = n_parts > _hier_min
+    # ROOM-AWARE ("page full -> next sheet", the user's #1 rule): raw part COUNT
+    # is a weak proxy for how much PAGE AREA a design needs -- a few big ICs eat
+    # a sheet that 50 resistors would not. Weight each part by the schematic area
+    # its symbol occupies (pin-count bands: a 2-pin passive = 1 slot, a 100-pin
+    # MCU = several), and compare the SLOT total to the same threshold. A design
+    # overflows the page -- and earns a split -- when either the raw count OR the
+    # area-weighted slot count exceeds the threshold. Tuned gently so no existing
+    # single-sheet board flips (regression-verified). Kill switch
+    # SKIDL_AREA_SPLIT=0 falls back to pure part count.
+    def _slot_weight(p):
+        pins = len([pin for pin in getattr(p, "pins", [])])
+        if pins <= 4:
+            return 1
+        if pins <= 16:
+            return 2
+        if pins <= 48:
+            return 4
+        return 6
+    _area_split = os.environ.get("SKIDL_AREA_SPLIT") != "0"
+    _slots = sum(_slot_weight(p) for p in _real_parts) if _area_split else n_parts
+    big = n_parts > _hier_min or _slots > _hier_min
 
     # D.0 BLOCK-SANITY GATE (docs SCHEMATIC_DESIGN_RULES section D): "a very
     # small single-function circuit is ONE block (or none) -- splitting one
@@ -659,7 +679,18 @@ def build(name=None, title="SKiDL-Generated Schematic", auto_stub_fanout=None,
     # big (> SKIDL_HIER_MIN_PARTS parts) AND actually made of >=2 functional pages
     # (@subcircuit). One page, or a small design, stays a single sheet-with-blocks.
     # Nothing here is circuit-specific -- it reads the design's own size + structure.
-    _auto_multisheet = (big and _has_hier and _n_pages >= 2
+    # EXPERIMENT (2026-10-28, default OFF): a density-aware multi-sheet trigger was
+    # tried -- split author @subcircuit pages into real sheets when >= SKIDL_DENSE_MIN_PAGES
+    # pages AND >= SKIDL_DENSE_MIN_PARTS parts, even under SKIDL_HIER_MIN_PARTS. On the
+    # 27-part/6-block ESP32 board it DID NOT deliver the intended per-sheet wires: the
+    # child sheets (USB-C / CH340C / 2x19 header) are STILL unroutable by route.py, so the
+    # multi-sheet attempt collapsed to a single-sheet fallback. Left here as an OPT-IN probe
+    # (defaults are inert) -- the real fix is route.py dense-child-sheet routing, which must
+    # be validated against the full regression matrix before enabling by default.
+    _dense_min_pages = int(os.environ.get("SKIDL_DENSE_MIN_PAGES", "999"))
+    _dense_min_parts = int(os.environ.get("SKIDL_DENSE_MIN_PARTS", "999"))
+    _dense_multi = (_n_pages >= _dense_min_pages and n_parts >= _dense_min_parts)
+    _auto_multisheet = ((big or _dense_multi) and _has_hier and _n_pages >= 2
                         and os.environ.get("SKIDL_PAGE_MODE") != "0")
     _page_mode = _auto_multisheet
     try:
@@ -861,6 +892,20 @@ def build(name=None, title="SKiDL-Generated Schematic", auto_stub_fanout=None,
             pass
 
     user_seed = opts.pop("seed", None)
+    if user_seed is None:
+        # SKIDL_SEED env (WI measurement support): pin the placement seed so
+        # an A/B engine comparison measures the ENGINE, not the seed sweep's
+        # run-to-run variance (measured: stm32 crossings ranged 16-21 across
+        # identical builds). An explicit seed= option wins over the env var;
+        # with neither set, the normal sweep below is unchanged.
+        _env_seed = os.environ.get("SKIDL_SEED", "").strip()
+        if _env_seed:
+            try:
+                user_seed = int(_env_seed)
+            except ValueError:
+                warnings.warn(
+                    f"smart_schematic: ignoring non-integer SKIDL_SEED={_env_seed!r}",
+                    RuntimeWarning)
     seeds = [user_seed] if user_seed is not None else [0, 1, 2, 3, 5, 8, 13, 21]
 
     def _sanitize():
@@ -1574,16 +1619,56 @@ def build(name=None, title="SKiDL-Generated Schematic", auto_stub_fanout=None,
             warnings.warn(f"smart_schematic: {note} skipped: {e}", RuntimeWarning)
             changed = 0
         if bak:
-            ok = True
-            if changed:
+            # RELATIVE connectivity guard. Revert ONLY for a defect THIS pass
+            # introduced -- the set of connectivity defects AFTER the pass minus
+            # the set that was ALREADY present on the sheet the pass received.
+            #
+            # Two bugs this fixes, both measured on holdout_can_node:
+            #  1. Absolute vs intended (the old `verify(name)[0]` test) blamed a
+            #     pass for the ROUTER'S pre-existing defects: a text-only pass
+            #     (field-text orientation) was reverted merely because the sheet
+            #     already carried a dropped net (R3), which a text edit cannot
+            #     touch. Comparing before-vs-after exonerates the neutral pass.
+            #  2. A single ok/not-ok bool conflated "connectivity broke" with
+            #     "could not verify" (flaky kicad-cli export). defects() returns
+            #     None for the latter, so an unverifiable run reverts NOTHING and
+            #     the (deterministic) change stands -- killing the nondeterminism
+            #     (the export races -> the revert used to race -> two variants).
+            new_defects = frozenset()
+            if changed and verify_connectivity:
                 try:
-                    ok = verify_connectivity.verify(name)[0] if verify_connectivity else True
+                    after = verify_connectivity.defects(name)
+                    if after:  # some defect present AND verifiable -> is it new?
+                        # Measure the baseline by swapping the pre-pass backup in,
+                        # re-exporting, then swapping the pass's output back. The
+                        # restore MUST run even if the baseline export raises, or
+                        # the pass's change would be silently lost -> try/finally.
+                        _after_tmp = sheet_path + ".after_tmp"
+                        shutil.copyfile(sheet_path, _after_tmp)
+                        try:
+                            shutil.copyfile(bak, sheet_path)  # baseline = pre-pass
+                            before = verify_connectivity.defects(name)
+                        finally:
+                            shutil.copyfile(_after_tmp, sheet_path)  # pass back
+                            try:
+                                os.remove(_after_tmp)
+                            except OSError:
+                                pass
+                        # Only a determinable baseline can prove a NEW defect; if
+                        # the baseline is undeterminable, do not revert (keep the
+                        # change -> deterministic).
+                        if before is not None:
+                            new_defects = after - before
                 except Exception:
-                    ok = True
-            if changed and not ok:
+                    new_defects = frozenset()
+                if new_defects and os.environ.get("SKIDL_GUARD_DEBUG"):
+                    print(f">>> [guard-debug] {note}: introduced "
+                          f"{len(new_defects)} new defect(s): {sorted(new_defects)}")
+            if changed and new_defects:
                 shutil.copyfile(bak, sheet_path)
                 print(f">>> smart_schematic: {note} reverted for "
-                      f"{os.path.basename(sheet_path)} (connectivity guard)")
+                      f"{os.path.basename(sheet_path)} (connectivity guard: step "
+                      f"introduced {len(new_defects)} new net defect(s))")
                 changed = 0
             try:
                 os.remove(bak)
@@ -1598,12 +1683,27 @@ def build(name=None, title="SKiDL-Generated Schematic", auto_stub_fanout=None,
             print(f">>> smart_schematic: stripped {n} spurious dangling labels")
         return n
 
+    def _do_dedup_overlaps(p):
+        import beautify_wires
+        return beautify_wires.dedup_overlaps(p)
+
     def _do_beautify(p):
         import beautify_wires
         m = beautify_wires.beautify(p)
         if m:
             print(f">>> smart_schematic: beautified wires ({m} segments merged/reshaped)")
         return m
+
+    def _do_avoidbody(p):
+        # Reroute the MIDDLE of any wire segment that crosses an IC/multi-pin
+        # symbol BODY so it detours around the nearest edge (endpoints never
+        # move -> connectivity preserved; the revert-guard re-proves it).
+        # SKIDL_WIRE_AVOID_BODY=0 disables.
+        import avoid_body_wires
+        a = avoid_body_wires.avoid(p)
+        if a:
+            print(f">>> smart_schematic: rerouted {a} wire(s) around symbol bodies")
+        return a
 
     def _do_powerrail(p):
         # Ladder rails: collapse "a power symbol on every pin" into ONE horizontal
@@ -1667,6 +1767,23 @@ def build(name=None, title="SKiDL-Generated Schematic", auto_stub_fanout=None,
             print(f">>> smart_schematic: normalized {tfx} upside-down field text angle(s)")
         return tfx
 
+    def _do_textplace(p):
+        # Move a VERTICAL passive's Reference/Value text to the SIDE so it stops
+        # overlapping the body + pin numbers (R1/1k sitting on the pins). Text
+        # only -- never touches connectivity; the guard confirms it.
+        import fix_text_placement
+        tp = fix_text_placement.fix(p)
+        if tp:
+            print(f">>> smart_schematic: moved {tp} passive text field(s) off the body")
+        # Sibling pass for MULTI-PIN symbols (ICs, connectors): Reference above
+        # the body, Value below it -- never ON the body over the pin-name text
+        # (measured: U1's Value rendered as "MVCBA7T3831-2-OT" on the IC body).
+        import fix_ic_text
+        ti = fix_ic_text.fix(p)
+        if ti:
+            print(f">>> smart_schematic: moved {ti} IC/connector text field(s) off the body")
+        return tp + ti
+
     def _do_pwrflags(p):
         # Every undriven power rail gets a PWR_FLAG, so the sheet passes KiCad
         # ERC first time -- no "Input Power pin not driven" on any circuit.
@@ -1711,19 +1828,51 @@ def build(name=None, title="SKiDL-Generated Schematic", auto_stub_fanout=None,
         # the new rail geometry gets snapped and dotted like any other wire.
         _guarded(sheet_path, _do_powerrail, "power-rail draw")
         _guarded(sheet_path, _do_gridsnap, "grid snap")
+        # Detour wires off IC bodies on the FINAL wire geometry (after rails +
+        # grid-snap, which themselves shift wires/bodies and can create crossings),
+        # before junction heal so any new jog-corner T gets its dot.
+        _guarded(sheet_path, _do_avoidbody, "wire-over-body avoid")
         # AFTER every wire-geometry pass: heal any dotless wire-T the passes
         # above (or the router's ordering-sensitive add_junctions) left behind.
         _guarded(sheet_path, _do_junctions, "junction heal")
+        # Track-over-track cleanup: the power-rail draw / grid-snap / junction
+        # heal above can leave overlapping collinear copper the mid-pipeline
+        # beautify never saw. Strict-overlap union only -- touching T-splits
+        # (and their junction dots) are preserved. Runs here, after all wire
+        # geometry is final.
+        #
+        # GUARDED (2026-10-14): this pass was historically run UNGUARDED on the
+        # claim that unioning collinear OVERLAPPING segments is "provably
+        # netlist-neutral" (covers the same (x,y) point set). That claim is
+        # FALSE when two DIFFERENT nets have collinear overlapping segments with
+        # no junction between them -- a perfectly legal KiCad construct (two
+        # wires crossing/overlapping without a dot are NOT connected). Measured
+        # on t3_subcircuit: R2's leaf-net wire runs collinear ON TOP of the GND
+        # spine (y=110.49); dedup unioned the two and DESTROYED the R2.2-D2.2
+        # net (defects BEFORE dedup: [] -> AFTER: [('break', ('D2.2','R2.x'))]),
+        # shipping 2 pin_not_connected ERC errors. The revert-guard reverts the
+        # pass whenever it introduces a NEW net defect, so a cross-net union can
+        # no longer corrupt connectivity; a genuinely neutral dedup still stands.
+        _guarded(sheet_path, _do_dedup_overlaps, "track-over-track dedup")
         # The geometry passes above can detach a decorative net-name label from
         # its wire, so make one final guarded cleanup pass on every hierarchy page.
         _guarded(sheet_path, _do_strip, "dangling-label strip (final)")
         _guarded(sheet_path, _do_textfix, "field-text orientation")
+        # UNGUARDED: moving property TEXT cannot change connectivity (text is not
+        # a pin/wire/label), so it never appears in the extracted netlist and the
+        # proof-based guard would never revert it -- running it unguarded just
+        # skips a pointless kicad-cli export (same reason PWR_FLAG below is).
+        try:
+            _do_textplace(sheet_path)
+        except Exception as _tp_exc:
+            warnings.warn(f"smart_schematic: passive text side-placement "
+                          f"skipped: {_tp_exc!r}", RuntimeWarning)
     # PWR_FLAG add runs UNGUARDED: a flag only adds a `#FLG` pin coincident with
-    # an existing net anchor, and the verifier strips `#` refs, so it can NEVER
-    # change real connectivity. The guard's kicad-cli re-export is occasionally
-    # flaky and would then falsely revert the flags (observed: 4 ERC errors left
-    # on a 51-part sheet whose flags verified fine standalone). Applying it after
-    # the guarded chain keeps the flags.
+    # an existing net anchor, and the verifier STRIPS `#` refs, so a flag is
+    # invisible to the extracted netlist -- it can NEVER register as proven
+    # breakage, so the proof-based guard would never revert it. Applying it after
+    # the guarded chain (observed once: 4 ERC errors left on a 51-part sheet whose
+    # flags verified fine standalone) keeps the flags with zero extra export.
     _do_pwrflags(name + ".anvil_sch")
 
     # C2 on-sheet notes: draw the caller's jumper/DNP/warning text in the top
@@ -1745,15 +1894,64 @@ def build(name=None, title="SKiDL-Generated Schematic", auto_stub_fanout=None,
     # IPC-2611 schematic rules (Manhattan 90deg, on-grid, no dangling labels,
     # junction dots, power rail symbols, title block) PLUS the real KiCad ERC
     # error list -- exactly what the GUI's ERC dialog will show. Read-only.
+    _kicad_erc_errors = None
+    _geo_erc_lines = []  # (sheet, check_id, message, location) for the .erc report
     try:
         import ipc_check
         cli = verify_connectivity.KICAD_CLI if verify_connectivity else ""
         for _i, sheet_path in enumerate(sheet_paths):
             # sheet_paths[0] is the ROOT; the rest are child sheets whose
             # standalone ERC reports "non-existent parent" artifacts (filtered).
-            ipc_check.report(os.path.splitext(sheet_path)[0], cli, child=_i > 0)
+            _rep = ipc_check.report(os.path.splitext(sheet_path)[0], cli,
+                                    child=_i > 0)
+            # CAPTURE the REAL KiCad ERC errors (not just print them). The whole
+            # point of running kicad-cli ERC is to catch GEOMETRIC defects the
+            # logical netlist verifier cannot see -- a power symbol/wire that
+            # sits beside a pin without electrically touching it (measured:
+            # bms_1s shipped with 6 "pin not connected" ERC errors while the
+            # netlist verify passed, because ipc_check only PRINTED the count).
+            # Aggregate ERROR-severity violations across all sheets so the build
+            # verdict + build_result.json reflect the SAME ERC the app shows.
+            _ee = (_rep or {}).get("erc_errors")
+            if _ee is not None:
+                _kicad_erc_errors = (_kicad_erc_errors or 0) + len(_ee)
+                for _chk, _msg, _loc in _ee:
+                    _geo_erc_lines.append(
+                        (os.path.basename(sheet_path), _chk, _msg, _loc))
     except Exception as e:
         warnings.warn(f"smart_schematic: IPC compliance report skipped: {e}", RuntimeWarning)
+    if _kicad_erc_errors:
+        print(f">>> smart_schematic: !! {_kicad_erc_errors} REAL KiCad ERC "
+              "error(s) on the DRAWN schematic (geometric -- a pin/wire/power "
+              "symbol is not electrically connected even though the netlist is "
+              "right). This is a BUILD DEFECT, not a success. See the "
+              "[check_id] lines above.")
+        # Rule-8 reconciliation: the shipped <name>.erc is written by SKiDL's
+        # LOGICAL erc (netlist-level), which is clean whenever the netlist is
+        # right -- so a GEOMETRIC defect (pin/wire not electrically touching on
+        # the DRAWING) used to leave the file reading "No errors", masking the
+        # very defect the build already knows about. APPEND the geometric
+        # violations so the .erc artifact agrees with the build verdict +
+        # build_result.json + the app. Never hides the logical section; adds an
+        # explicit ERROR section after it.
+        try:
+            # The logical SKiDL .erc is written to the PROJECT dir (cwd here is
+            # the build stage, which carries no .erc). Append there; the atomic
+            # publish below only moves files that live in the stage, so it will
+            # not clobber this annotation.
+            _erc_path = os.path.join(_proj, name + ".erc")
+            _hdr = (f"\nERC ERROR: {_kicad_erc_errors} geometric (drawn-schematic) "
+                    f"violation(s) found by KiCad ERC. The netlist is correct but "
+                    f"a pin/wire/power-symbol is not electrically connected on the "
+                    f"DRAWING -- this is a BUILD DEFECT.\n")
+            _body = "".join(
+                f"    [{_chk}] {_msg} {_loc}  (sheet {_sheet})\n"
+                for _sheet, _chk, _msg, _loc in _geo_erc_lines)
+            with open(_erc_path, "a", encoding="utf-8") as _ef:
+                _ef.write(_hdr + _body)
+        except Exception as _erc_exc:
+            warnings.warn(f"smart_schematic: could not annotate .erc with "
+                          f"geometric violations: {_erc_exc!r}", RuntimeWarning)
 
     # ELECTRICAL-CORRECTNESS gate (runs for EVERY circuit): beyond connectivity
     # (ERC) and IPC readability, verify every component is RATED for the stress
@@ -1814,10 +2012,18 @@ def build(name=None, title="SKiDL-Generated Schematic", auto_stub_fanout=None,
     # server then falls back to the legacy log-grep, so behavior is unchanged.
     try:
         _routed = routed_seed is not None
+        # The build is VERIFIED only when the logical netlist matches AND the
+        # real KiCad ERC on the drawn sheet is clean -- a geometric ERC error
+        # (disconnected pin/power symbol) means the shipped schematic is wrong
+        # even if the netlist graph is right.
+        _netlist_ok = bool(locals().get("_ok", True))
+        _erc_ok = (_kicad_erc_errors or 0) == 0
         _result = {
             "schema": 1,
             "name": name,
-            "verified": bool(locals().get("_ok", True)),
+            "verified": _netlist_ok and _erc_ok,
+            "netlist_verified": _netlist_ok,
+            "kicad_erc_errors": _kicad_erc_errors,
             "verify_available": verify_connectivity is not None,
             "routed": _routed,
             "routed_seed": routed_seed,

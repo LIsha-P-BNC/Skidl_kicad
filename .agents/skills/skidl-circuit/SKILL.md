@@ -1,29 +1,61 @@
 ---
 name: skidl-circuit
 description: >-
-  Turn a circuit request into a correct SKiDL Python script that generates a netlist +
-  KiCad schematic project, using ONLY this repo's own SKiDL library and plain KiCad — no
-  proprietary app, no per-machine setup. Use this WHENEVER someone working in this repo
-  (or any project with SKiDL installed) wants to design/create/generate a circuit,
-  schematic, netlist, or KiCad project from a text prompt, a circuit IMAGE/photo/diagram,
-  a datasheet, or a spec DOCUMENT. Produces PROFESSIONAL, standard-compliant schematics
-  (IEEE 315): meaningful net names, power/GND symbols, standard values + reference
-  designators, decoupling caps, left-to-right flow. Generic and DYNAMIC — works for ANY
-  circuit; never hardcodes one. Fully portable: no absolute paths, no external app.
+  Turn a circuit request into a correct SKiDL design that builds a netlist + KiCad
+  schematic/project INSIDE the Anvil CAD app, through its MCP tools (build / parts). Use
+  this WHENEVER someone wants to design/create/generate a circuit, schematic, PCB, netlist,
+  or Anvil CAD/KiCad project from a text prompt, a circuit IMAGE/photo/diagram, a datasheet,
+  or a spec DOCUMENT. Drives the app's own build() pipeline and part library — never raw
+  python / pip / a CLI (those do not exist on a shipped install). Produces PROFESSIONAL,
+  standard-compliant schematics (IEEE 315 / IPC-2612 + TI per-function idioms): meaningful
+  net names, power/GND symbols, standard values + reference designators, decoupling caps,
+  left-to-right flow. Generic and DYNAMIC — works for ANY circuit; never hardcodes one.
 ---
 
-# SKiDL circuit builder (portable — repo-local, no external app)
+# SKiDL circuit builder (Anvil CAD app — via the MCP build/parts tools)
 
-Someone wants: describe a circuit as **text, an image, a document, or a datasheet** → you
-write a **correct** SKiDL `.py` script → running it produces `.net` + one `.kicad_sch` per
-hierarchy sheet, which open directly in **plain KiCad** (any recent version this repo
-supports — kicad6 through kicad9). No proprietary app, no per-user folder convention —
-this skill only depends on what's in this repo (`pip install -e .` from repo root gets
-`skidl` and the `skidl-part-search` CLI on the path) plus a KiCad install for viewing
-output and resolving footprints/symbols. **Note (verified by running it):** plain SKiDL
-does NOT generate a `.kicad_pro` project file — only `.net` + `.kicad_sch`. Opening the
-top-level `.kicad_sch` directly in KiCad, or opening/saving the folder as a new KiCad
-project, is what creates the `.kicad_pro` — don't claim this skill produces one.
+Someone describes a circuit as **text, an image, a document, or a datasheet** → you build a
+**correct** design that produces `.net` + `.kicad_sch` (+ `.kicad_pro`) and opens in the
+**Anvil CAD app**. You drive the app through its **MCP tools** — **never** raw `python`,
+`pip install`, or a shell CLI (none of those exist on a shipped install). The lifecycle tools:
+
+- **`get_app_state`** — LOOK before you ACT: the **FIRST call every turn**. It tells you WHICH
+  project is open, WHO owns it (`ai` / `user` / `empty`), and the SCENARIO to follow
+  (`no_project` → fresh build; `fill_empty` → build into the open blank; `modify_ai` → edit our
+  design + rebuild; `adopt_manual` → adopt then edit; `modify_manual` → re-adopt, their file is
+  truth). **Never overwrite a `user` file without warning + a backup**; if two projects are open
+  and which one the user means is ambiguous, **ASK**.
+- **`build`** — the schematic lifecycle, `mode=`:
+  - `rules` → the MANDATORY design workflow + canonical circuit **body template**. **CALL FIRST
+    for any new circuit** (no name/code needed); follow what it returns exactly.
+  - `source` → the existing project's SKiDL source, to **EXTEND** it. **CALL FIRST whenever the
+    user continues / adds to / changes a project that already exists** — take `source`, add the
+    new block/sheet/section, rebuild the SAME name with the FULL extended script (every existing
+    sheet kept).
+  - `plan` → register the plan for a NEW project: `code` = a short human-readable plan
+    (functional blocks, chosen parts + values, and the user questions you asked with their
+    answers). **SHOW the plan and WAIT for explicit approval**; a new build is REFUSED
+    (status `workflow_gate`) until a plan exists and you pass `confirm=True`.
+  - `body` (**PREFER**) → `code` = ONLY nets/parts/connections (no imports / no build call — the
+    template comes from `mode='rules'`). Pre-checked (syntax, real parts/pins, ERC) in seconds;
+    on `precheck_failed` apply the returned `fix_suggestions` and call again.
+  - `script` → `code` = a COMPLETE SKiDL script (hierarchical `@subcircuit` designs only).
+  - `status` → poll the running build until `done` (`include_log` for the log tail).
+  - `open` → show the project in the app. `bom` → BOM via the app's own column preset.
+- **`parts`** — the part library, `action=`:
+  - `search` → `items` = `"Lib:Name"` exact checks or free-text terms. A part is **missing ONLY
+    when `total_matches` is 0**. Call **ONCE with the FULL list** before writing any circuit.
+  - `describe` → `items` = `["Lib:Name"]`. Returns the exact `Part(...)` line + **EVERY pin
+    {num, name, func}** + datasheet. **Never invent a pin** — use only what this returns.
+  - `add` / `add_footprint` → create a REAL symbol/footprint from the part's **DATASHEET**
+    (show the pin table, user confirms; pass `expected_pins`/`expected_pads`). Opt-in only.
+- **`read_pdf`** — render a datasheet / schematic PDF to page images (the plain Read tool cannot
+  open PDFs here). **`read_live`** / **`edit_schematic_live`** — read + batch-edit the OPEN
+  schematic for small in-place changes (`add_wire`, `edit_value`, `rotate_component`,
+  `label_to_wire`, `query_net`, …); one request with several changes = ONE call with several ops.
+
+It must work for **ANY** circuit (DYNAMIC) — never hardcode a specific one; always build a fresh
+design from what the user asked for.
 
 ## THE ORDER — non-negotiable (follow EVERY time, for any circuit)
 1. **Recommend FIRST — before searching the library.** For the request, recommend the
@@ -32,15 +64,16 @@ project, is what creates the `.kicad_pro` — don't claim this skill produces on
    library search.
 2. **Read the datasheet — MANDATORY for every active IC.** For **each active IC you
    place** (regulator, MCU, transceiver, driver, op-amp, sensor, memory, etc.) fetch and
-   read its datasheet — `WebFetch` a URL the user gave, else `WebSearch "<mfr part>
-   datasheet"` — to confirm **pin numbers/names, min/typ values, and the *Typical
-   Application Circuit***. Not optional for active parts. Only **trivial passives** (R /
-   C / L / LED / diode / connector) and truly well-known textbook parts may skip this.
-   If the user supplied a datasheet/document/image, read that too. **Never guess a value,
-   a pin, or a connection.**
+   read its datasheet — `read_pdf` for a PDF the user gave, `WebFetch` a URL, else
+   `WebSearch "<mfr part> datasheet"` — to confirm **pin numbers/names, min/typ values, and
+   the *Typical Application Circuit***. Not optional for active parts. Only **trivial passives**
+   (R / C / L / LED / diode / connector) and truly well-known textbook parts may skip this.
+   If the user supplied a datasheet/document/image, read that too (`read_pdf` for a PDF).
+   **Never guess a value, a pin, or a connection.**
 2b. **Source ↔ datasheet difference analysis**, when the user supplies an image/PDF/doc
    AND a datasheet exists for a key IC:
-   - Read the **SOURCE** (image/PDF) = the actual circuit → **this is what you draw.**
+   - Read the **SOURCE** (image/PDF, via `read_pdf`) = the actual circuit → **this is what you
+     draw.**
    - Read the datasheet's *Typical Application Circuit* = the reference only.
    - **List the deltas**: parts the board adds (status LEDs, extra filtering, protection,
      test points), parts it omits, value differences, **NP/not-populated** parts,
@@ -52,12 +85,12 @@ project, is what creates the `.kicad_pro` — don't claim this skill produces on
 3. **The user decides — their choice is final.** Present options (`AskUserQuestion` is
    ideal). Only recommend; never choose for them.
 4. **Wait for confirmation** before touching the part library.
-5. **Then search the library** — `skidl-part-search "<keyword>"` (installed via this
-   repo's `setup.py` console_scripts; broken on Windows before this repo's readline fix —
-   confirm it runs, or fall back to `python -m skidl.scripts.part_search_cli`). Report
-   clearly which confirmed parts exist in the library and which don't.
-6. **Never silently substitute a missing part.** If a part isn't in the library, report it
-   and stop — adding new library entries is a separate, explicit step.
+5. **Then check the library — `parts(action='search', items=[...])`** ONCE with the FULL list.
+   Report clearly which confirmed parts exist (`total_matches` > 0) and which are missing
+   (`total_matches` == 0). Confirm pins with `parts(action='describe')` before wiring.
+6. **Never silently substitute a missing part.** If a part isn't in the library, report it and
+   stop — adding one is a separate, explicit, user-confirmed step (`parts(action='add')`,
+   pins from the datasheet).
 
 ## Input fidelity — output must match the input 1:1
 Text prompt, circuit **image**/photo, spec **document**, or **datasheet** — however the
@@ -73,142 +106,63 @@ re-interpretation.**
   auto-generated refs.
 - **Read dense sheets part-by-part, not as a pattern** — a heavily populated page hides
   parts inside clusters; check each one against the BOM.
-- Match every **value** and **pin** exactly — never guess; confirm pins before wiring
-  (`skidl-part-search --fields ...` or read the library entry directly).
+- Match every **value** and **pin** exactly — never guess; confirm pins with
+  `parts(action='describe')` before wiring.
 
 ## BOM — always deliver it, never drop a component
 Build a **full component list (BOM) with counts** from the input and confirm it with the
 user before writing code. Every listed component must end up grounded, library-checked,
-and wired. After generating, **cross-check the schematic/netlist part count against the
+and wired. After building, **cross-check the schematic/netlist part count against the
 agreed list** — fix before reporting if anything's missing. If a component in an
 image/datasheet is unclear, **ask** — never silently skip it.
 The BOM (Ref, Value, Qty, `Lib:Name`, Footprint) is a **required deliverable** in the
-final report.
+final report; generate it with **`build(mode='bom', name=<project>)`** (the app's BOM engine,
+using the project's own column preset).
 
 ## Ground every part — never invent one
 Never write a `Part("Lib", "Name")` or a pin number you haven't confirmed exists.
-1. `skidl-part-search "<keyword>"` → real `Lib:Name` combinations. Pick the right one.
-2. Confirm pins before wiring — either via the search tool's `--fields` output or by
-   instantiating the part (`p = Part("Lib", "Name"); print(p.pins)`) and checking numbers
-   and names before connecting.
+1. **`parts(action='search', items=[...])`** → real `Lib:Name` combinations (one call, full
+   list). A part is missing ONLY when `total_matches` is 0.
+2. **`parts(action='describe', items=["Lib:Name"])`** → the exact `Part(...)` line + EVERY pin
+   {num, name, func} + datasheet. Use ONLY those pins — never invent one.
 
 ## Build steps
-1. **Understand** the circuit from the prompt/image/document/datasheet; list components +
-   connections. For each active IC, read its datasheet and do the source ↔ datasheet
-   difference analysis (THE ORDER, step 2/2b). Ask a short clarifying question only if a
-   value/part is genuinely ambiguous.
-2. **Ground every part** (see above). Note real names/pins.
-3. **Write a fresh script** — pick a project name, write `<project>.py` (new unique name;
-   never overwrite an unrelated existing circuit's file). **Write it in the fixed authoring
-   order** (spec [§9.1](../../../docs/schematic_generation_spec.md)) so connections cannot
-   silently split: imports → tool → **all shared nets created ONCE at module level** (every
-   cross-block signal + every power rail) → `@subcircuit` blocks (local nets stay inside)
-   → top-level instantiation passing the shared `Net` objects → ERC → netlist → schematic.
-   For a multi-sheet design, sketch the **net → sheet connectivity matrix** first (spec
-   §9.3) and build to it.
-   ```python
-   from skidl import *
-   set_default_tool(KICAD9)   # or KICAD6..KICAD8 to match the target KiCad version
+1. **`get_app_state` FIRST** (LOOK before you ACT; `read_live` too if a project is open), then
+   **understand** the circuit from the prompt/image/document/datasheet; list components +
+   connections. For a PDF use `read_pdf`. For each active IC read its datasheet and do the
+   source↔datasheet difference analysis (THE ORDER 2/2b). Ask a short clarifying question only
+   if a value/part is genuinely ambiguous.
+2. **New circuit → `build(mode='rules')` FIRST** (no name/code needed) to get the MANDATORY
+   workflow + canonical body template; follow it exactly.
+   **Continuing an existing design → `build(mode='source', name=<project>)` FIRST**: take the
+   returned source, ADD the new block/sheet/section, and rebuild the SAME name with the FULL
+   extended script (every existing sheet kept). A small in-place tweak → `edit_schematic_live`.
+3. **Ground every part** with `parts(action='search')` + `parts(action='describe')` (above).
+   Note real names/pins.
+4. **Register + confirm the plan → `build(mode='plan', name=<project>, code=<short plan>)`.**
+   The plan = functional blocks + chosen parts/values + the user questions you asked with their
+   answers. **SHOW it to the user and WAIT for explicit approval.** (A new-project build is
+   REFUSED — status `workflow_gate` — until a plan exists and you pass `confirm=True`.)
+5. **Build → `build(mode='body', name=<project>, code=<nets/parts/connections>, confirm=True)`**
+   (PREFER `body`: just nets/parts/connections — no imports, no build call; the template comes
+   from `mode='rules'`). It is pre-checked (syntax, real parts/pins, ERC) in seconds; on
+   `precheck_failed` apply the returned `fix_suggestions` and call again. For a hierarchical
+   multi-sheet design use `mode='script'` with a COMPLETE `@subcircuit` script. Apply the
+   **SENIOR-DESIGNER DISCIPLINE** + **PROFESSIONAL SCHEMATIC RULES** below when writing the code.
+6. **Poll `build(mode='status', name=<project>)` until `status:"done"`** (`include_log` for the
+   build-log tail). ERC-clean + netlist is NOT a finished build (GEN-3): only `done` with the
+   `.kicad_sch` artifact present is success; the app's golden verification runs in the pipeline.
+   If it stops at `.net`, report it as **INCOMPLETE**, not successful.
+7. **Self-audit** (below) — re-read the design against the source and fix anything before
+   reporting: every part present (incl. `NP`), LED series-R + polarity, pull resistors to a real
+   signal, config/boot/reset pins tied, sheet structure sane.
+8. **Open + BOM:** `build(mode='open', name=<project>)` once to show it in Anvil CAD;
+   `build(mode='bom', name=<project>)` for the BOM.
+9. **Report (in Tanglish):** parts (Lib/Name), ERC/precheck result, confirmed `.kicad_sch`
+   (+ `.kicad_pro`), the BOM, the "datasheet vs board" note (per key IC: additions/changes + any
+   compliance warning), and that it opened in the Anvil CAD app.
 
-   # parts, nets, buses, @subcircuit blocks — see "PROFESSIONAL SCHEMATIC RULES" below
-
-   ERC()
-   generate_netlist(file_="<project>.net")
-   generate_schematic(filepath=".", top_name="<project>", title="<Project Title>",
-                       flatness=0.0, auto_stub=True)
-   ```
-   - Set `tag=` on every `Part()` (a short stable string you choose, e.g. `tag="r1"`) —
-     verified directly: omitting it logs a "Missing tag" warning and SKiDL auto-generates
-     a random one per run, which defeats the whole point (the tag is what keeps a part's
-     identity/UUID stable across regenerations, so re-running the script doesn't create a
-     fresh, disconnected footprint in the PCB each time). **Also pass `tag=` on the
-     `@subcircuit` call itself** (e.g. `power_regulation(vin, vout, gnd,
-     tag="power_regulation_blk")`) — verified: the block/Node instance gets its own
-     "Missing tag" warning too, and the tag also becomes that block's generated sheet
-     filename suffix instead of an auto-numbered one.
-   - Apply the **PROFESSIONAL SCHEMATIC RULES** below (meaningful net names, power
-     rails that match `_POWER_NET_RE`, standard values, standard ref letters, a
-     decoupling cap per IC power pin) — this is what makes the output look professional,
-     not just electrically correct.
-   - Group into `@subcircuit` functions **by function** (power, MCU, comms, sensing, …),
-     5–15 parts each for best auto-routing. **`@subcircuit` = one schematic page per call,
-     every call** — never call an `@subcircuit`-decorated function inside a loop/repeated
-     block. Verified directly: 50 identical `@subcircuit` calls (a "sensor channel," each
-     nesting one more `@subcircuit`, 100 hierarchy nodes total) produced **101 separate
-     `.kicad_sch` pages** — this is exactly how a design explodes to "100 pages."
-     **Repeated identical sub-units (LEDs, resistor arrays, connector cells, per-channel
-     blocks, …) must be a plain, undecorated helper function** — it adds its parts
-     straight onto the *current* (parent) sheet instead of spinning off a new one, no
-     matter how many times it's called in a loop:
-     ```python
-     # WRONG — 50 calls = 50 extra pages
-     @subcircuit
-     def sensor_channel(vcc, gnd, sig): ...
-     for i in range(50):
-         sensor_channel(vcc, gnd, Net(f"CH{i}"))
-
-     # RIGHT — stays on the parent sheet, no page explosion
-     def sensor_channel(vcc, gnd, sig): ...   # no decorator
-     for i in range(50):
-         sensor_channel(vcc, gnd, Net(f"CH{i}"))
-     ```
-     **Page-count model: pages ≈ 1 (top) + number of `@subcircuit` *call sites*
-     (instances), never the number of function *definitions*.** A single
-     `@subcircuit`-decorated function called 100 times yields ~101 pages, not 2 — the
-     decorator applies per-call, not per-def.
-     Reserve `@subcircuit` for the handful of **genuinely distinct** blocks in the design
-     (power, MCU, USB, RF, sensor front-end, …) — that naturally lands a big design at a
-     readable ~4–8 pages instead of one page per repeated instance.
-   - **Don't reach for `flatness` to fix a page-count problem** — verified directly:
-     `flatness` folds child node-*types* back onto the parent sheet smallest-total-size
-     first, so a type repeated N times (its total size grows with N) is usually the
-     *last* type eligible to flatten. In testing, `flatness=0.2/0.5/0.8` left all 50
-     repeated-instance pages unflattened; only `flatness=1.0` merged them — and that also
-     erases *all* hierarchy (the genuinely distinct blocks too), defeating the purpose.
-     Keep `flatness=0.0` (the template default) and control page count at the source —
-     the plain-function rule above — not via this parameter.
-   - **Pre-flight check, before running the script**: re-read what you just wrote and ask,
-     for every `@subcircuit`-decorated function — *is it called more than once, or from
-     inside a loop?* If yes, that's `N` extra pages for `N` calls; stop and convert it to
-     a plain undecorated function before running, rather than discovering it after
-     generation.
-4. **Run it**: `python <project>.py`. First run may build a symbol/footprint cache — allow
-   time or run in the background.
-5. **Check ERC**: aim for 0 errors; investigate real warnings (usually a missing
-   connection).
-6. **Validate against the spec — MANDATORY gate before reporting done.** Run
-   `python -m skidl.scripts.validate_design <project>.py --netlist <project>.net --matrix`
-   (falls back to running the file directly:
-   `python src/skidl/scripts/validate_design.py ...`). It statically checks the `.py` (and
-   the `.net`) against the normative rules in
-   [docs/schematic_generation_spec.md](../../../docs/schematic_generation_spec.md) and
-   reports by rule ID. **Every `ERROR` (a MUST/MUST NOT violation) is blocking — fix the
-   `.py` and re-run until zero errors.** Review each `WARN`; fix or justify it in the
-   report. The validator never executes the target, so it is safe and fast. For
-   multi-sheet designs, `--matrix` prints the **net → block connectivity matrix** — diff
-   it against your intended net-to-sheet plan (and the source image/PDF) to confirm no net
-   was missed (`(not passed to any block)` = a missed connection, also flagged NET-6).
-7. **Self-audit** (see below) — re-read the `.py` against the source and fix anything
-   before reporting.
-8. **Confirm the schematic ARTIFACT exists — the success gate (GEN-3).** ERC-clean +
-   netlist is NOT a finished build. **Never say "schematic generated" / "Build Successful"
-   / "verified" until the `.kicad_sch` file actually exists on disk** and passes
-   connectivity verification. On the MCP/Anvil path, that means polling `build(name, mode='status')`
-   until `status:"done"` with `generated` listing `.kicad_sch` **and** `.kicad_pro` (a
-   MISMATCH there = failed; the `.net` is still valid for PCB). "running in the background"
-   with no confirmed file is NOT success. If only `.py` + `.net` exist, the build
-   **stopped at the netlist — report it as INCOMPLETE**, not successful. Golden
-   verification auto-runs in `_finish_build` and sets `verified` (cross-checks
-   `.net` ↔ `.kicad_sch`: dropped parts GV-1, duplicate UUIDs GV-2, count parity GV-3).
-   Only report **"BUILD SUCCESSFUL (Verified)"** when `verified` is true AND the
-   human-assisted diffs vs. the source (component count, pin connectivity, `--matrix`,
-   hierarchy) match. See spec [§10](../../../docs/schematic_generation_spec.md).
-9. **Report**: parts (Lib/Name), ERC result, **validator result (0 errors)**,
-   **confirmed `.kicad_sch` + `.kicad_pro`**, the BOM, the "datasheet vs board" note (per
-   key IC: additions/changes + any compliance warning), and that the project opens in the
-   Anvil CAD app.
-
-## Self-audit — run AFTER writing the .py, BEFORE reporting done
+## Self-audit — run AFTER building, BEFORE reporting done
 A netlist with "0 errors" can still be electrically wrong (a dropped or miswired part).
 Re-check:
 1. **Every source part present** — match by ref designator; nothing dropped, including
@@ -223,24 +177,48 @@ Re-check:
    pulled to their correct rail/GND; no floating control pins.
 5. **Sheet structure is sane** — no single `@subcircuit` wildly oversized; no near-empty
    sheet either; and **no `@subcircuit`-decorated function called inside a loop** (every
-   call spins off its own page — verified to reach 100+ pages from 50 repeated calls;
-   convert it to a plain undecorated function instead, see PROFESSIONAL SCHEMATIC RULES
-   step 3 above). If routing keeps failing, check whether a block is too densely
-   interconnected for `auto_stub`'s selective-stub thresholds and either split it or
-   raise `auto_stub_fanout`/`auto_stub_max_wire_pins`.
+   call spins off its own page — a repeated unit must be a plain, undecorated helper
+   function so it stays on the parent sheet; verified to reach 100+ pages from 50 repeated
+   calls otherwise). Page-count model: pages ≈ 1 (top) + number of `@subcircuit` *call sites*.
 6. Report every auto-fix or intentional deviation in the "datasheet vs board" note.
 
-## PROFESSIONAL SCHEMATIC RULES — bake these into EVERY generated .py
+## SENIOR-DESIGNER DISCIPLINE — the process/judgment layer (apply to EVERY design)
+The rules below are the common case; a senior's value is the **process + judgment** on top:
+front-load the thinking so the drawing is almost mechanical, and never report an unreviewed /
+unverified result. Full set: spec [§11 `MET-1…10`](../../../docs/schematic_generation_spec.md).
+Grounded in Rick Hartley, Henry Ott, TI SPRACU5, IPC class 1/2/3, NASA EEE-INST-002. The habits:
+- **Requirements first (MET-1):** before parts, state the operating box — V-range + transients,
+  rail/load currents, worst-case dissipation, mechanical/connector constraints, reliability class.
+- **Architecture + risk-first (MET-2):** block diagram + power tree + ground/return strategy first;
+  find the hardest part (fine-pitch QFN/BGA, fast edges, sensitive analog, thermal) and let it drive
+  the sheet/layout plan.
+- **Datasheet + errata (MET-3):** datasheet + app-note + errata together; the typical-app circuit is a
+  STARTING POINT to re-derive for THIS design's worst case, not gospel; prefer proven, in-lifecycle,
+  second-sourced parts.
+- **DFx + debug from day 1 (MET-4):** test points on every rail/clock/reset/programming line;
+  pin-1/polarity unambiguous; design in isolatable blocks so the board can be brought up.
+- **Review gates — never self-approve blind (MET-6):** run the self-audit as a real per-block review
+  BEFORE declaring done; clear every ERC/precheck flag OR document why it's waived — no silent violations.
+- **Margin (MET-7):** derate (commercial ~80 % V/I, 70 % P); worst-case the critical values; FMEA mindset.
+- **Document the WHY (MET-8):** capture design intent + non-obvious value rationale in the report.
+- **Verify, don't infer (MET-9):** report what the build/status/BOM actually confirmed vs assumed (= GEN-3).
+- **Rules are defaults (MET-10):** break one only with a documented reason; electrical-safety (`ELE`)
+  limits never bend — a reversed diode/LED, a dropped LED series-R, a floating enable, or shorted rails
+  is never a "style" override: explain, propose the fix, and confirm.
+
+## PROFESSIONAL SCHEMATIC RULES — bake these into EVERY build
 > **Normative reference:** these rules are formalized with MUST/SHOULD/MAY levels, stable
 > rule IDs, and a machine-checkable checklist in
 > [docs/schematic_generation_spec.md](../../../docs/schematic_generation_spec.md). The
-> numbered guidance below is the working summary; the spec is the source of truth, and the
-> validator (build step 6) enforces it by rule ID.
+> numbered guidance below is the working summary; the spec is the source of truth. For how to
+> DRAW each recurring block (LDO, buck, MCU, crystal, reset/boot straps, I²C/SPI/USB, op-amp,
+> INA current-sense, SAR-ADC input, RF match, ESD, LED, half-bridge) to its TI-grounded idiom,
+> see spec **§5.16 `FUNC`** (TI SLOA089 / SPRACU5 / datasheet typical-application circuits).
 
-`generate_schematic(..., auto_stub=True)` already does the *drawing* — placement,
-routing, wire vs. label classification, power-symbol emission. Your job when **writing**
-the `.py` is to feed it clean inputs so the result is standard-compliant (IEEE 315 /
-IEC 60617 graphic-symbol conventions). Apply ALL of these:
+The app's **build() engine** (`smart_schematic` + `auto_stub`) already does the *drawing* —
+placement, routing, wire vs. label classification, power-symbol emission. Your job when writing
+the `body`/`script` `code` is to feed it clean inputs so the result is standard-compliant
+(IEEE 315 / IEC 60617 graphic-symbol conventions). Apply ALL of these:
 
 1. **Meaningful net names (UPPERCASE, underscores).** Name every signal net you care
    about — never leave it to auto `N$1`. `sda = Net('I2C_SDA'); tx = Net('UART_TX');
@@ -249,9 +227,8 @@ IEC 60617 graphic-symbol conventions). Apply ALL of these:
    KiCad's own native display convention for an active-low signal is a text overbar,
    written `~{NAME}` in any KiCad text field — `_N` is the portable equivalent most tools
    (including this one) use for the net name itself.
-2. **Power rails must match the engine's power-net pattern so they render as power
-   SYMBOLS, not wires.** This repo's own detector (`_POWER_NET_RE` in
-   `src/skidl/tools/kicad*/gen_schematic.py`) recognizes: `+<num>V` (e.g. `+5V`, `+3.3V`,
+2. **Power rails must use engine-recognized names so they render as power SYMBOLS, not
+   wires.** The engine's power-net detector recognizes: `+<num>V` (e.g. `+5V`, `+3.3V`,
    `+12V`, `+1.8V`) and `GND AGND DGND PGND VCC VDD VSS VEE VBUS VBAT AVCC AVDD DVCC
    DVDD`. So write `vcc = Net('+3.3V'); gnd = Net('GND')`. A name like `Net('VCC_3V3')`
    will NOT be recognized as power — use `+3.3V` for a 3.3 V rail. **One ground net for
@@ -284,51 +261,54 @@ IEC 60617 graphic-symbol conventions). Apply ALL of these:
 9. **Account for every pin**: tie unused/NC IC inputs to a defined level (pull or GND) —
    don't leave inputs floating, it shows up as ERC warnings.
 10. **Net identity is by Python object, NOT by name string — a real SKiDL gotcha.**
-    Unlike hand-editing a KiCad schematic (where typing the same label text on two sheets
-    connects them), calling `Net('EN')` twice in two different `@subcircuit`/helper
-    functions creates TWO separate, unconnected nets that just happen to share a display
-    name — SKiDL will not merge them, and won't warn either. Only actual power-rail names
-    (rule 2, matched by `_POWER_NET_RE`) are treated as globally shared. So: (a) never
-    reuse a generic local name (`en`, `sel`, `clk`, `rst`) across unrelated
-    `@subcircuit`s assuming they'll connect — they won't; (b) for a non-power signal that
-    genuinely must cross subcircuits, pass the *same* `Net` object in as a function
-    argument, don't just repeat the string name.
-11. **`auto_stub=True` is required for anything beyond a trivial circuit** — without it,
-    the schematic generator won't auto-emit power symbols or fall back to labels for
-    congested nets. Tune `auto_stub_fanout` (default 3) / `auto_stub_max_wire_pins`
-    (default 3) / `auto_stub_max_wire_dist` (default 2000 mil) if routing keeps failing
-    on a dense block, rather than fighting the placer with a giant flat circuit.
+    Calling `Net('EN')` twice in two different `@subcircuit`/helper functions creates TWO
+    separate, unconnected nets that just happen to share a display name — SKiDL will not
+    merge them, and won't warn either. Only actual power-rail names (rule 2) are treated as
+    globally shared. So: (a) never reuse a generic local name (`en`, `sel`, `clk`, `rst`)
+    across unrelated `@subcircuit`s assuming they'll connect — they won't; (b) for a
+    non-power signal that genuinely must cross subcircuits, pass the *same* `Net` object in
+    as a function argument, don't just repeat the string name.
+11. **Let the engine classify wire vs. label — don't force it.** The build engine runs
+    `auto_stub` (power symbols for rails, wires for local clusters, labels only for far /
+    congested / cross-sheet nets). Write clean nets/parts/connections and keep a block's
+    parts tightly related (5–15 parts) so local connections stay wires; don't fight the
+    placer with a giant flat block.
 
-After generating, sanity-check the produced schematic against these (power symbols
-present, every IC has a decoupling cap, no `N$` net names on important signals) BEFORE
-reporting done.
+After building, sanity-check the produced schematic against these (power symbols present,
+every IC has a decoupling cap, no `N$` net names on important signals, LEDs wired not across a
+rail, nearby clusters wired not labelled) BEFORE reporting done.
 
 ## Constraints / gotchas
-- **Stays DYNAMIC for any circuit, no per-circuit code**: grounding via
-  `skidl-part-search` + `auto_stub` + `@subcircuit` blocks all generalize. The only
-  per-request artifact is a freshly-written `<project>.py`.
-- This repo's `skidl-part-search` CLI needed a fix to run on Windows (an unconditional
-  `import readline`, now made optional) — if working from an unpatched copy of this
-  library, that CLI will crash on import on Windows; fall back to
-  `python -m skidl.scripts.part_search_cli` after confirming the fix is present, or
-  search the library directly via `SchLib`/`PartSearchDB` in Python.
-- Component/wire visual spacing has **no official standard** (checked directly against
-  IEEE 315, KiCad's own Library Conventions, Altium's docs, and OrCAD's DRC — all are
-  silent on it) — `auto_stub`'s job is legibility, not conformance to a spec that doesn't
-  exist. Don't invent a "clearance rule" to justify a design choice; it isn't standards
-  business.
-- Routing can fail on very dense flat circuits — keep `@subcircuit`s to roughly 5-15
-  parts and let `auto_stub` fall back to labels rather than fighting a giant flat block.
-- `.kicad_pcb` PCB layout is a separate step from schematic/netlist generation — this
-  skill covers schematic + netlist; PCB placement happens afterward in KiCad itself
-  (Pcbnew → Update PCB from Schematic), using the footprints already assigned via
-  `footprint=` on each `Part()`.
-- Don't clobber an existing circuit script — pick a new, clearly-named `<project>.py`.
+- **Stays DYNAMIC for any circuit, no per-circuit code**: grounding via `parts` + the
+  `auto_stub` wire/label engine + `@subcircuit` blocks all generalize. The only per-request
+  artifact is the freshly-written `body`/`script` `code`.
+- **Missing part** → `parts(action='add')` (symbol) / `parts(action='add_footprint')`
+  (footprint), pins/pads **from the datasheet**, user-confirmed, with `expected_pins` /
+  `expected_pads`. Never fake an IC with a generic connector.
+- **PDFs** (datasheets, source schematics) → always `read_pdf` (the plain Read tool cannot open
+  a PDF here); then Read the returned page images.
+- **One project = ONE name, forever.** Iterating/fixing a design REBUILDS under the SAME name
+  (via `mode='source'` → extend → rebuild); never mint `_v2`/`New` names — that strands stale
+  duplicate projects and stale windows.
+- Routing can fail on very dense flat blocks — keep `@subcircuit`s to roughly 5–15 parts and
+  let `auto_stub` fall back to labels rather than fighting a giant flat block.
+- `.kicad_pcb` PCB layout is a separate step — this skill covers schematic + netlist; PCB
+  placement/routing is the `pcb-place-route-fix` skill + the app's PCB tools, using the
+  footprints already assigned on each `Part()`.
+- Don't clobber an existing circuit — `get_app_state` first; a `user`-owned file needs a warning
+  + backup before any change.
 
-## Quick reference
+## Quick reference (MCP tools — NO shell / pip / CLI on a shipped install)
 ```
-pip install -e .                                  # from repo root, once
-skidl-part-search "<keyword>"                      # search parts (or: python -m skidl.scripts.part_search_cli)
-skidl-part-search "<keyword>" --fields part_name,lib_name,description
-python <project>.py                                # generate .net + one .kicad_sch per sheet (no .kicad_pro)
+get_app_state()                                              # LOOK first, every turn
+build(mode='rules')                                          # MANDATORY workflow + body template (new circuit)
+parts(action='search',  items=['Lib:Name', 'free text', ...])# check the library (ONE call, full list)
+parts(action='describe', items=['Lib:Name'])                 # exact Part() line + every pin
+build(mode='plan',   name='<project>', code='<short plan>')  # show plan, WAIT for OK
+build(mode='body',   name='<project>', code='<nets/parts/connections>', confirm=True)
+build(mode='status', name='<project>')                       # poll until done
+build(mode='open',   name='<project>')                       # open in Anvil CAD
+build(mode='bom',    name='<project>')                       # BOM
+# existing design: build(mode='source', name='<project>') -> extend -> rebuild SAME name (full script)
+# small in-place edit on the OPEN schematic: edit_schematic_live(ops=[...])
 ```

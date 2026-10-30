@@ -197,7 +197,9 @@ def _bfs_order(parts, adj, anchor):
     seen, order, dq = {id(anchor)}, [anchor], deque([anchor])
     while dq:
         x = dq.popleft()
-        for y in sorted(adj.get(x, ()), key=lambda p: -_pin_count(p)):
+        # _rank = (-pins, ref): without the ref tie-break, equal-pin parts
+        # (all 2-pin passives) iterate in id()/memory order -> nondeterministic.
+        for y in sorted(adj.get(x, ()), key=_rank):
             if id(y) not in seen:
                 seen.add(id(y))
                 order.append(y)
@@ -327,6 +329,9 @@ def _is_passive_ref(ref):
 
 
 def _orient_passives_rail_up(parts):
+    import os as _os
+    if _os.environ.get("SKIDL_RAIL_UP") == "0":
+        return 0
     """Orient vertical 2-pin passives so the power-RAIL pin is the UPPER pin and
     the GROUND pin the LOWER pin -- the universal schematic convention.
 
@@ -469,6 +474,13 @@ def place_node(node, **options):
         # boxed blocks with the MCU centred -- the dev-board composition. Falls
         # back to the proven flow row if it declines (no anchor) or is disabled;
         # the build-level connectivity verify is the final safety net.
+        if _os.environ.get("SKIDL_GRID_DEBUG"):
+            # File probe (stream-redirect-proof): record that the branch ran
+            # and what it saw -- settles "was the grid even reached?" with
+            # evidence instead of stderr that something may swallow.
+            with open("_grid_probe.txt", "a", encoding="utf-8") as _fh:
+                _fh.write(f"branch: flag={_os.environ.get('SKIDL_BLOCK_GRID')!r} "
+                          f"groups={len(groups)} packed={len(packed)}\n")
         if not (_os.environ.get("SKIDL_BLOCK_GRID") == "1"
                 and place_block_grid(packed, g_anchor)):
             _place_cluster_flow_row(packed, order_ix)
@@ -807,6 +819,60 @@ def flow_place_hinted(node, **options):
     return moved
 
 
+def _is_linear_chain(real):
+    """True when `real` (a flat root's parts) forms ONE linear series chain
+    via SIGNAL nets -- the shape a human draws as a straight left-to-right
+    row. Power/ground nets are excluded from adjacency so a shared GND can
+    never fuse two independent stages into one false 'chain'. Criteria:
+      * every part reachable from every other through signal nets (ONE
+        connected component -- two separate RC stages => 2 components => not
+        a chain, correctly left to the 2-D hug path);
+      * chain-like, not a star: at most one part has signal-degree > 2 (a
+        single small branch/tap is tolerated; an MCU-style hub is not).
+    Pure graph test on the netlist -- generic, no circuit assumed."""
+    if not (2 <= len(real) <= 10):
+        return False
+    rid = {id(p) for p in real}
+
+    # Adjacency by SHARED NET, but a net is a series EDGE only when it links a
+    # FEW parts. A net touching many of the row's parts is a rail/bus (power,
+    # ground, a shared node) that would make everything look like a star --
+    # skip it. This is fanout-based, NOT name-based: a 2-part VIN/VOUT net that
+    # _net_power_kind happens to call a 'rail' is still a real series link
+    # (measured: name-based exclusion left the input connector disconnected and
+    # the chain undetected). Edge cap = 3 parts per net.
+    adj = {id(p): set() for p in real}
+    by_net = {}
+    for p in real:
+        for pn in getattr(p, "pins", []):
+            net = getattr(pn, "net", None)
+            if net is not None:
+                by_net.setdefault(id(net), []).append(p)
+    for members in by_net.values():
+        ms = [m for m in members if id(m) in rid]
+        if not (2 <= len(ms) <= 3):
+            continue                     # 1 = stub; >3 = rail/bus, not an edge
+        for a in ms:
+            for b in ms:
+                if a is not b:
+                    adj[id(a)].add(id(b))
+    # connected? (one component over all real parts)
+    start = id(real[0])
+    seen = {start}
+    stack = [start]
+    while stack:
+        cur = stack.pop()
+        for nb in adj[cur]:
+            if nb in rid and nb not in seen:
+                seen.add(nb)
+                stack.append(nb)
+    if len(seen) != len(real):
+        return False
+    # chain-like: at most one high-degree (>2) part
+    hubs = sum(1 for p in real if len(adj[id(p)]) > 2)
+    return hubs <= 1
+
+
 def flow_place_block(node, **options):
     """AUTO within-block flow: lay a functional block's parts in a TIGHT single
     row (creation order == the author's input->process->output order), centred on
@@ -836,7 +902,20 @@ def flow_place_block(node, **options):
     # the same ladder treatment as a flat block. The ROOT of a flat ungrouped
     # design (parent is None) still bails to the legacy/hug path.
     _is_page = getattr(node, "parent", None) is not None and None in _grps
-    if not (_single_group or _is_page):
+    # DYNAMIC FLAT-CHAIN (2026-10): a small FLAT ungrouped root used to bail to
+    # the legacy/hug path, which drew a simple series chain (J1-R1-D1-R2-J2) as
+    # a big rectangular LOOP instead of a straight left-to-right row. Row it
+    # too -- but ONLY when connectivity proves it IS one linear chain, never a
+    # flat MIXED sheet (two independent stages strung into one row would be
+    # worse). Decided from the SIGNAL-net graph (power/ground excluded so a
+    # shared GND never merges separate stages), so it is generic, not
+    # circuit-specific. Kill switch SKIDL_FLAT_CHAIN=0.
+    _flat_chain = False
+    if not (_single_group or _is_page) \
+            and _os.environ.get("SKIDL_FLAT_CHAIN") != "0" \
+            and getattr(node, "parent", None) is None:
+        _flat_chain = _is_linear_chain(real)
+    if not (_single_group or _is_page or _flat_chain):
         return 0  # a flat/mixed root node is not a single function
     # A tight ROW only suits a SMALL, LINEAR stage (power stage, analog chain).
     # A block with a big IC (MCU/large device, many pins) or many parts fans out
@@ -1136,6 +1215,175 @@ def orient_to_neighbors(node, **options):
             print(f">>> orient: rotated {getattr(p, 'ref', '?')} to face its "
                   f"neighbors (wire est. {base:.0f} -> {best_s:.0f})")
     return rotated
+
+
+def orient_2pin_face(node, **options):
+    """Flip a 2-pin SERIES part (R, D, LED, L, C -- any 2-pin, not just
+    resistors/diodes) so the pin that connects to a neighbor sits on the
+    SIDE the neighbor is on -- a straight wire instead of one that loops
+    back around the body. The multi-pin twin is orient_to_neighbors();
+    that pass skips 2-pin parts, and the placer keeps library pin order,
+    so R1.1->D1.1 where D1 was placed pins-reversed leaves the router a
+    U-turn ('suthi') wire. Scope: BOTH pins on non-power signal nets (a
+    part with a pin on a rail belongs to _orient_passives_rail_up, which
+    owns rail-up orientation -- never fight it). A 2-pin part has only two
+    axis-preserving orientations, identity and 180, and 180 just swaps the
+    two pin ends; pick whichever gives the shorter total manhattan wire to
+    the in-node neighbour pins. 180 about the body centre preserves the
+    symmetric bbox (collision state unchanged) AND the symbol graphic
+    (so a diode's cathode bar still points anode->cathode -- polarity is
+    inherent to the symbol and flips with the transform). Connectivity is
+    pin->net and never changes. Kill switch SKIDL_ORIENT_2PIN=0. Returns
+    the number of parts flipped."""
+    import os as _os
+    if _os.environ.get("SKIDL_ORIENT_2PIN") == "0":
+        return 0
+    from skidl.geometry import Tx, tx_rot_180
+    from skidl.schematics.place import is_net_terminal, snap_to_grid
+
+    real = [p for p in getattr(node, "parts", []) if not is_net_terminal(p)]
+    if len(real) < 2:
+        return 0
+    _rid = {id(p) for p in real}
+
+    def _pins_of(p):
+        return list(getattr(p, "pins", []))
+
+    def _signal(pn):
+        return (getattr(pn, "net", None) is not None
+                and _net_power_kind(pn.net) not in ("rail", "ground"))
+
+    def _wire(p):
+        """Total manhattan from each signal pin to the centroid of its
+        net's OTHER in-node pins; None if no neighbour is reachable."""
+        s = 0.0
+        seen = False
+        for pn in _pins_of(p):
+            if not _signal(pn):
+                continue
+            others = [(op.pt * op.part.tx)
+                      for op in getattr(pn.net, "pins", [])
+                      if getattr(op, "part", None) is not None
+                      and op.part is not p and id(op.part) in _rid]
+            if not others:
+                continue
+            cx = sum(o.x for o in others) / len(others)
+            cy = sum(o.y for o in others) / len(others)
+            w = pn.pt * p.tx
+            s += abs(w.x - cx) + abs(w.y - cy)
+            seen = True
+        return s if seen else None
+
+    flipped = 0
+    for p in real:
+        if _pin_count(p) != 2:
+            continue
+        pins = _pins_of(p)
+        # BOTH pins must be plain signal nets -- a rail/ground pin means the
+        # rail-up pass owns this part's vertical orientation.
+        if len(pins) != 2 or not all(_signal(pn) for pn in pins):
+            continue
+        # a label-stubbed pin has no drawn wire to straighten
+        if any(pn.__dict__.get("stub", False)
+               or pn.__dict__.get("_stub_val", False)
+               or (pn.net is not None and (pn.net.__dict__.get("stub", False)
+                   or pn.net.__dict__.get("_stub", False)))
+               for pn in pins):
+            continue
+        base = _wire(p)
+        if base is None:
+            continue
+        old_tx = p.tx
+        old_ctr = _world_bbox(p).ctr
+        p.tx = tx_rot_180 * old_tx
+        new_ctr = _world_bbox(p).ctr
+        p.tx = p.tx * Tx().move(old_ctr - new_ctr)   # 180 about the centre
+        flipped_wire = _wire(p)
+        if flipped_wire is not None and flipped_wire < 0.92 * base:
+            snap_to_grid(p)
+            flipped += 1
+            print(f">>> orient: flipped {getattr(p, 'ref', '?')} so its pin "
+                  f"faces its neighbour (wire est. {base:.0f} -> "
+                  f"{flipped_wire:.0f})")
+        else:
+            p.tx = old_tx                            # revert
+    return flipped
+
+
+def unmirror_power_ics(node, **options):
+    """ORIENT-2 guard: a multi-pin part (3..16 pins) with POWER pins must
+    never keep a NET mirror (det(tx) < 0) in its final transform. The
+    geometry export now renders mirrors FAITHFULLY, so a placer-mirrored IC
+    draws upside-down-looking -- GND pin/text at the TOP, VCC at the BOTTOM
+    -- which violates the drafting rule 'power up, ground down'
+    (docs/schematic_generation_spec.md section 5.14). This pass replaces the
+    mirror with the det>0 orientation (mirror composed with one of the four
+    rotations, re-centred on the old bbox centre) that (a) puts the rail
+    pins ABOVE the ground pins when the part has both, and (b) moves the
+    connected pins the LEAST from where the placer wanted them. Runs
+    pre-route alongside the other orientation passes, so wires are planned
+    against the final tx. Kill switch SKIDL_NO_IC_MIRROR=0. Returns the
+    number of parts un-mirrored."""
+    import os as _os
+    if _os.environ.get("SKIDL_NO_IC_MIRROR") == "0":
+        return 0
+    from skidl.geometry import (Tx, tx_flip_y, tx_rot_90, tx_rot_180,
+                                tx_rot_270)
+    from skidl.schematics.place import is_net_terminal, snap_to_grid
+
+    real = [p for p in getattr(node, "parts", []) if not is_net_terminal(p)]
+    fixed = 0
+    for p in real:
+        if not (3 <= _pin_count(p) <= 16):
+            continue
+        tx = getattr(p, "tx", None)
+        if tx is None:
+            continue
+        det = tx.a * tx.d - tx.b * tx.c
+        if det >= 0:
+            continue  # not mirrored -- nothing to normalise
+        pins = [pn for pn in getattr(p, "pins", [])
+                if getattr(pn, "net", None) is not None]
+        rails = [pn for pn in pins if _net_power_kind(pn.net) == "rail"]
+        grounds = [pn for pn in pins if _net_power_kind(pn.net) == "ground"]
+        if not rails and not grounds:
+            continue  # no power pins -- mirror is allowed to stand
+
+        old_tx = p.tx
+        old_ctr = _world_bbox(p).ctr
+        old_pos = {id(pn): pn.pt * old_tx for pn in pins}
+
+        def _rail_up():
+            """True when every rail pin sits at or above every ground pin
+            (internal Y grows UP)."""
+            if rails and grounds:
+                lo_rail = min((pn.pt * p.tx).y for pn in rails)
+                hi_gnd = max((pn.pt * p.tx).y for pn in grounds)
+                return lo_rail >= hi_gnd
+            return True  # only one kind present -- any det>0 pose is fine
+
+        def _disp():
+            return sum(abs((pn.pt * p.tx).x - old_pos[id(pn)].x)
+                       + abs((pn.pt * p.tx).y - old_pos[id(pn)].y)
+                       for pn in pins)
+
+        # the four det>0 poses reachable by removing the mirror
+        best = None  # (not rail_up, displacement, tx)
+        for rot in (Tx(), tx_rot_90, tx_rot_180, tx_rot_270):
+            p.tx = old_tx * tx_flip_y * rot
+            new_ctr = _world_bbox(p).ctr
+            p.tx = p.tx * Tx().move(old_ctr - new_ctr)  # re-centre
+            key = (not _rail_up(), _disp())
+            if best is None or key < best[0]:
+                best = (key, p.tx)
+            p.tx = old_tx
+        if best is not None:
+            p.tx = best[1]
+            snap_to_grid(p)
+            fixed += 1
+            print(f">>> orient: un-mirrored {getattr(p, 'ref', '?')} "
+                  f"(power pins must read rail-up/ground-down, ORIENT-2)")
+    return fixed
 
 
 def uncross_parallel_bundles(node, **options):
@@ -1513,6 +1761,61 @@ def _grid_coords(rows, cols, slots, dims, gap, align):
     return out, colW, rowH
 
 
+def _is_chain_graph(n, aff):
+    """Pure chain detector (WI-5). True when the inter-block connectivity
+    graph is a path / forest of paths (every block touches <= 2 others and
+    there is no cycle) -- i.e. the circuit is a 1-D signal chain (PSU input ->
+    regulator -> output). For that shape the flow ROW is the natural, proven
+    composition; a 2-D grid only folds the chain and makes its inter-block
+    wires cross (measured: buck 0 -> 2 crossings under the grid). Empty
+    affinity (no inter-block nets) also counts as a chain: there is nothing
+    for the grid to optimize."""
+    deg = {}
+    edges = 0
+    for (i, j), w in aff.items():
+        if w <= 0:
+            continue
+        edges += 1
+        deg[i] = deg.get(i, 0) + 1
+        deg[j] = deg.get(j, 0) + 1
+    return edges <= max(n - 1, 0) and all(d <= 2 for d in deg.values())
+
+
+def _affinity_slot_map(n, slots, aff):
+    """Pure affinity-aware slot assignment (WI-5). Block 0 (the anchor) takes
+    slots[0] (the centre cell). Each remaining block is placed greedily: pick
+    the unplaced block with the strongest total affinity to the already-placed
+    set (tie: lowest index, i.e. role order), then give it the FREE slot that
+    minimizes the affinity-weighted Manhattan distance to its placed partners
+    (tie: innermost ring = lowest slot index). With an empty affinity this
+    degrades exactly to the previous behaviour (role order -> ring order).
+    Returns a list: result[i] = (row, col) slot for block i. Deterministic."""
+    sym = {}
+    for (i, j), w in aff.items():
+        if w <= 0:
+            continue
+        sym.setdefault(i, {})[j] = sym.setdefault(i, {}).get(j, 0.0) + w
+        sym.setdefault(j, {})[i] = sym.setdefault(j, {}).get(i, 0.0) + w
+    slot_of = {0: slots[0]}
+    free = list(slots[1:n])
+    while len(slot_of) < n:
+        cand = [b for b in range(n) if b not in slot_of]
+        score = {b: sum(w for p, w in sym.get(b, {}).items() if p in slot_of)
+                 for b in cand}
+        b = max(cand, key=lambda x: (score[x], -x))
+        partners = [(p, w) for p, w in sym.get(b, {}).items() if p in slot_of]
+
+        def cost(rc):
+            return sum(w * (abs(rc[0] - slot_of[p][0])
+                            + abs(rc[1] - slot_of[p][1]))
+                       for p, w in partners)
+
+        best = min(free, key=lambda rc: (cost(rc), slots.index(rc)))
+        free.remove(best)
+        slot_of[b] = best
+    return [slot_of[i] for i in range(n)]
+
+
 def place_block_grid(packed, g_anchor, gap=1000.0, align=50.0):
     """2D BLOCK-GRID placement (gap H1; SCHEMATIC_LAYOUT_LOGIC.md spec).
 
@@ -1524,18 +1827,42 @@ def place_block_grid(packed, g_anchor, gap=1000.0, align=50.0):
     the caller fall back to the flow row. OPT-IN (SKIDL_BLOCK_GRID=1) and guarded
     downstream by the build-level connectivity verify, so it can never ship a
     worse sheet than today's default.
+
+    WI-5: cell assignment is CONNECTIVITY-AWARE -- blocks that share heavily
+    weighted nets land in adjacent cells (_affinity_slot_map), and a circuit
+    whose block graph is a pure 1-D chain declines the grid entirely
+    (_is_chain_graph) because the flow row is that shape's natural layout.
     """
+    import os as _os
+    import sys as _sys
+
+    def _dbg(msg):
+        # Engagement proof for A/B measurement (SKIDL_GRID_DEBUG=1): says
+        # whether the grid ENGAGED or DECLINED (and why), so "identical
+        # output" never has to be inferred as fallback. Written to stderr AND
+        # a probe file (stream-redirect-proof) -- silent in normal/MCP use.
+        if _os.environ.get("SKIDL_GRID_DEBUG"):
+            print(f"[block-grid] {msg}", file=_sys.stderr, flush=True)
+            try:
+                with open("_grid_probe.txt", "a", encoding="utf-8") as _fh:
+                    _fh.write(f"[block-grid] {msg}\n")
+            except OSError:
+                pass
+
     blocks = [cl for cl, _bb in packed]
     if len(blocks) < 2:
+        _dbg(f"DECLINE: {len(blocks)} block(s) < 2")
         return False
     anchor_block = next((cl for cl in blocks if g_anchor in cl), None)
     if anchor_block is None:
+        _dbg("DECLINE: global anchor not in any block")
         return False
     try:
         from skidl.schematics.cluster import (
-            classify_block_role, order_blocks_by_role,
+            block_affinity_matrix, classify_block_role, order_blocks_by_role,
         )
     except Exception:
+        _dbg("DECLINE: cluster helpers unavailable")
         return False
     others = [cl for cl in blocks if cl is not anchor_block]
     try:
@@ -1545,16 +1872,31 @@ def place_block_grid(packed, g_anchor, gap=1000.0, align=50.0):
     except Exception:
         ordered_others = others
     placement = [anchor_block] + list(ordered_others)
+    try:
+        # Signal-only affinity: rails/grounds render as power SYMBOLS on the
+        # sheet, not inter-block wires -- including them makes every block
+        # pair look connected and hides the true (chain/star) topology.
+        aff = block_affinity_matrix(placement, skip_power=True)
+    except Exception:
+        aff = {}
+    # A 1-D chain (or no inter-block nets at all): the flow row is the right
+    # composition -- folding it into a grid only adds crossings.
+    if _is_chain_graph(len(placement), aff):
+        _dbg(f"DECLINE: chain graph (n={len(placement)}, edges={len(aff)})")
+        return False
     dims = []
     for cl in placement:
         bb = _cluster_bbox(cl)
         dims.append((bb.w, bb.h))
     rows, cols, slots = _grid_assign(len(placement))
-    coords, _cw, _rh = _grid_coords(rows, cols, slots, dims, gap, align)
+    slot_map = _affinity_slot_map(len(placement), slots, aff)
+    coords, _cw, _rh = _grid_coords(rows, cols, slot_map, dims, gap, align)
     for cl, (X, Ytop) in zip(placement, coords):
         bb = _cluster_bbox(cl)
         # align this block's TOP-LEFT to its cell origin
         _move_cluster(cl, X - bb.min.x, Ytop - bb.max.y)
+    _dbg(f"ENGAGED: {len(placement)} blocks on {rows}x{cols} grid, "
+         f"{len(aff)} affinity edge(s)")
     return True
 
 

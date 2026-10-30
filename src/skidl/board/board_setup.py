@@ -670,6 +670,40 @@ def edge_cuts_is_rectangle(blocks) -> bool:
 
 _OUR_TO_KICAD = {"width": "track_width", "via_size": "via_diameter"}
 
+# Universal annular-ring (restring) floor applied on the EXPLICIT write path
+# even when no IPC class is set. IPC-6012 Class 2 external is 0.10 mm; most
+# fabs want >= 0.125 mm. If an ipc_class IS set we use that class's ring.
+_DEFAULT_MIN_ANNULAR_RING = 0.125
+
+
+def _annular_ring_floor(sidecar: dict) -> float:
+    """The minimum annular ring to enforce: the IPC class's ring if a class
+    is set on this board, else the universal fab floor."""
+    try:
+        from skidl.board.profiles import IPC_CLASSES
+        cls = IPC_CLASSES.get(int(sidecar.get("ipc_class") or 0))
+        if cls and cls.get("min_annular_ring"):
+            return float(cls["min_annular_ring"])
+    except Exception:
+        pass
+    return _DEFAULT_MIN_ANNULAR_RING
+
+
+def _enforce_restring(entry: dict, ring: float, label: str, warnings: list):
+    """Clamp via_diameter UP so (via_diameter - via_drill)/2 >= ring. Only
+    grows the pad -- never shrinks the drill, never moves anything -- so it
+    cannot affect connectivity. Records an honest note for anything raised."""
+    drill = entry.get("via_drill")
+    size = entry.get("via_diameter")
+    if drill and size:
+        need = round(float(drill) + 2 * ring, 4)
+        if float(size) < need - 1e-9:
+            entry["via_diameter"] = need
+            warnings.append(
+                f"{label}: via_diameter {size} -> {need} mm "
+                f"(restring was {(float(size) - float(drill)) / 2:.3f} mm, "
+                f"below the {ring:.3f} mm annular-ring floor)")
+
 
 def update_board_setup(base: str, out_dir, stackup=None, constraints=None,
                         net_classes=None, via_rules=None, mask=None,
@@ -711,10 +745,22 @@ def update_board_setup(base: str, out_dir, stackup=None, constraints=None,
         ds.setdefault("rule_severities", {}).update(drc_severities)
         changed.append(f"drc_severities: {sorted(drc_severities)}")
 
+    annular_warnings = []
     if net_classes or via_rules:
         from skidl.board.pcb_writer import (
             canonical_class_entry, _net_settings_meta_version,
         )
+        # Annular-ring floor for this write: honor an ipc_class arriving in
+        # THIS call, else the one already on disk, else the universal floor.
+        _ipc_src = {}
+        if board and board.get("ipc_class"):
+            _ipc_src["ipc_class"] = board["ipc_class"]
+        elif sidecar_path.is_file():
+            try:
+                _ipc_src = json.loads(sidecar_path.read_text(encoding="utf-8"))
+            except Exception:
+                _ipc_src = {}
+        ring = _annular_ring_floor(_ipc_src)
         ns = pro.setdefault("net_settings", {})
         entries = {c.get("name"): c for c in ns.get("classes", [])
                    if isinstance(c, dict)}
@@ -722,16 +768,29 @@ def update_board_setup(base: str, out_dir, stackup=None, constraints=None,
             entry = canonical_class_entry(cls_name, {}, entries.get(cls_name))
             for k, v in rules.items():
                 entry[_OUR_TO_KICAD.get(k, k)] = v
+            _enforce_restring(entry, ring, f"net class {cls_name}",
+                              annular_warnings)
             entries[cls_name] = entry
             changed.append(f"net class {cls_name}: {sorted(rules)}")
         if via_rules:
             entry = canonical_class_entry("Default", {}, entries.get("Default"))
             for k, v in via_rules.items():
                 entry[_OUR_TO_KICAD.get(k, k)] = v
+            _enforce_restring(entry, ring, "via rules (Default)",
+                              annular_warnings)
             entries["Default"] = entry
             changed.append(f"via rules (Default): {sorted(via_rules)}")
         ns["classes"] = list(entries.values())
         ns["meta"] = {"version": _net_settings_meta_version(ns.get("meta"))}
+        # Keep the DRC rule consistent with the floor we just enforced, so a
+        # sub-minimum via drawn later in the app (not via this tool) is caught.
+        cur_floor = ds.get("rules", {}).get("min_via_annular_width", 0)
+        if ring > (cur_floor or 0) + 1e-9:
+            ds.setdefault("rules", {})["min_via_annular_width"] = ring
+            changed.append(
+                f"DRC min_via_annular_width: {cur_floor} -> {ring} mm")
+        if annular_warnings:
+            changed.extend(annular_warnings)
 
     if pro:
         pro_path.write_text(json.dumps(pro, indent=2) + "\n", encoding="utf-8")
@@ -902,4 +961,5 @@ def update_board_setup(base: str, out_dir, stackup=None, constraints=None,
     failed = [f for f, v in verified.items() if v["status"] == "failed"]
     return {"changed": changed, "verified": verified,
             "pending_fields": pending, "failed_fields": failed,
+            "annular_ring_adjustments": annular_warnings,
             "board_setup": snapshot}

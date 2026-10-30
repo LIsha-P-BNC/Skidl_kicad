@@ -633,17 +633,25 @@ _TEXT_HEAD_RE = _re.compile(r'\(\s*(?:property\s+"|fp_text\s+)')
 _AT_RE = _re.compile(r'\(at\s+(-?[\d.]+)\s+(-?[\d.]+)(?:\s+(-?[\d.]+))?\s*\)')
 
 
-def _bump_at_angle(span: str, rot: float) -> str:
-    """Add `rot` to the first (at x y [a]) clause in span."""
+def _bump_at_angle(span: str, rot: float, upright: bool = False) -> str:
+    """Add `rot` to the first (at x y [a]) clause in span. With upright=True
+    (TEXT only, never pads) also normalize the result to keep the text
+    readable: KiCad renders text upside-down for angles in (90, 270], so fold
+    those back by 180 degrees -- the anchor stays put, the text reads upright
+    (same thing KiCad's own 'keep upright' does). Pads must keep their true
+    total angle, so they never pass upright=True."""
     def _fix(m):
         a = float(m.group(3)) if m.group(3) else 0.0
-        return f"(at {m.group(1)} {m.group(2)} {(a + rot) % 360.0:g})"
+        a = (a + rot) % 360.0
+        if upright and 90.0 < a <= 270.0:
+            a = (a - 180.0) % 360.0
+        return f"(at {m.group(1)} {m.group(2)} {a:g})"
     return _AT_RE.sub(_fix, span, count=1)
 
 
 def _bump_spans(s: str, head_re, rot: float) -> str:
     """Apply _bump_at_angle inside every block whose header matches
-    head_re (property/fp_text blocks)."""
+    head_re (property/fp_text blocks). These are TEXT, so keep them upright."""
     out, i = [], 0
     while True:
         m = head_re.search(s, i)
@@ -652,7 +660,7 @@ def _bump_spans(s: str, head_re, rot: float) -> str:
             break
         end = _match_paren(s, m.start())
         out.append(s[i:m.start()])
-        out.append(_bump_at_angle(s[m.start():end], rot))
+        out.append(_bump_at_angle(s[m.start():end], rot, upright=True))
         i = end
     return "".join(out)
 
@@ -685,11 +693,40 @@ def _match_paren(s: str, start: int) -> int:
 def _template_footprint(fp: Footprint, net_code_by_name: dict, pad_zc: dict = None) -> str:
     pad_zc = pad_zc or {}
     locked = " locked" if fp.locked else ""
+    # Appearance art side must follow the COMPONENT side: a bottom part's
+    # refdes/body/courtyard belong on B.*, not F.* (fab rule -- silk on the
+    # same side as the part). The embedded-library path only runs for top
+    # parts, so every bottom part lands here; hardcoding F.* put its text on
+    # the wrong side of the board.
+    sp = "F" if fp.side == "top" else "B"
+    # Body half-extents: prefer the known courtyard, else derive from pad
+    # extents + a 0.5 mm margin (same basis as generate_footprint).
+    if fp.courtyard:
+        minx, miny, maxx, maxy = fp.courtyard
+        bw, bh = max(abs(minx), abs(maxx)), max(abs(miny), abs(maxy))
+    elif fp.pads:
+        xs = [p.x for p in fp.pads]; ys = [p.y for p in fp.pads]
+        ws = [p.size_x for p in fp.pads]; hs = [p.size_y for p in fp.pads]
+        bw = (max(xs) - min(xs)) / 2 + max(ws) / 2 + 0.5
+        bh = (max(ys) - min(ys)) / 2 + max(hs) / 2 + 0.5
+    else:
+        bw = bh = 1.0
+    _fx = "(effects (font (size 1 1) (thickness 0.15)))"
     lines = [
         f'  (footprint "{_esc(fp.lib_id)}" (layer "{fp.layer}"){locked}',
         f'    (at {fp.x:.4f} {fp.y:.4f} {fp.rotation:.4f})',
-        f'    (property "Reference" "{_esc(fp.ref)}" (layer "F.SilkS") (at 0 0 0))',
-        f'    (property "Value" "{_esc(fp.value)}" (layer "F.Fab") (at 0 0 0))',
+        # Refdes above the body, value below it -- never stacked over the
+        # center pads (silk-over-pad is unmanufacturable).
+        f'    (property "Reference" "{_esc(fp.ref)}" (at 0 {-bh - 1:.2f} 0) '
+        f'(layer "{sp}.SilkS") {_fx})',
+        f'    (property "Value" "{_esc(fp.value)}" (at 0 {bh + 1:.2f} 0) '
+        f'(layer "{sp}.Fab") {_fx})',
+        # Courtyard + fab body outline so the part has an assembly outline and
+        # does not trip malformed_courtyard.
+        f'    (fp_rect (start {-bw:.3f} {-bh:.3f}) (end {bw:.3f} {bh:.3f}) '
+        f'(stroke (width 0.05) (type solid)) (fill no) (layer "{sp}.CrtYd"))',
+        f'    (fp_rect (start {-bw:.3f} {-bh:.3f}) (end {bw:.3f} {bh:.3f}) '
+        f'(stroke (width 0.1) (type solid)) (fill no) (layer "{sp}.Fab"))',
     ]
     for pad in fp.pads:
         layers_str = " ".join(f'"{l}"' for l in pad.layers)

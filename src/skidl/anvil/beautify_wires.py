@@ -42,6 +42,88 @@ def beautify(sch_path):
         return 0  # never break a build over cosmetics
 
 
+def dedup_overlaps(sch_path):
+    """Final-pass cleanup: merge EXACT-DUPLICATE and OVERLAPPING collinear wire
+    segments into their union ("track over track").
+
+    Surgical and connectivity-safe -- unlike beautify() it does NOT split
+    diagonals, merge 2-way breakpoints, or flip exits; it ONLY unions segments
+    that genuinely overlap on the same line. Touching segments (meeting at one
+    point -- a junction/T-split) are LEFT ALONE (strict overlap test), so the
+    junction-heal splits are preserved. Must run LAST, after the geometry
+    passes (power-rail draw, grid-snap, junction heal) that can leave
+    overlapping copper the mid-pipeline beautify never sees. Returns the number
+    of segments removed; 0 if unchanged/failed."""
+    try:
+        return _dedup_overlaps(sch_path)
+    except Exception as exc:
+        try:
+            from skidl.schematics.net_classify import log_swallowed
+            log_swallowed("dedup_overlaps", exc)
+        except Exception:
+            pass
+        return 0
+
+
+def _dedup_overlaps(sch_path):
+    text = open(sch_path, encoding="utf-8").read()
+    blocks = list(_wire_spans(text))
+    if not blocks:
+        return 0
+    orig = [c for _, _, c in blocks]
+
+    horiz, vert, other = {}, {}, []
+    for x1, y1, x2, y2 in orig:
+        if x1 == x2 and y1 == y2:
+            continue                                   # zero-length: drop
+        if y1 == y2:
+            horiz.setdefault(y1, []).append((min(x1, x2), max(x1, x2)))
+        elif x1 == x2:
+            vert.setdefault(x1, []).append((min(y1, y2), max(y1, y2)))
+        else:
+            other.append((x1, y1, x2, y2))             # diagonal: leave to beautify
+
+    def merge(ivs):
+        ivs = sorted(ivs)
+        out = [ivs[0]]
+        for lo, hi in ivs[1:]:
+            clo, chi = out[-1]
+            if lo < chi - 0.001:                       # STRICT overlap only
+                out[-1] = (clo, max(chi, hi))
+            else:
+                out.append((lo, hi))
+        return out
+
+    segs = list(other)
+    for y, ivs in horiz.items():
+        for lo, hi in merge(ivs):
+            segs.append((lo, y, hi, y))
+    for x, ivs in vert.items():
+        for lo, hi in merge(ivs):
+            segs.append((x, lo, x, hi))
+
+    def norm(s):
+        return tuple(sorted([(s[0], s[1]), (s[2], s[3])]))
+
+    # COUNT comparison, not set: an EXACT duplicate collapses in a set, so a
+    # set-equality test would see "no change" and never rewrite the file,
+    # leaving the duplicate on disk (measured: t2 had an exact-duplicate wire
+    # a set-based check silently kept). Compare the multiset / length instead.
+    new_norm = sorted(norm(s) for s in segs)
+    old_norm = sorted(norm(c) for c in orig
+                      if not (c[0] == c[2] and c[1] == c[3]))
+    if new_norm == old_norm:
+        return 0
+
+    first = blocks[0][0]
+    for s, e, _ in sorted(blocks, key=lambda w: -w[0]):
+        text = text[:s] + text[e:]
+    ins = "".join(_wire_sexp(s) for s in segs)
+    text = text[:first] + ins + text[first:]
+    open(sch_path, "w", encoding="utf-8").write(text)
+    return len(old_norm) - len(new_norm)
+
+
 def _wire_spans(text):
     """Yield (start, end, (x1,y1,x2,y2)) for every top-level (wire ...) block."""
     for m in re.finditer(r"\(wire\b", text):

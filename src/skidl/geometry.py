@@ -336,7 +336,17 @@ class Tx:
             ):
                 candidate = tx_flip_y * cand_rot
                 if (candidate.a, candidate.b, candidate.c, candidate.d) == linear_sig:
-                    rotation_degrees = cand_angle
+                    # KiCad semantics (measured with kicad-cli netlist probes
+                    # over all 12 angle/mirror combos): a symbol written as
+                    # (at .. theta)(mirror y) maps a library pin offset the
+                    # same way as SKiDL's linear tx  tx_flip_y * rot(phi)
+                    # composed with the sheet Y-flip, where theta = 180 - phi
+                    # (mod 360) -- NOT theta = phi. Emitting phi directly
+                    # rendered the phi=0 / phi=180 mirrored parts vertically
+                    # inverted (pins flipped vs. the drawn wires/power stubs
+                    # -> guaranteed connectivity MISMATCH at every seed),
+                    # while phi=90 / phi=270 happened to coincide.
+                    rotation_degrees = (180 - cand_angle) % 360
                     mirror_y = True
                     break
             else:

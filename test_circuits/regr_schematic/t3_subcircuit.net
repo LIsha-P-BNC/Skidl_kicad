@@ -2,7 +2,7 @@
   (version "D")
   (design
     (source "t3_subcircuit.py")
-    (date "09/17/2026 09:50 AM")
+    (date "10/14/2026 02:58 PM")
     (tool "SKiDL (2.2.3)")
     (sheet
       (number 1)
@@ -43,8 +43,8 @@
           (value ""))))
     (sheet
       (number 2)
-      (name "/")
-      (tstamps "/")
+      (name "/load_pg/")
+      (tstamps "/e31b030a-1953-54ac-a461-d718fbeef0ee/")
       (title_block
         (title)
         (company)
@@ -80,8 +80,8 @@
           (value ""))))
     (sheet
       (number 3)
-      (name "/load_pg/")
-      (tstamps "/e31b030a-1953-54ac-a461-d718fbeef0ee/")
+      (name "/")
+      (tstamps "/")
       (title_block
         (title)
         (company)

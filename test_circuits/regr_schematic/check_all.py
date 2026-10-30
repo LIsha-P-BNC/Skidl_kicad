@@ -26,6 +26,20 @@ import sys
 HERE = os.path.dirname(os.path.abspath(__file__))
 SRC = os.path.normpath(os.path.join(HERE, "..", "..", "src"))
 
+# WI-1: reuse the pure metric from schematics/metrics.py so the harness and
+# the unit tests measure wire crossings the SAME way (shared endpoints /
+# junctions are NOT crossings). Only this one sub-metric is wired in: it needs
+# nothing but wire endpoints from the sch. The other sub-metrics (label
+# overlap, text/symbol collision, block spacing) need text-box sizing / symbol
+# geometry / block grouping and are deliberately NOT faked here.
+sys.path.insert(0, SRC)
+try:
+    from skidl.schematics.metrics import (
+        block_spacing_stats, count_wire_crossings, sheet_extent,
+    )
+except Exception:  # pragma: no cover - metrics is optional for the core gate
+    count_wire_crossings = sheet_extent = block_spacing_stats = None
+
 # (name, directory, script, invariant, extra_env)
 #   invariant: "labels0" = zero local labels; "erc0" = ERC clean is enough
 # The list covers ALL THREE TIERS: single-function circuits (buck ladder,
@@ -82,6 +96,119 @@ def stats(cwd, name):
         if m:
             erc_errs = int(m[-1])
     return wires, labels, erc_errs
+
+
+def _wire_segments(sch_text):
+    """Every wire as ((x1,y1),(x2,y2)), via the same paren-match + (xy ...)
+    scan _has_rail uses -- so one parser feeds both the ladder check and the
+    crossing metric."""
+    segs = []
+    for m in re.finditer(r"\(wire\b", sch_text):
+        i = m.start()
+        depth = 0
+        blk = ""
+        for j in range(i, len(sch_text)):
+            if sch_text[j] == "(":
+                depth += 1
+            elif sch_text[j] == ")":
+                depth -= 1
+                if depth == 0:
+                    blk = sch_text[i:j + 1]
+                    break
+        xy = re.findall(r"\(xy (-?[\d.]+) (-?[\d.]+)\)", blk)
+        if len(xy) == 2:
+            (x1, y1), (x2, y2) = ((float(a), float(b)) for a, b in xy)
+            segs.append(((x1, y1), (x2, y2)))
+    return segs
+
+
+def crossings(cwd, name):
+    """Total pin-to-pin wire crossings across all sheets of a project, or
+    None if the metric is unavailable / no sheet exists."""
+    if count_wire_crossings is None:
+        return None
+    import glob
+    base = os.path.splitext(name)[0]
+    sheets = ([os.path.join(cwd, base + ".anvil_sch")]
+              + glob.glob(os.path.join(cwd, base + "_*.anvil_sch")))
+    total = None
+    for f in sheets:
+        if not os.path.exists(f):
+            continue
+        t = open(f, encoding="utf-8", errors="replace").read()
+        total = (total or 0) + count_wire_crossings(_wire_segments(t))
+    return total
+
+
+def _strip_lib_symbols(text):
+    """Remove the (lib_symbols ...) block so sheet-level scans never match
+    the symbol-BODY graphics nested inside it."""
+    i = text.find("(lib_symbols")
+    if i < 0:
+        return text
+    depth = 0
+    for j in range(i, len(text)):
+        if text[j] == "(":
+            depth += 1
+        elif text[j] == ")":
+            depth -= 1
+            if depth == 0:
+                return text[:i] + text[j + 1:]
+    return text
+
+
+def _sheet_metrics(path):
+    """Extent + block frames for ONE sheet file."""
+    t = _strip_lib_symbols(
+        open(path, encoding="utf-8", errors="replace").read())
+    pts = [(float(a), float(b)) for a, b in
+           re.findall(r'\(lib_id "[^"]+"\)\s*\(at (-?[\d.]+) (-?[\d.]+)', t)]
+    for (x1, y1), (x2, y2) in _wire_segments(t):
+        pts += [(x1, y1), (x2, y2)]
+    frames = []
+    for m in re.finditer(
+            r"\(rectangle\s*\(start (-?[\d.]+) (-?[\d.]+)\)\s*"
+            r"\(end (-?[\d.]+) (-?[\d.]+)\)", t):
+        x1, y1, x2, y2 = (float(v) for v in m.groups())
+        frames.append((min(x1, x2), min(y1, y2), max(x1, x2), max(y1, y2)))
+    return sheet_extent(pts), frames
+
+
+def compactness(cwd, name):
+    """Composition metrics across ALL sheets of a project (root + hierarchy
+    children). Sheets are separate coordinate spaces, so each sheet's extent
+    is measured ALONE and then aggregated honestly: area = sum of sheet
+    areas, aspect_dev = the WORST sheet, w/h = the largest sheet's. Block
+    frames (top-level rectangles) feed spacing stats per the sheet that
+    draws >= 2 of them. This is the dimension the 2D block-grid targets --
+    crossings cannot see it. Returns None when the metrics module or no
+    sheet is available."""
+    if sheet_extent is None:
+        return None
+    import glob
+    base = os.path.splitext(name)[0]
+    sheets = ([os.path.join(cwd, base + ".anvil_sch")]
+              + sorted(glob.glob(os.path.join(cwd, base + "_*.anvil_sch"))))
+    per_sheet = []
+    all_frames_spacing = None
+    blocks = 0
+    for f in sheets:
+        if not os.path.exists(f):
+            continue
+        ext, frames = _sheet_metrics(f)
+        blocks += len(frames)
+        if len(frames) >= 2 and all_frames_spacing is None:
+            all_frames_spacing = block_spacing_stats(frames)
+        if ext["area"] > 0:
+            per_sheet.append(ext)
+    if not per_sheet:
+        return None
+    biggest = max(per_sheet, key=lambda e: e["area"])
+    return {"w": biggest["w"], "h": biggest["h"],
+            "area": sum(e["area"] for e in per_sheet),
+            "aspect_dev": max(e["aspect_dev"] for e in per_sheet),
+            "sheets": len(per_sheet), "blocks": blocks,
+            "spacing": all_frames_spacing}
 
 
 def _has_rail(cwd, name, min_mm=20.0):
@@ -190,12 +317,28 @@ def main():
         verdict = "OK" if not problems else "FAIL: " + "; ".join(problems)
         if problems:
             fail = True
-        rows.append((label, wires, labels, erc, verdict))
+        cross = crossings(cwd, script)
+        comp = compactness(cwd, script)
+        if comp:
+            size = "%dx%d" % (round(comp["w"]), round(comp["h"]))
+            asp = "%.2f" % comp["aspect_dev"]
+        else:
+            size = asp = "-"
+        rows.append((label, wires, labels, erc,
+                     "-" if cross is None else cross, size, asp, verdict))
 
-    print("\n%-16s %6s %7s %5s  %s" % ("circuit", "wires", "labels", "ERC", "verdict"))
-    print("-" * 60)
-    for label, w, l, e, v in rows:
-        print("%-16s %6s %7s %5s  %s" % (label, w, l, e, v))
+    # CROSS / SIZE / ASPECT are INFORMATIONAL only (no gate): they measure
+    # readability and composition, and without a TI ground-truth corpus a
+    # given value is not yet a failure. A big jump after an engine change is
+    # the signal to look -- compare against a baseline run, not an absolute
+    # threshold. ASPECT = |log10(w/h)|: 0.00 = square, 0.48 = 3:1 sprawl.
+    print("\n%-16s %6s %7s %5s %6s %10s %7s  %s"
+          % ("circuit", "wires", "labels", "ERC", "CROSS", "SIZE", "ASPECT",
+             "verdict"))
+    print("-" * 86)
+    for label, w, l, e, x, s, a, v in rows:
+        print("%-16s %6s %7s %5s %6s %10s %7s  %s"
+              % (label, w, l, e, x, s, a, v))
     print()
     return 1 if fail else 0
 

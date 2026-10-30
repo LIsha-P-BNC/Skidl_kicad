@@ -186,7 +186,13 @@ def is_decoupling_cap(part):
 # anchor IC, so a bulk cap off on some non-rail node is never snapped.
 _BYPASS_CAP_MIN_F = 1e-10   # 100 pF
 _BYPASS_CAP_MAX_F = 1e-4    # 100 uF
-_CAP_FARAD_RE = re.compile(r"^([\d.]+)([pnuµm]?)f?$", re.IGNORECASE)
+# Optional "/rating" tail: professional value notation carries the voltage
+# rating ("100nF/50V", "470uF/25V" -- the repo's own style guide recommends
+# it), and without this tail every such cap silently failed to parse, so
+# decap pairing/hug/review skipped it (measured: buck + power_board decap
+# count 0 despite on-board 100nF bypass caps).
+_CAP_FARAD_RE = re.compile(r"^([\d.]+)([pnuµm]?)f?(?:/[\d.]+\s*v)?$",
+                           re.IGNORECASE)
 _CAP_FARAD_MULT = {"p": 1e-12, "n": 1e-9, "u": 1e-6, "µ": 1e-6, "m": 1e-3}
 
 
@@ -251,6 +257,71 @@ def find_decap_affinities(parts):
             if ic_parts:
                 affinities[net] = (part, ic_parts[0])
     return affinities
+
+
+def _ref_natkey(part):
+    """Natural-order ref key: ("C", 5) for C5 -- so C10 sorts after C2."""
+    ref = str(getattr(part, "ref", "") or "")
+    m = re.match(r"([A-Za-z]+)(\d+)", ref)
+    return (m.group(1), int(m.group(2))) if m else (ref, 0)
+
+
+@export_to_all
+def find_decap_pairs(parts):
+    """Per-CAP decap -> IC pairing that works on SHARED power rails.
+
+    find_decap_affinities() is keyed by NET, so on a board where every
+    bypass cap sits on the same +5V/+3V3 rail, each cap OVERWRITES the
+    previous entry and only ONE cap (paired to an arbitrary first IC) ever
+    reaches the placer -- the snap-beside-the-supply-pad rule then never
+    fires for the rest (measured on holdout_can_node: C5/C6/C7 stranded in
+    foreign blocks). This variant returns one entry PER CAP.
+
+    Pairing heuristic per rail: sort that rail's bypass caps and ICs in
+    natural ref order and pair them 1:1 (extra caps go to the nearest IC by
+    index). Designers number decoupling caps in block order (the ref-
+    numbering convention follows schematic position), so ref order is the
+    best block-intent signal that survives into a netlist -- creation order
+    does not. Deterministic.
+
+    Returns:
+        dict: {decap_part: ic_part}
+    """
+    rails = {}
+    for part in parts:
+        if not is_power_bypass_cap(part):
+            continue
+        for pin in part.pins:
+            net = getattr(pin, "net", None)
+            # POSITIVE rails only: every cap and every IC touches GND, so a
+            # ground "rail" would pair ALL caps against ALL ICs and its bogus
+            # 1:1 assignment could pre-empt the real +V-rail pairing.
+            if net is None or classify_net_role(net) != "power":
+                continue
+            ics = [
+                p.part
+                for p in getattr(net, "pins", [])
+                if p.part is not part
+                and (getattr(p.part, "ref_prefix", "") or "").upper()
+                in _ANCHOR_REF_PREFIXES
+            ]
+            if ics:
+                caps, seen_ics = rails.setdefault(id(net), ([], []))
+                if part not in caps:
+                    caps.append(part)
+                for ic in ics:
+                    if ic not in seen_ics:
+                        seen_ics.append(ic)
+
+    pairs = {}
+    for caps, ics in rails.values():
+        caps = sorted(caps, key=_ref_natkey)
+        ics = sorted(set(ics), key=_ref_natkey)
+        if not ics:
+            continue
+        for i, cap in enumerate(caps):
+            pairs.setdefault(cap, ics[min(i, len(ics) - 1)])
+    return pairs
 
 
 # A cap counts as "functional" (vs a plain VCC bypass) when it hangs off a
@@ -447,6 +518,19 @@ def classify_block_role(parts, nets=None):
         _POWER_KEYWORD_RE.search(search_texts)
         or has_inductor
         or (power_frac >= 0.5 and anchor_frac == 0)
+        # A regulator block IS all power nets (VIN/VOUT/GND) even though the
+        # regulator chip itself is a "U" anchor -- without this clause every
+        # LDO block classified as "MCU" and was ordered mid-row instead of
+        # first (measured: t2 x2, power_board, holdout_can_node). CAVEAT: an
+        # MCU block's INTERNAL nets are also mostly power (its signal nets
+        # exit the block), so power_frac alone steals real MCU blocks
+        # (measured: stm32's LQFP-48 block -> "Power"). Regulators are
+        # small-pin devices, so additionally require that no big IC anchors
+        # the block.
+        or (power_frac >= 0.75
+            and max((len(getattr(p, "pins", [])) for p in parts
+                     if (getattr(p, "ref_prefix", "") or "").upper()
+                     in _ANCHOR_REF_PREFIXES), default=0) < 8)
     ):
         return "Power"
     if connector_frac >= 0.5:
@@ -458,13 +542,19 @@ def classify_block_role(parts, nets=None):
 
 
 @export_to_all
-def block_affinity_matrix(blocks):
+def block_affinity_matrix(blocks, skip_power=False):
     """Inter-block connectivity for placement optimization: for every
     unordered block pair (i, j), the sum of placement weights of the
     nets that span both blocks (see net_classify.NET_PLACEMENT_WEIGHTS).
     `blocks` is a list of part-view collections. Returns
-    {(i, j): weight} with i < j; pairs with zero weight are absent."""
-    from .net_classify import placement_weight
+    {(i, j): weight} with i < j; pairs with zero weight are absent.
+
+    skip_power=True excludes power/ground rails entirely (WI-5): on a
+    SCHEMATIC they render as power symbols, never as inter-block wires, so
+    a rail spanning every block must not make the block graph look fully
+    connected to topology analysis (chain detection / cell assignment).
+    PCB callers keep the default (copper for rails is real routing)."""
+    from .net_classify import classify_net_role, placement_weight
 
     part_block = {}
     for bi, block in enumerate(blocks):
@@ -482,6 +572,8 @@ def block_affinity_matrix(blocks):
 
     affinity = {}
     for net in seen_nets.values():
+        if skip_power and classify_net_role(net) is not None:
+            continue   # rail/ground: a symbol on the sheet, not a wire
         span = {part_block[id(p.part)] for p in getattr(net, "pins", [])
                 if id(p.part) in part_block}
         if len(span) < 2:

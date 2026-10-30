@@ -2,7 +2,12 @@
   "board": {
     "design_settings": {
       "defaults": {},
-      "rules": {},
+      "rules": {
+        "min_clearance": 0.1,
+        "min_track_width": 0.127,
+        "min_through_hole_diameter": 0.15,
+        "min_hole_clearance": 0.2
+      },
       "track_widths": [],
       "via_dimensions": []
     },
@@ -41,11 +46,32 @@
         "via_diameter": 0.6,
         "via_drill": 0.3,
         "wire_width": 6
+      },
+      {
+        "name": "PWR_0_35MM",
+        "pcb_color": "rgba(0, 0, 0, 0.000)",
+        "schematic_color": "rgba(0, 0, 0, 0.000)",
+        "tuning_profile": "",
+        "priority": 0,
+        "track_width": 0.35,
+        "clearance": 0.2,
+        "via_diameter": 0.648,
+        "via_drill": 0.348
       }
     ],
     "meta": {
       "version": 3
-    }
+    },
+    "netclass_patterns": [
+      {
+        "netclass": "PWR_0_35MM",
+        "pattern": "+3V3"
+      },
+      {
+        "netclass": "PWR_0_35MM",
+        "pattern": "+5V"
+      }
+    ]
   },
   "pcbnew": {
     "last_paths": {},

@@ -1175,11 +1175,16 @@ def no_connect_to_sexp(pin, tx=Tx()):
     part_tx = getattr(pin.part, "tx", Tx())
     pt = pin_pt * part_tx * tx
 
+    # Stable pin identity (ref.num) + point, never id(pin): a Python object
+    # address varies every run, re-randomizing no_connect UUIDs on otherwise
+    # byte-identical regenerations. ref.num + point is stable and unique.
+    _nc_ref = getattr(getattr(pin, "part", None), "ref", "?")
+    _nc_num = getattr(pin, "num", getattr(pin, "name", "?"))
     return Sexp(
         [
             "no_connect",
             ["at", _round_mm(pt.x), _round_mm(pt.y)],
-            ["uuid", _gen_uuid(f"nc:{id(pin)}:{pt.x}:{pt.y}")],
+            ["uuid", _gen_uuid(f"nc:{_nc_ref}.{_nc_num}:{pt.x}:{pt.y}")],
         ]
     )
 

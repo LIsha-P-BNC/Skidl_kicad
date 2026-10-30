@@ -228,8 +228,16 @@ def build_pcb(netlist_path, out_dir=None, name=None, layers=None,
         try:
             place_report = place_board_rules(board, mech=mech)
             if place_report.get("courtyard_overlaps", 0) > 0:
+                pairs = place_report.get("overlap_pairs") or []
+                detail = "; ".join(f"{a}<->{b}" for a, b in pairs[:6])
                 raise RuntimeError(
-                    f"rules placer left {place_report['courtyard_overlaps']} overlaps")
+                    f"rules placer left {place_report['courtyard_overlaps']} "
+                    f"overlaps ({detail or 'pairs unknown'}). Likely causes: "
+                    "a part whose courtyard (incl. antenna keepout zones -- "
+                    "RF modules carry a far larger courtyard than the body) "
+                    "cannot coexist with fixed edge items at this board "
+                    "size. ASK THE USER: enlarge the board, or move the "
+                    "listed fixed connector to another edge.")
         except MechanicalFitError as exc:
             return {"ok": False, "status": "mechanical_fit_failed",
                     "error": str(exc),
@@ -352,9 +360,51 @@ def build_pcb(netlist_path, out_dir=None, name=None, layers=None,
             "warnings": pour_warns,
         }
 
+    # NON-ROUTABLE PLANES: a dedicated inner ground/power plane must stay
+    # SOLID -- if the router is free to lay signal tracks on it (every
+    # copper layer used to export as (type signal)), a dense board carves
+    # the plane into islands and the return-path reference is gone. Reserve
+    # each dedicated plane for its net via the DSN (plane) scope so the
+    # router keeps signals on the remaining layers. Derived from the board's
+    # own pour plan -- no hardcoded layer names.
+    route_planes = []
+    if sidecar.get("ground_pour", True) and board.outline and board.layer_count >= 4:
+        from skidl.board.pour import (copper_layers as _cu,
+                                       _dedicated_planes, plan_pours,
+                                       assign_pour_layers)
+        _layers = _cu(board)
+        _dp = _dedicated_planes(_layers)
+
+        def _dominant(net_names):
+            best, best_n = None, -1
+            for nm in net_names:
+                net = board.nets.get(nm)
+                n = len(net.pad_refs) if net else 0
+                if n > best_n:
+                    best, best_n = nm, n
+            return best
+
+        gnd_net = _dominant(pour_exclude) if pour_exclude else None
+        for gl in _dp.get("ground") or []:
+            if gnd_net:
+                route_planes.append((gl, gnd_net))
+        # Power plane: reserve In2 for the single dominant power rail poured
+        # there; other rails keep routing (Specctra planes are single-net).
+        if _dp.get("power"):
+            _decisions = plan_pours(board, sidecar.get("currents"))
+            _assigns, _r, _w = assign_pour_layers(board, _decisions)
+            for pl in _dp["power"]:
+                pwr_here = [nm for nm, lys in _assigns.items()
+                            if pl in lys and _decisions.get(nm) == "power"]
+                pwr_net = _dominant(pwr_here) if pwr_here else None
+                if pwr_net:
+                    route_planes.append((pl, pwr_net))
+        report["route_planes"] = [[l, n] for l, n in route_planes]
+
     routing = {"requested": bool(route)}
     if route:
-        dsn = export_dsn(board, out_dir / f"{base}.dsn", exclude=pour_exclude)
+        dsn = export_dsn(board, out_dir / f"{base}.dsn", exclude=pour_exclude,
+                         planes=route_planes)
         ses = out_dir / f"{base}.ses"
         if reuse_ses and ses.is_file():
             # Experimentation path: import an EXISTING session (e.g. a
@@ -403,6 +453,21 @@ def build_pcb(netlist_path, out_dir=None, name=None, layers=None,
     # adds the correct replanned set. Generic -- every place-then-ask board.
     if route:
         board.vias.extend(pour_vias)
+        # POWER-PLANE FANOUT: an inner-planed power rail is excluded from the
+        # DSN, so its outer pads only reach the plane through a via we drop at
+        # each pad. Computed HERE (post-route, post-import_ses) so the via
+        # clears the real routed copper, same discipline as the GND stitch
+        # re-plan. Without this an excluded power plane floats (stm32 +3.3V).
+        if sidecar.get("ground_pour", True) and board.outline and pour_zones:
+            from skidl.board.pour import (plan_power_fanout_vias, plan_pours,
+                                          assign_pour_layers)
+            _dec = plan_pours(board, sidecar.get("currents"))
+            _asg, _r, _w = assign_pour_layers(board, _dec)
+            _fan, _unreached = plan_power_fanout_vias(board, _asg, _dec)
+            board.vias.extend(_fan)
+            report["power_pours"]["power_fanout_vias"] = len(_fan)
+            if _unreached:
+                report["power_pours"]["power_pads_unreached"] = sorted(_unreached)
     elif report.get("power_pours"):
         report["power_pours"]["stitch_vias"] = 0
         report["power_pours"]["note"] = (
@@ -506,18 +571,39 @@ def _guarantee_power_widths(board: BoardModel, currents: dict = None,
     Idempotent: net_width_plan only lists nets that need MORE than their
     current class, so a net already in a wide class is untouched. Returns
     {class_name: width_mm} for the classes it added/assigned."""
-    from skidl.board.width_engine import net_width_plan, bucket_classes
+    from skidl.board.width_engine import (net_width_plan, bucket_classes,
+                                          estimate_net_current)
     classes = board.net_classes or {}
     default_w = (classes.get("Default") or {}).get("width", 0.25)
     nets_by_class = {}
     for net in board.nets.values():
         nets_by_class.setdefault(net.net_class, []).append(net.name)
+    # STRUCTURAL current propagation: an INDUCTOR's two nets carry the SAME
+    # current (series element) -- so a converter's switching node inherits the
+    # output rail's current even under an arbitrary net name the name
+    # heuristics can't see. User-declared sidecar currents still win (the
+    # propagated figure is only filled where the user gave none).
+    currents = dict(currents or {})
+    net_class_of = {n.name: n.net_class for n in board.nets.values()}
+    for fp in board.footprints:
+        ref = str(getattr(fp, "ref", "") or "")
+        if not (ref[:1] in ("L",) and ref[1:2].isdigit()
+                and len(getattr(fp, "pads", [])) == 2):
+            continue                      # inductors only (L1...), never LED(D)
+        lnets = [p.net for p in fp.pads if getattr(p, "net", None)]
+        if len(set(lnets)) != 2:
+            continue
+        amps = max(estimate_net_current(nm, net_class_of.get(nm, "Default"),
+                                        currents)[0] for nm in lnets)
+        for nm in lnets:
+            if nm not in currents:
+                currents[nm] = amps
     try:
         plan = net_width_plan(
             nets_by_class,
             {"classes": classes, "copper_oz": copper_oz,
              "rules": {"min_track_width": default_w}},
-            currents=currents or {})
+            currents=currents)
     except Exception:
         return {}
     applied = {}
@@ -530,6 +616,30 @@ def _guarantee_power_widths(board: BoardModel, currents: dict = None,
                 board.nets[netname].net_class = cname
         applied[cname] = spec["width"]
     board.net_classes = classes
+    # VIA AMPACITY (parity with project_init): a via barrel has a current limit
+    # like a trace. After the final class assignment above, raise each class's
+    # via_drill/via_size where a net it carries needs a bigger barrel. Only
+    # grows vias (never shrinks) -- router + DRC honor it, zero router changes.
+    try:
+        from skidl.board.width_engine import required_via_drill
+        nets_by_class_final = {}
+        for n in board.nets.values():
+            nets_by_class_final.setdefault(n.net_class, []).append(n.name)
+        for cname, netnames in nets_by_class_final.items():
+            spec = classes.get(cname)
+            if not spec:
+                continue
+            need = max((required_via_drill(
+                estimate_net_current(nm, cname, currents)[0])
+                for nm in netnames), default=0)
+            cur_drill = float(spec.get("via_drill", 0) or 0)
+            if need > cur_drill:
+                spec["via_drill"] = need
+                spec["via_size"] = max(float(spec.get("via_size", 0) or 0),
+                                       round(need + 0.3, 3))
+        board.net_classes = classes
+    except Exception:
+        pass
     return applied
 
 

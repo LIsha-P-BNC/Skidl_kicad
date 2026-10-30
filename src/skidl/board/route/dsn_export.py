@@ -35,15 +35,28 @@ def _q(s: str) -> str:
     return '"' + str(s).replace('"', "'") + '"'
 
 
-def export_dsn(board: BoardModel, out_path: Path, exclude=None) -> Path:
+def export_dsn(board: BoardModel, out_path: Path, exclude=None,
+               planes=None) -> Path:
     """Serialize the placed board to a Specctra .dsn for FreeRouting.
 
     `exclude`: net names to leave OUT of the routing problem because they
     are carried by a copper pour instead (see board/pour.py). Default
     None = exclude nothing (every net is routed, the original behavior).
+
+    `planes`: list of (layer_name, net_name) to declare as NON-ROUTABLE
+    reference/power planes. Each named layer is emitted as `(type power)`
+    AND given a `(plane <net> (polygon ...))` scope -- WITHOUT the plane
+    scope FreeRouting silently demotes a `power` layer back to a routable
+    signal layer (freerouting PR #935). With it, the router never lays a
+    signal track on that layer, so a dedicated ground/power plane stays
+    SOLID instead of being carved into islands by signal traces -- the
+    fragmentation that breaks the return-path reference on dense boards.
+    Default None = every copper layer routable (the original behavior).
     """
     out_path = Path(out_path)
     exclude = set(exclude or ())
+    planes = list(planes or ())
+    plane_layers = {layer for layer, _net in planes}
     default_rules = board.net_classes.get("Default", {})
     width_u = _u(default_rules.get("width", 0.25))
     # GUARD BAND: route at +0.05 mm over the DRC clearance so the
@@ -84,12 +97,21 @@ def export_dsn(board: BoardModel, out_path: Path, exclude=None) -> Path:
     a("  (structure")
     for i, layer in enumerate(copper_layers):
         a(f"    (layer {layer}")
-        a("      (type signal)")
+        # A plane layer is (type power) so FreeRouting reserves it; a
+        # signal layer stays routable. (type power) ALONE is not enough --
+        # the (plane ...) scope emitted below is what actually keeps the
+        # router off it (freerouting PR #935).
+        a(f"      (type {'power' if layer in plane_layers else 'signal'})")
         a(f"      (property (index {i}))")
         a("    )")
     a("    (boundary")
     a("      " + _boundary_path(board))
     a("    )")
+    # Non-routable reference/power planes: the (plane) scope reserves the
+    # whole board polygon on that layer for one net, so the router lays no
+    # signal track there and the plane stays solid.
+    for layer, net in planes:
+        a(f"    (plane {_q(net)} {_boundary_polygon(board, layer)})")
     # NPTH pads (mounting holes) carry no net and no pin in the images --
     # emit hard keepouts so the router can't run copper across the hole.
     for fp in board.footprints:
@@ -208,7 +230,8 @@ def export_dsn(board: BoardModel, out_path: Path, exclude=None) -> Path:
     return out_path
 
 
-def _boundary_path(board: BoardModel, edge_clearance: float = 0.5) -> str:
+def _boundary_coords(board: BoardModel, edge_clearance: float = 0.5) -> list:
+    """Closed, edge-clearance-inset outline points (Y still KiCad-down)."""
     outline = board.outline or [(0, 0), (100, 0), (100, 100), (0, 100)]
     # Inset the routable area by the copper-to-edge clearance: the DSN has
     # no way to express KiCad's edge-clearance constraint, so without this
@@ -220,9 +243,21 @@ def _boundary_path(board: BoardModel, edge_clearance: float = 0.5) -> str:
     lo_y, hi_y = min(ys) + edge_clearance, max(ys) - edge_clearance
     inset = [(min(max(x, lo_x), hi_x), min(max(y, lo_y), hi_y))
              for x, y in outline]
-    pts = list(inset) + [inset[0]]  # closed
+    return list(inset) + [inset[0]]  # closed
+
+
+def _boundary_path(board: BoardModel, edge_clearance: float = 0.5) -> str:
+    pts = _boundary_coords(board, edge_clearance)
     coords = " ".join(f"{_u(x)} {_u(-y)}" for x, y in pts)
     return f"(path pcb 0 {coords})"
+
+
+def _boundary_polygon(board: BoardModel, layer: str,
+                      edge_clearance: float = 0.5) -> str:
+    """The board outline as a `(polygon <layer> 0 ...)` for a plane scope."""
+    pts = _boundary_coords(board, edge_clearance)
+    coords = " ".join(f"{_u(x)} {_u(-y)}" for x, y in pts)
+    return f"(polygon {layer} 0 {coords})"
 
 
 def _image_name(fp: Footprint) -> str:

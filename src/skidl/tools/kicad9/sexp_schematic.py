@@ -420,6 +420,16 @@ def _power_symbol_to_sexp(pin, net_name, tx):
     else:
         pt = Point(pt.x, pin_at.y)   # ~horizontal pin -> share pin Y -> horizontal stub
 
+    # NOTE (2026-10-05): a power-symbol value-text de-overlap pass once lived
+    # here (pushed a symbol further along its stub to separate J1's fused
+    # "+5V"/"GND" text). It was REVERTED -- moving `pt` here moves the power
+    # symbol's pin AFTER the router has already planned the stub wire to the
+    # original pt, leaving the symbol disconnected (measured bms_1s: 10 live
+    # ERC "pin not connected"/"unconnected wire endpoint" errors). A correct
+    # fix must move the STUB WIRE too (drawn elsewhere), or nudge only the
+    # VALUE-TEXT property offset (cosmetic, no pin move). Shorts/opens beat
+    # looks: cosmetic text overlap is acceptable; a broken net is not.
+
     # CLAMP against foreign collinear power stubs: different rails stacked on
     # one placement column/row otherwise ladder outward until their stubs
     # overlap -- a hard rail-to-rail short the schematic ships with
@@ -1270,11 +1280,19 @@ def no_connect_to_sexp(pin, tx=Tx()):
     part_tx = getattr(pin.part, "tx", Tx())
     pt = pin_pt * part_tx * tx
 
+    # Seed the UUID with the pin's STABLE identity (ref.num) + its point, never
+    # id(pin): a Python object address varies every interpreter run, so it made
+    # each regeneration emit fresh no_connect UUIDs even when the geometry was
+    # byte-identical -- the sole residual nondeterminism left after the
+    # connectivity-guard fix (holdout_can_node reproduced identically except for
+    # these markers). ref.num + point is stable and unique per NC marker.
+    _nc_ref = getattr(getattr(pin, "part", None), "ref", "?")
+    _nc_num = getattr(pin, "num", getattr(pin, "name", "?"))
     return Sexp(
         [
             "no_connect",
             ["at", _round_mm(pt.x), _round_mm(pt.y)],
-            ["uuid", _gen_uuid(f"nc:{id(pin)}:{pt.x}:{pt.y}")],
+            ["uuid", _gen_uuid(f"nc:{_nc_ref}.{_nc_num}:{pt.x}:{pt.y}")],
         ]
     )
 

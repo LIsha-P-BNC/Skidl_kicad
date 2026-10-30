@@ -76,14 +76,33 @@ re-interpretation.**
 - Match every **value** and **pin** exactly — never guess; confirm pins before wiring
   (`skidl-part-search --fields ...` or read the library entry directly).
 
-## BOM — always deliver it, never drop a component
-Build a **full component list (BOM) with counts** from the input and confirm it with the
-user before writing code. Every listed component must end up grounded, library-checked,
-and wired. After generating, **cross-check the schematic/netlist part count against the
-agreed list** — fix before reporting if anything's missing. If a component in an
-image/datasheet is unclear, **ask** — never silently skip it.
-The BOM (Ref, Value, Qty, `Lib:Name`, Footprint) is a **required deliverable** in the
-final report.
+## BOM TABLE FIRST — before ANY build (MANDATORY gate, not an afterthought)
+The BOM is the **FIRST approval artifact**, presented BEFORE building — never dumped after
+the build. Present it as a **TABLE** with these columns:
+
+| # | Function | Part | Value | `Lib:Name` | In library? | Action |
+|---|----------|------|-------|-----------|-------------|--------|
+
+- **In library?** = `✅ yes` or `❌ missing` — from the `parts(action='search')` result
+  (`total_matches>0` → yes; `0` → missing).
+- **Action** = `use` for a library part; `ADD (needs approval)` for a missing one.
+- **Get the user's approval of this TABLE before building.** It is the plan's core.
+
+**Library-missing parts → permission BEFORE adding, THEN design.** For every `❌ missing`
+row: show the part's **datasheet pin table** and ask the user's **explicit permission to ADD**
+it (symbol AND footprint, pins typed from the datasheet). Add ONLY after they approve; start
+the design ONLY after the library is complete. **Never add a part silently, never add-then-ask.**
+
+**`design.md` FIRST.** When the design starts, create a **`design.md`** in the project folder
+capturing: the BOM table, chosen parts + values, the functional-block breakdown, and key
+decisions (why this regulator, why this MCU, fan current, etc.). It is the design's source of
+truth — **drive every later change THROUGH the md first** (update the doc, then rebuild).
+
+Every listed component must end up grounded, library-checked, and wired. After generating,
+**cross-check the schematic/netlist part count against the agreed BOM table** — fix before
+reporting if anything's missing. If a component is unclear, **ask** — never silently skip it.
+The final-report BOM (via `build(mode='bom')`, columns Ref/Value/Qty/`Lib:Name`/Footprint)
+must match the approved table.
 
 ## Ground every part — never invent one
 Never write a `Part("Lib", "Name")` or a pin number you haven't confirmed exists.
@@ -97,6 +116,43 @@ Never write a `Part("Lib", "Name")` or a pin number you haven't confirmed exists
    connections. For each active IC, read its datasheet and do the source ↔ datasheet
    difference analysis (THE ORDER, step 2/2b). Ask a short clarifying question only if a
    value/part is genuinely ambiguous.
+1a. **Free-text on every question (global).** Any time you offer the user options,
+   suggestions, or choice buttons — part/MCU selection, values, footprints, sheet
+   organization, layout, routing yes/no, BOM columns, manufacturer, board size, output
+   format, **any** decision — there is **always an "other" free-text path**. When the user
+   types their own answer, **read it, analyse what it means** (map it to the concrete
+   action/parameter, even if loosely phrased or in their own language), and **act on it** —
+   never ignore it, never force them back to the preset list. Ambiguous → one short
+   clarifying question; clear → just do it. The listed options are only shortcuts.
+1b. **Design-organization intake (before the first build).** The plan you present for
+   approval MUST include the **design organization**, not just the BOM, and you ASK the
+   user to confirm or change it — their answers become this project's **custom design
+   rules** for the whole conversation. In ONE consolidated question, state and invite
+   edits to: **(a) sheet breakdown** — for a multi-sheet/hierarchical design, which
+   function goes on which sheet (e.g. sheet 1 = power/input, 2 = MCU + decoupling +
+   crystal, 3 = comms/USB, 4 = sensors/IO) and how many sheets; a small design is one
+   sheet; **(b) key part choices** the user cares about (MCU/regulator/connector family);
+   **(c) per-sheet layout** intent (signal L→R, power top / ground bottom, connectors on
+   the edge, which blocks cluster). Always offer a **recommended default + a few concrete
+   suggestions** (proposed sheet split, likely MCU/part choices) so the user can approve
+   in one tap — but make clear they are only suggestions and the user can **type their own**
+   answer ("or tell me your own split / parts / rule"); accept and follow whatever
+   free-text organization they type, never restrict them to the listed options.
+   **Precedence on conflict:** the user's typed requirement WINS over style/layout defaults
+   (sheet split, L→R flow, power-top/ground-bottom) — apply it as given. It does **not**
+   override **electrical correctness** (spec §5.5 `ELE`): if the request would reverse a
+   diode/LED/polarized cap, drop an LED's series resistor, float a power/enable pin, or
+   short two rails, do **not** silently obey or silently ignore — explain in plain words
+   why it is unsafe, propose the correct alternative, and confirm before building.
+   Unconventional-but-safe requests are always honoured; only circuit-breaking ones are
+   questioned. Follow any custom rule the user gives ("MCU on its own
+   sheet", "inputs on the left sheet", "one sheet per subsystem") for **every** sheet,
+   including sheets added later. Skip the questionnaire for a trivial single-component
+   circuit — just state the one-sheet plan. Build each sheet to the agreed organization
+   and the ORIENT rules (spec §5.14). **Wait for the user's OK — do not build anything
+   until they explicitly approve the plan + organization** ("ok"/"start"/"go", or an
+   edited version they then approve). If they change it, show the updated plan and wait
+   again. Only on their approval do you begin building to exactly the agreed plan.
 2. **Ground every part** (see above). Note real names/pins.
 3. **Write a fresh script** — pick a project name, write `<project>.py` (new unique name;
    never overwrite an unrelated existing circuit's file). **Write it in the fixed authoring
@@ -130,6 +186,86 @@ Never write a `Part("Lib", "Name")` or a pin number you haven't confirmed exists
      rails that match `_POWER_NET_RE`, standard values, standard ref letters, a
      decoupling cap per IC power pin) — this is what makes the output look professional,
      not just electrically correct.
+   - **Wire vs label vs port — author the net structure that produces the right form**
+     (spec §5.8 CONN + engine WIRE_LABEL_RULES): **wire** = same-sheet local cluster +
+     always for crystal/reset/decoupling/USB-diff/RF; **net label** = same-sheet
+     distant/crowded/high-fanout, short stub with a FUNCTION name (never `N$7`);
+     **global label** = true cross-sheet signal only, sparingly; **port/sheet pin** =
+     an `@subcircuit`'s interface — every cross-block signal is a shared `Net` created
+     ONCE at module level and passed as a parameter (it renders as the sheet's port);
+     **power symbol** = every rail, always. Never force a visual form by hand (CONN-2)
+     — the authoring choices above are what make the engine pick the right one.
+   - **Draw like the published reference boards** (spec §5.15 REFLAY, distilled from
+     ATmega32U2/STM32/PIC18/EFM32 reference schematics): MCU central — control cluster
+     (reset+pull-up, BOOT, crystal+load-caps, debug) on its LEFT, IO/ports/connectors on
+     its RIGHT; decoupling caps as ONE bank row on the rail (not scattered); crystal =
+     tight closed cluster at the OSC pins; series parts (USB 22Ω, LED resistor) inline ON
+     the signal wire; cross-section hops = short FUNCTION-named label stubs, in-section =
+     real wires; connectors at the page edge; every unused pin explicitly no-connected;
+     GPIO banks as ordered parallel ribbons to their header.
+   - **Draw each recurring block to its TI per-function idiom** (spec §5.16 `FUNC`, grounded
+     in TI SLOA089 / SPRACU5 / datasheet *Typical Application* circuits). FUNC-1…25 give the
+     values, decoupling, pull/strap handling, and polarity for each block type — LDO,
+     buck/switcher, MCU core, crystal, reset/boot straps, I²C/SPI/UART, op-amp, current-sense
+     (INA), differential/SAR-ADC input, RF match, ESD on connectors, USB front-end, LED
+     indicator, MOSFET half-bridge. Build the net structure so the engine renders that
+     arrangement (power at top, GND at bottom, decap at the pin, series parts inline on the
+     signal wire, cross-block hops as function-named labels). The PCB layout then mirrors
+     these same functional blocks 1:1 (pcb-place-route-fix skill, "Schematic-block → PCB-region
+     mapping").
+   - **Pin-side support parts are INLINE, never a block or a label.** A handful of parts
+     hanging off one IC/MCU pin — a filter (pin → R → C → GND), a series diode+LED (pin →
+     D → LED → GND), a pull-up/pull-down, a decoupling cap — is NOT a subsystem: write it
+     INLINE at module/parent level, connected directly to that pin, so the engine wires it
+     straight to the pin (short, local, left-to-right) with NO net label and NO titled box.
+     Decide the connection yourself (R→IC pin, R→C, C→GND) — it is unambiguous; don't ask
+     and don't wrap 2–4 parts in their own `@subcircuit`. Only a GENUINELY DISTINCT
+     multi-part function (a power stage, a comms/USB front-end, a sensor channel group —
+     ~5+ parts with its own role) earns an `@subcircuit`/block. Over-boxing tiny pin groups
+     is the main cause of a schematic that reads as scattered labels instead of clean local
+     wiring. (Verified: an 8-pin MCU with a pin→R→C filter and a pin→diode→LED built inline
+     renders as 27 direct wires, 0 labels, 0 blocks.)
+   - **What EARNS a block — the TI test (learn block granularity from TI reference designs).**
+     A block = a distinct FUNCTIONAL SUBSYSTEM you could bench-test in isolation: power
+     input+regulation, each comms front-end (USB front-end, UART bridge, CAN, I²C sensor
+     group), the MCU core, each driver/output stage (e.g. a MOSFET fan driver), each analog
+     front-end (INA current-sense + shunt + filter). Test: ONE anchor IC/connector + its
+     serving cluster = a block. These are **inline, NEVER their own block**: decoupling caps,
+     pull-ups/downs, series terminators, reset RC, boot/config straps, **indicator LEDs,
+     push buttons, test points**. (Caught live: giving two status LEDs their own "INDICATORS"
+     box is OVER-blocking — LEDs sit inline at the GPIO/rail pin they're on.) Each FUNC-1…25
+     block type (see the TI per-function catalog above) is a candidate block; its support
+     parts stay inline within it. Don't box everything — meaningful function only.
+   - **HOW TO SPLIT — the decision procedure** (industry-grounded: TI reference designs +
+     Altium / Flux.ai / PCBWay schematic-quality guides + Graham Sutherland's "high-quality
+     schematics"). Follow it every design:
+     1. **List the functional SUBSYSTEMS**: power input, each regulated rail, MCU/processor
+        core, each comms interface (USB front-end, UART bridge, CAN, I²C sensor group), each
+        sensor, each driver/output stage, connector groups.
+     2. **Each subsystem = ONE block.** Its support parts (decoupling, pull-ups/downs, series
+        R, indicator LED, button, boot/config strap, test point) stay INLINE inside it, drawn
+        next to the part they serve (e.g. the ESD IC sits next to its connector).
+     3. **Connect blocks with net LABELS / ports — never long cross-sheet wires.** Inside a
+        block = real wires. Signal flows left→right; power up, ground down.
+     4. **SHEET CHOICE.** A design that fits ONE readable sheet → single sheet with titled
+        boxes (`with smart_schematic.block("…"):` per subsystem). A design with **~5+ distinct
+        subsystems, or dominated by a big module / wide connector** (e.g. an MCU module + a
+        38-pin GPIO header + USB + UART bridge) → **HIERARCHY: one `@subcircuit` sheet per
+        block, even when the part count is under the ~50 threshold** — a complex board crammed
+        onto one flat sheet spreads unreadably (the lesson from a flat 27-part ESP32+USB+UART+
+        sensor board). Part-count is only a floor; subsystem-count and big modules also force
+        hierarchy.
+     5. **Hierarchy connectivity = sheet PINS / ports, NOT a flood of global labels.** A
+        cross-sheet net is a shared `Net` created once at module level and passed into each
+        `@subcircuit` (renders as that sheet's port); keep global labels minimal so each block
+        stays a clean abstraction ("each sheet = an object with a defined interface"). A
+        repeated identical subsystem → ONE hierarchical sheet reused, not copy-pasted. The
+        top/root sheet then reads as the design's BLOCK DIAGRAM. (Industry standard — KiCad,
+        Altium, pcdandf: hierarchy for complex boards reduces complexity, eases ECOs, enables
+        reuse.)
+     6. **Give each block ROOM** — don't cram; prefer a larger sheet / more sheets over a
+        squashed page. **Plan the block/sheet breakdown BEFORE building** — it goes in the
+        `design.md` and the plan you get approved.
    - Group into `@subcircuit` functions **by function** (power, MCU, comms, sensing, …),
      5–15 parts each for best auto-routing. **`@subcircuit` = one schematic page per call,
      every call** — never call an `@subcircuit`-decorated function inside a loop/repeated
@@ -205,6 +341,23 @@ Never write a `Part("Lib", "Name")` or a pin number you haven't confirmed exists
    SUCCESSFUL (Verified)"** when golden passes (no GV ERROR) AND the human-assisted diffs
    vs. the source (component count, pin connectivity, `--matrix`, hierarchy) match. See
    spec [§10](../../../docs/schematic_generation_spec.md).
+8b. **RUN THE REAL ERC on the DRAWN sheet — the build's self-report is NOT enough (verified
+   2026-10-22).** `build`'s `verified:true` / `kicad_erc_errors:0` / `--golden` are skidl's
+   **netlist-level** checks: they confirm the `.net` is right but **do NOT catch a pin left
+   physically disconnected in the drawn `.kicad_sch`**. Always run the **real** schematic ERC —
+   `check_live('erc')` (MCP, open editor) or `anvil-cli sch erc <file>.kicad_sch` (headless, the
+   same engine) — and treat THAT as the verdict. **KNOWN non-deterministic draw bug:** the
+   ladder-rail + `ensure_junctions` passes are *marginal* — the connectivity revert-guard can roll
+   back the junctions that tie a pin's stub to the rail spine (`junction heal reverted …
+   introduced N net defects` in the log), leaving a power pin — most often a **far / page-edge
+   connector power pin** (e.g. a `+5V` output-connector pin) — **unconnected in the drawing though
+   the netlist is correct**. It VARIES run-to-run (same `.py`: one build clean, another a 1-pin
+   gap). **If the real ERC reports an unconnected/`Pin not connected` power pin: REBUILD the same
+   name** (the draw varies per run — a re-run usually draws it clean) and re-ERC; only if it keeps
+   recurring, connect the pin by hand in the app (`edit_schematic_live` currently **ignores x/y**,
+   so surgical placement fails — rebuild or draw it manually). Never ship on `verified:true` alone.
+   **Footprints:** the pre-check does NOT confirm a footprint exists — use a real library name
+   (terminal block = `TerminalBlock:TerminalBlock_MaiXu_MX126-5.0-02P_1x02_P5.00mm`, never a guess).
 9. **Report**: parts (Lib/Name), ERC result, **validator result (0 errors)**,
    **confirmed `.kicad_sch` (+ `.kicad_pro` on the MCP path)**, the BOM, the "datasheet vs
    board" note (per key IC: additions/changes + any compliance warning), and that the
@@ -232,6 +385,30 @@ Re-check:
    interconnected for `auto_stub`'s selective-stub thresholds and either split it or
    raise `auto_stub_fanout`/`auto_stub_max_wire_pins`.
 6. Report every auto-fix or intentional deviation in the "datasheet vs board" note.
+
+## SENIOR-DESIGNER DISCIPLINE — the process/judgment layer (apply to EVERY design)
+The rules below are the common case; a senior's value is the **process + judgment** on top:
+front-load the thinking so the drawing is almost mechanical, and never report an unreviewed /
+unverified result. Full set: spec [§11 `MET-1…10`](../../../docs/schematic_generation_spec.md).
+Grounded in Rick Hartley, Henry Ott, TI SPRACU5, IPC class 1/2/3, NASA EEE-INST-002. The habits:
+- **Requirements first (MET-1):** before parts, state the operating box — V-range + transients,
+  rail/load currents, worst-case dissipation, mechanical/connector constraints, reliability class.
+- **Architecture + risk-first (MET-2):** block diagram + power tree + ground/return strategy first;
+  find the hardest part (fine-pitch QFN/BGA, fast edges, sensitive analog, thermal) and let it drive
+  the sheet/layout plan.
+- **Datasheet + errata (MET-3):** datasheet + app-note + errata together; the typical-app circuit is a
+  STARTING POINT to re-derive for THIS design's worst case, not gospel; prefer proven, in-lifecycle,
+  second-sourced parts.
+- **DFx + debug from day 1 (MET-4):** test points on every rail/clock/reset/programming line;
+  pin-1/polarity unambiguous; design in isolatable blocks so the board can be brought up.
+- **Review gates — never self-approve blind (MET-6):** run the self-audit as a real per-block review
+  BEFORE declaring done; clear every ERC/validator flag OR document why it's waived — no silent violations.
+- **Margin (MET-7):** derate (commercial ~80 % V/I, 70 % P); worst-case the critical values; FMEA mindset.
+- **Document the WHY (MET-8):** capture design intent + non-obvious value rationale in the report.
+- **Verify, don't infer (MET-9):** report what the build/ERC/validator actually confirmed vs assumed (= GEN-3).
+- **Rules are defaults (MET-10):** break one only with a documented reason; electrical-safety (`ELE`)
+  limits never bend — a reversed diode/LED, a dropped LED series-R, a floating enable, or shorted rails
+  is never a "style" override: explain, propose the fix, and confirm.
 
 ## PROFESSIONAL SCHEMATIC RULES — bake these into EVERY generated .py
 > **Normative reference:** these rules are formalized with MUST/SHOULD/MAY levels, stable
@@ -366,6 +543,73 @@ After generating, sanity-check the produced schematic against these (power symbo
 present, every IC has a decoupling cap, test points on rails/reset/buses, no `N$` net
 names on important signals, ZERO manual `power:*`/PWR_FLAG parts in the .py, zero
 placeholder connector-ICs, nearby clusters wired not labelled) BEFORE reporting done.
+
+## TI-GROUNDED PER-FUNCTION DESIGN RULES — inline catalog (apply when the block appears)
+> The full normative table with per-rule TI citations is spec §5.16 `FUNC` / §5.14 `ORIENT`
+> / §5.15 `REFLAY`. This is the **actionable inline summary** so the rules apply even without
+> opening the spec. Build the net structure so the engine renders each arrangement; values are
+> starting points — the part datasheet wins (MET-3).
+
+**Layout frame — every sheet (ORIENT / REFLAY):**
+- Signal flows **left→right** (connectors/sources left, processing middle, outputs right);
+  **+V pins point up, GND pins point down** (power symbol above the part, ground below, never
+  sideways). Everything on the 100 mil grid.
+- Rotate each part so its pin groups **face the block they connect to** (MCU's USB pins face
+  the USB connector; regulator VIN left / VOUT right / GND down / FB divider on the output side).
+- **MCU/main-IC = the page anchor**, centred: control cluster (reset+pull-up, BOOT strap,
+  crystal+load caps, debug) on its LEFT; IO/ports/headers on its RIGHT.
+- **Connectors at the page edge** facing out (input left, output right, power top), pin 1 marked.
+- **Decoupling caps = one bank row** on the rail; **crystal = tight closed cluster** at the OSC
+  pins; **series parts inline on the signal wire** (USB 22Ω, LED R, filter R) — no label break.
+- In-section nets = **wires**; cross-section hop = **short FUNCTION-named label stub**; every
+  unused pin = explicit no-connect.
+
+**Per-function idioms (FUNC-1…25) — draw the block to its TI idiom:**
+- **LDO (1):** IN→OUT L→R; ≥1 µF IN→GND, 1–10 µF X5R/X7R OUT→GND; `EN` tied to IN or driven,
+  never floating; GND at bottom.
+- **Buck / switcher (2):** 10 µF X5R close to VIN; 0.01 µF BOOT→SW bootstrap; SW→inductor→output
+  caps; catch diode **cathode on SW, anode to GND**; set VOUT with R1/R2 from VOUT→FB = the
+  internal ref, tapped *after* the output bulk cap; keep the SW node tight.
+- **Board power input (3):** bulk (tantalum/aluminium, LF) **and** a ceramic (HF) as a pair at entry.
+- **Ferrite π-filter supply (4):** ferrite on **+V only** (never the ground return); 0.1/0.01 µF
+  inside the bead + 1000 pF outside; **do not** ferrite-filter digital/core rails.
+- **Decoupling (5):** one 0.1 µF X7R **per power pin** + one bulk per rail group; smallest nearest
+  the pin; rate every cap > 2× worst-case V.
+- **MCU core (6):** decouple every VDD/VDDIO pin; VDDA/analog supply filtered separately (4);
+  MCU is the central anchor.
+- **Unused / high-Z IO (7):** pull every floating IO to a level (10 k–47 k); don't contend with a
+  device's internal pull.
+- **Boot / config straps (8):** pull **every** boot/config pin (10 k/47 k); **never tie a boot pin
+  straight to GND or VIO**.
+- **Reset (9):** hold reset in a known state until latched; pull-down any reset-status output; a
+  reset cap > 22 pF.
+- **Crystal (10):** crystal + its 2 load caps as one tight cluster at XI/XO; load-cap value from the
+  datasheet *Crystal Requirements* table; cap grounds to GND.
+- **I²C (11):** SDA/SCL are open-drain → **external pull-ups mandatory** (4.7 k–10 k) to the bus rail.
+- **IO series-R (12):** 0 Ω default on bus IO; 22 Ω inline on USB D± / fast clocks, near the driver pin.
+- **USB front-end (13):** D± as a 90 Ω differential pair; ESD array at the connector; optional CM
+  choke bypassable with a 0 Ω DNP.
+- **Op-amp (14):** decouple every package; keep the inverting-input node minimal; **terminate every
+  unused section** (noninverting→mid-supply/ref, output→inverting follower).
+- **Current-sense INA (15):** **Kelvin 4-wire** to the shunt, sense pair tight at the shunt;
+  fixed-gain variant; ~1 nF at the sense/supply pins; output a labelled net.
+- **SAR / diff ADC input (16):** buffer + RC charge-bucket (C0G/NP0) at the ADC pins; the REF
+  decoupling cap sits directly at REF/GND, no via between.
+- **Precision reference (17):** shunt/series ref (TL431) + set R's + output cap at the AREF pin.
+- **ESD on connectors (18):** TVS/ESD array on **every** IO wired to an external connector, right at
+  the connector.
+- **RSVD pins (19):** leave unconnected — no trace, no test point.
+- **RF match (20):** π-network before the antenna, 2 of 3 positions populated (unused = 0 Ω); the
+  LC→antenna run is a controlled 50 Ω; decouple each RF supply pin at its pin.
+- **LED indicator (21):** `rail/GPIO → series R → anode`, `cathode → GND`; R per colour
+  (blue/white ~60 Ω, red/green/yellow ~270 Ω); high-current LED → external FET, not the GPIO.
+- **Polarized / electrolytic cap (22):** `+` to the more-positive DC node; never reversed.
+- **MOSFET half-bridge / power stage (23):** +V (drain) top, phase node middle, source/GND bottom;
+  gate via ~20 Ω series R + a labelled net; high-side above, low-side below; repeated bridges
+  column-aligned.
+- **Test points (24):** on each supply rail, RESET/NRST, the main clock, and each primary bus
+  (UART/I²C/SPI/CAN); name the TP after its net (`TP_UART_TX`).
+- **DNP / DNI (25):** mark do-not-populate parts explicitly (value `NP`/`DNI`).
 
 ## Constraints / gotchas
 - **Stays DYNAMIC for any circuit, no per-circuit code**: grounding via

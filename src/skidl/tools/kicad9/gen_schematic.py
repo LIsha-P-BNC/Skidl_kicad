@@ -1026,7 +1026,8 @@ def gen_schematic(
             try:
                 from skidl.schematics.anchor_place import (
                     hug_power_satellites, flow_place_hinted, flow_place_block,
-                    uncross_parallel_bundles, orient_to_neighbors)
+                    uncross_parallel_bundles, orient_to_neighbors,
+                    orient_2pin_face, unmirror_power_ics)
 
                 def _hug_all(n):
                     # 1) author flow_x hints win (whole-circuit flow layout);
@@ -1053,10 +1054,22 @@ def gen_schematic(
                         if _rowed and orient_to_neighbors(n, **_hug_opts):
                             flow_place_block(n, **_hug_opts)
                             hug_power_satellites(n, **_hug_opts)
+                        # 2-pin series parts (R/D/LED/L/C) whose connected
+                        # pin faces away from its neighbour get a U-turn
+                        # wire -- flip them so the wire runs straight. Runs
+                        # on rowed nodes alongside the multi-pin orient.
+                        if _rowed:
+                            orient_2pin_face(n, **_hug_opts)
                     # bundle uncrossing runs for EVERY node (row, stacked,
                     # anchor-hugged alike): a crossed multi-net bundle fails
                     # routing identically in all of them.
                     uncross_parallel_bundles(n, **_hug_opts)
+                    # ORIENT-2: no multi-pin part with power pins may keep a
+                    # net mirror (det<0) -- mirrors now render faithfully, so
+                    # a mirrored IC reads GND-up/VCC-down. Runs LAST so it
+                    # sees the final pose from every pass above; pre-route,
+                    # so wires are planned against the corrected tx.
+                    unmirror_power_ics(n, **_hug_opts)
                     for _ch in getattr(n, "children", {}).values():
                         _hug_all(_ch)
                 _hug_all(node)

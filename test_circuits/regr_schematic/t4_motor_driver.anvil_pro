@@ -2,7 +2,12 @@
   "board": {
     "design_settings": {
       "defaults": {},
-      "rules": {},
+      "rules": {
+        "min_clearance": 0.1,
+        "min_track_width": 0.127,
+        "min_through_hole_diameter": 0.15,
+        "min_hole_clearance": 0.2
+      },
       "track_widths": [],
       "via_dimensions": []
     },
@@ -41,11 +46,43 @@
         "via_diameter": 0.6,
         "via_drill": 0.3,
         "wire_width": 6
+      },
+      {
+        "name": "PWR_0_55MM",
+        "pcb_color": "rgba(0, 0, 0, 0.000)",
+        "schematic_color": "rgba(0, 0, 0, 0.000)",
+        "tuning_profile": "",
+        "priority": 0,
+        "track_width": 0.55,
+        "clearance": 0.2,
+        "via_diameter": 0.909,
+        "via_drill": 0.609
+      },
+      {
+        "name": "PWR_0_8MM",
+        "pcb_color": "rgba(0, 0, 0, 0.000)",
+        "schematic_color": "rgba(0, 0, 0, 0.000)",
+        "tuning_profile": "",
+        "priority": 1,
+        "track_width": 0.8,
+        "clearance": 0.2,
+        "via_diameter": 1.206,
+        "via_drill": 0.906
       }
     ],
     "meta": {
       "version": 3
-    }
+    },
+    "netclass_patterns": [
+      {
+        "netclass": "PWR_0_55MM",
+        "pattern": "+12V"
+      },
+      {
+        "netclass": "PWR_0_8MM",
+        "pattern": "MOTOR_A"
+      }
+    ]
   },
   "pcbnew": {
     "last_paths": {},

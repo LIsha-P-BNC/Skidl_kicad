@@ -38,6 +38,13 @@ def estimate_net_current(net_name: str, net_class: str,
         return 2.0, "heuristic: motor/coil net name -> 2.0 A"
     if _VIN_RE.search(net_name or ""):
         return 1.5, "heuristic: supply-input net name -> 1.5 A"
+    # Switching node of a DC-DC converter (SW / SW_NODE / LX / VSW): carries
+    # the FULL inductor current -- same magnitude as the output rail, NOT a
+    # 0.1 A signal (measured: buck SW_NODE routed at 0.2 mm while +5V got
+    # 0.4 mm). Anchored at the name start so control lines like MOTOR_SW
+    # (caught by _CTRL_SUFFIX_RE's _SW$) never match.
+    if re.match(r"^(V?SW|LX)(_?NODE)?\d*$", (net_name or ""), re.I):
+        return 1.5, "heuristic: DC-DC switching node (inductor current) -> 1.5 A"
     if net_class in ("Power",) or (net_name or "").startswith("+"):
         return 1.0, "heuristic: power-class rail -> 1.0 A"
     return 0.1, "heuristic: signal net -> 0.1 A"
