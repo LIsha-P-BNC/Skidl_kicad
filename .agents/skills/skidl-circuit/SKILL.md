@@ -205,6 +205,21 @@ Grounded in Rick Hartley, Henry Ott, TI SPRACU5, IPC class 1/2/3, NASA EEE-INST-
 - **Rules are defaults (MET-10):** break one only with a documented reason; electrical-safety (`ELE`)
   limits never bend — a reversed diode/LED, a dropped LED series-R, a floating enable, or shorted rails
   is never a "style" override: explain, propose the fix, and confirm.
+- **Vetted values (MET-11):** derive every component VALUE from the standard formulas and state
+  the formula + inputs in the report (LED R = (Vs−Vf)/I; divider; I²C pull-up window; AN2867
+  crystal caps; 555: f = 1.44/((R1+2R2)·C), t = 1.1·R·C; regulator FB divider; buck:
+  L = Vout·(Vin−Vout)/(Vin·ΔIL·fsw) with ΔIL ≈ 0.3·Iout, Isat ≥ 1.3·Ipeak; boost:
+  L = Vin·D/(ΔIL·fsw), IL = Iout/(1−D); shunt: R = Vsense/Imax with 2× power derate), rounded to
+  E-series. Never assert a bare number; a value with no formula is from the datasheet — cite it;
+  for a switcher the IC datasheet's own component table wins over the generic sizing.
+- **Change discipline (MET-12):** before ALTERING an existing design, call the **`plan_change`**
+  MCP tool with the user's request (+ project name). It returns the ONE layer the change lives in
+  (requirement / part_swap / topology / value / refactor / layout / manufacturing), the MINIMAL
+  edit path, the verification, and the blast radius — follow it. A value change is
+  `edit_schematic_live(edit_value)` / `edit_schematic(set_value)` — NEVER a rebuild; a layout
+  problem never touches the schematic; a refactor must leave the netlist identical;
+  `layer:'unclear'` → ask the user its one question instead of guessing. Smallest edit that
+  fixes the root cause; protect everything proven.
 
 ## PROFESSIONAL SCHEMATIC RULES — bake these into EVERY build
 > **Normative reference:** these rules are formalized with MUST/SHOULD/MAY levels, stable

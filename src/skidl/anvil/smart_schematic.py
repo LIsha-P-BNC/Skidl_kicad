@@ -437,16 +437,42 @@ def build(name=None, title="SKiDL-Generated Schematic", auto_stub_fanout=None,
                                 _peers.add(str(_og))
                             elif not _og:
                                 _pure = False  # touches ungrouped parts
+            _target = None
             if _pure and len(_peers) == 1:
                 _target = _peers.pop()
-                if len(_by_group.get(_target, [])) > len(_members):
-                    for _p in _members:
-                        try:
-                            _p.group = _target
-                        except Exception:
-                            pass
-                    _by_group[_target].extend(_members)
-                    _absorbed.append(f"{_g} -> {_target}")
+            elif _pure and not _peers:
+                # RAIL-ONLY SUPPORT (bulk/decoupling caps): every pin sits on a
+                # power/ground net, so the signal walk above finds no peer and
+                # the block used to survive as its own tiny box -- the exact
+                # over-split the user rejects ("no 2-component blocks"). A
+                # decap BELONGS to the function it feeds: absorb into the
+                # LARGEST other block sharing one of its rails (deterministic
+                # tie-break by name).
+                _rail_peers = set()
+                for _p in _members:
+                    for _pin in getattr(_p, "pins", []):
+                        for _net in getattr(_pin, "nets", []):
+                            if _cnr_abs(_net) not in ("power", "ground"):
+                                continue
+                            for _opin in getattr(_net, "pins", []):
+                                _op = getattr(_opin, "part", None)
+                                if _op is None or any(_op is _m for _m in _members):
+                                    continue
+                                _og = getattr(_op, "group", None)
+                                if _og and str(_og) != _g:
+                                    _rail_peers.add(str(_og))
+                if _rail_peers:
+                    _target = sorted(
+                        _rail_peers,
+                        key=lambda t: (-len(_by_group.get(t, [])), t))[0]
+            if _target and len(_by_group.get(_target, [])) > len(_members):
+                for _p in _members:
+                    try:
+                        _p.group = _target
+                    except Exception:
+                        pass
+                _by_group[_target].extend(_members)
+                _absorbed.append(f"{_g} -> {_target}")
         if _absorbed:
             print(f">>> smart_schematic: absorbed {len(_absorbed)} support "
                   f"block(s) into their anchor block ({'; '.join(_absorbed)})")
@@ -1895,6 +1921,7 @@ def build(name=None, title="SKiDL-Generated Schematic", auto_stub_fanout=None,
     # junction dots, power rail symbols, title block) PLUS the real KiCad ERC
     # error list -- exactly what the GUI's ERC dialog will show. Read-only.
     _kicad_erc_errors = None
+    _erc_failed = False  # True if the real kicad-cli ERC could not run on a sheet
     _geo_erc_lines = []  # (sheet, check_id, message, location) for the .erc report
     try:
         import ipc_check
@@ -1918,6 +1945,11 @@ def build(name=None, title="SKiDL-Generated Schematic", auto_stub_fanout=None,
                 for _chk, _msg, _loc in _ee:
                     _geo_erc_lines.append(
                         (os.path.basename(sheet_path), _chk, _msg, _loc))
+            # A sheet whose real ERC crashed/timed-out is NOT clean -- record it
+            # so the verdict below cannot claim ERC-verified on an ERC that never
+            # ran (the old None->"clean" masking path).
+            if (_rep or {}).get("erc_failed"):
+                _erc_failed = True
     except Exception as e:
         warnings.warn(f"smart_schematic: IPC compliance report skipped: {e}", RuntimeWarning)
     if _kicad_erc_errors:
@@ -2017,13 +2049,18 @@ def build(name=None, title="SKiDL-Generated Schematic", auto_stub_fanout=None,
         # (disconnected pin/power symbol) means the shipped schematic is wrong
         # even if the netlist graph is right.
         _netlist_ok = bool(locals().get("_ok", True))
-        _erc_ok = (_kicad_erc_errors or 0) == 0
+        # ERC is clean ONLY when the real engine actually ran (not _erc_failed)
+        # AND reported no geometric errors. A crashed/absent ERC report must not
+        # pass as clean -- otherwise a build is published as ERC-verified on the
+        # strength of an ERC that never executed.
+        _erc_ok = (not _erc_failed) and (_kicad_erc_errors or 0) == 0
         _result = {
             "schema": 1,
             "name": name,
             "verified": _netlist_ok and _erc_ok,
             "netlist_verified": _netlist_ok,
             "kicad_erc_errors": _kicad_erc_errors,
+            "kicad_erc_failed": _erc_failed,
             "verify_available": verify_connectivity is not None,
             "routed": _routed,
             "routed_seed": routed_seed,

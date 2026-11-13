@@ -90,6 +90,26 @@ def test_json_unverified_fails(tmp_path, monkeypatch):
     assert "not verified" in res.get("error", "").lower()
 
 
+def test_json_erc_failed_is_not_reported_clean(tmp_path, monkeypatch):
+    # Masking guard: the real KiCad ERC crashed/produced no report, so the build
+    # is NOT ERC-verified. smart_schematic records verified=False +
+    # kicad_erc_failed=True; _finish_build must fail it and say ERC did not run --
+    # never pass it off as ERC-clean on an ERC that never executed.
+    _isolate(monkeypatch)
+    base = "ercfail"
+    _setup(tmp_path, base, ">>> ok\n",
+           {"schema": 1, "name": base, "verified": False,
+            "netlist_verified": True, "kicad_erc_errors": None,
+            "kicad_erc_failed": True, "verify_available": True,
+            "routed": False, "routed_seed": None,
+            "placer": "anchor", "schematic_mode": "labels"})
+    res = S._finish_build(base)
+    assert res["ok"] is False, "ERC that did not run must not pass as a success"
+    err = res.get("error", "").lower()
+    assert "did not run" in err and "erc" in err, (
+        "must say the ERC did not run, not generic 'not verified'")
+
+
 def test_json_labels_mode(tmp_path, monkeypatch):
     _isolate(monkeypatch)
     base = "lab"

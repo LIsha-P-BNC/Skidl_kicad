@@ -39,6 +39,14 @@ def check(name, kicad_cli=""):
 
     off_grid = dangling = None
     erc_errors = None
+    # erc_failed distinguishes "the real ERC RAN and was clean" (erc_errors == [])
+    # from "the ERC could NOT be run" (crash / timeout / no report written). A
+    # silent None used to be read downstream as "clean", so a build whose
+    # geometric ERC never actually executed was reported ERC-verified. Only set
+    # inside the CLI-present branch, so a system with no kicad-cli (erc_failed
+    # stays False, erc_errors stays None) keeps its prior "indeterminate" meaning.
+    erc_failed = False
+    erc_fail_detail = ""
     if kicad_cli and os.path.exists(kicad_cli):
         rpt = sch + ".ipcerc"
         try:
@@ -47,18 +55,25 @@ def check(name, kicad_cli=""):
                 capture_output=True, timeout=180, creationflags=_NW,
                 stdin=subprocess.DEVNULL,
             )
-            txt = open(rpt, encoding="utf-8", errors="replace").read() if os.path.exists(rpt) else ""
-            off_grid = txt.count("endpoint_off_grid")
-            dangling = txt.count("label_dangling")
-            erc_errors = _erc_errors(txt)
-            os.remove(rpt)
-        except Exception:
-            pass
+            if os.path.exists(rpt):
+                txt = open(rpt, encoding="utf-8", errors="replace").read()
+                off_grid = txt.count("endpoint_off_grid")
+                dangling = txt.count("label_dangling")
+                erc_errors = _erc_errors(txt)
+                os.remove(rpt)
+            else:
+                # CLI returned but wrote no report -> ERC did not actually run.
+                erc_failed = True
+                erc_fail_detail = "kicad-cli sch erc produced no report"
+        except Exception as exc:
+            # A crashed/timed-out ERC must never be treated as clean downstream.
+            erc_failed = True
+            erc_fail_detail = repr(exc)[:200]
 
     return dict(
         diagonal=diagonal, off_grid=off_grid, dangling=dangling,
         junctions=junctions, power_symbols=power_symbols, title_block=title_block,
-        erc_errors=erc_errors,
+        erc_errors=erc_errors, erc_failed=erc_failed, erc_fail_detail=erc_fail_detail,
     )
 
 

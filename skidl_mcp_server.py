@@ -318,6 +318,14 @@ server = FastMCP(
         "parts that are already placed is wrong even if this conversation has no "
         "memory of placing them -- the project on disk is the memory. Start the full "
         "workflow only for a genuinely NEW, unrelated design.\n"
+        "CHANGE DISCIPLINE: before ALTERING an existing design, call "
+        "plan_change(request, name) FIRST -- it classifies the ask into its one "
+        "design layer (requirement/part_swap/topology/value/refactor/layout/"
+        "manufacturing) and returns the MINIMAL edit path + verification + blast "
+        "radius. Follow it: a value change is edit_schematic(op='set_value') or "
+        "edit_schematic_live(edit_value) -- NEVER a rebuild; a layout problem never "
+        "touches the schematic; layer 'unclear' means ask the user its one question "
+        "instead of guessing.\n"
         "PRECEDENCE: 'open in the window' is only a hint for the FIRST message of a "
         "conversation. Once THIS conversation has named or confirmed a design (e.g. "
         "the user approved a new project's plan), every follow-up turn -- clicked "
@@ -897,7 +905,18 @@ def _finish_build(base: str) -> dict:
             res["ok"] = False
             res["status"] = "failed"
             _ke = result_json.get("kicad_erc_errors")
-            if result_json.get("netlist_verified", True) and _ke:
+            if result_json.get("kicad_erc_failed"):
+                # The real KiCad ERC crashed / timed out / wrote no report, so the
+                # drawn schematic was NOT ERC-checked. Never claim ERC-clean on an
+                # ERC that never ran (the masking bug this guards against).
+                res["error"] = (
+                    "the real KiCad ERC did NOT run to completion on the drawn "
+                    "schematic (kicad-cli errored/timed out / produced no report), "
+                    "so the build is NOT ERC-verified. Do NOT report it as "
+                    "ERC-clean -- run check_live('erc') or rebuild. The .net "
+                    "netlist is still valid for PCB layout."
+                )
+            elif result_json.get("netlist_verified", True) and _ke:
                 # Netlist is logically fine but the DRAWN sheet has real KiCad
                 # ERC errors (geometric disconnection) -- the schematic is wrong
                 # to SHOW/ship even though the .net is usable for PCB.
@@ -2662,7 +2681,7 @@ def sync_schematic_from_board(name: str, apply: bool = False) -> dict:
     changes, applied_files = [], []
     for f in files:
         text = f.read_text(encoding="utf-8", errors="replace")
-        new_text = text
+        edits = []            # (start, end, new_span) against the ORIGINAL text
         for (s, e) in _instance_symbol_spans(text):
             span = text[s:e]
             ref = _span_prop_value(span, "Reference")
@@ -2683,7 +2702,14 @@ def sync_schematic_from_board(name: str, apply: bool = False) -> dict:
                         lambda mo: mo.group(1) + bval.replace("\\", "\\\\") + mo.group(2),
                         new_span, count=1)
             if new_span != span:
-                new_text = new_text.replace(span, new_span, 1)
+                edits.append((s, e, new_span))
+        # Apply by BYTE OFFSET, from the end so earlier spans keep their indices.
+        # replace-by-content (old path) rewrote the FIRST byte-identical span --
+        # the wrong symbol when two parts share an identical property block
+        # (e.g. two unplaced generic 100nF caps with no position yet).
+        new_text = text
+        for (s, e, new_span) in sorted(edits, reverse=True):
+            new_text = new_text[:s] + new_span + new_text[e:]
         if apply and new_text != text:
             _backup_file(f)
             try:
@@ -2852,14 +2878,72 @@ def edit_schematic(name: str, op: str, ref: str = "", value: str = "",
     warn = None
     if op == "delete_part":
         warn = (f"'{ref}' removed. Any wire that only touched it is now dangling "
-                "and its net may have lost a node -- run a connectivity/ERC check "
-                "and confirm the intent with the user.")
+                "and its net may have lost a node.")
 
-    return {"ok": True, "op": op, "project": base,
-            "file": str(changed_file), **detail,
-            "note": warn or "Surgical edit applied; a .bak backup was kept and "
-            "the file re-parsed clean. If this sheet is user-owned, tell the user "
-            "what changed."}
+    # Post-edit connectivity proof: delete_part drops a node and rename_net can
+    # merge/split a net, so a syntactic re-parse is not enough -- run the REAL
+    # engine ERC on the saved root sheet and report it (set_value changes only a
+    # display field and cannot affect connectivity, so it is skipped).
+    erc = None
+    if op in ("delete_part", "rename_net"):
+        root = d / (base + ".anvil_sch")
+        erc = _file_erc(root if root.is_file() else changed_file)
+
+    note = warn or ("Surgical edit applied; a .bak backup was kept and the file "
+                    "re-parsed clean.")
+    if erc is not None:
+        if not erc.get("ok"):
+            note += (" Post-edit ERC could NOT run (" +
+                     str(erc.get("error", ""))[:120] + ") -- run check_live('erc') "
+                     "manually before relying on connectivity.")
+        elif erc.get("clean"):
+            note += " Post-edit ERC is clean (0 errors)."
+        else:
+            note += (f" Post-edit ERC found {erc.get('error_count', 0)} error(s) / "
+                     f"{erc.get('warning_count', 0)} warning(s) -- review before "
+                     "shipping.")
+    if op == "delete_part":
+        note += " Confirm the intent with the user."
+
+    result = {"ok": True, "op": op, "project": base,
+              "file": str(changed_file), **detail, "note": note}
+    if erc is not None:
+        result["erc"] = erc
+    return result
+
+
+@server.tool()
+@_quiet
+def plan_change(request: str, name: str = "") -> dict:
+    """SENIOR CHANGE DISCIPLINE -- call this BEFORE altering an existing
+    design. Classifies the user's change request into the ONE design layer
+    it belongs to (requirement / part_swap / topology / value / refactor /
+    layout / manufacturing) and returns the MINIMAL edit path for that
+    layer, the verification that proves it, the blast radius to warn
+    about, and what must be left untouched. Prevents the classic failure
+    modes: rebuilding a whole schematic for one value, or 'fixing' a
+    layout problem by silently editing the netlist. Pure advice -- it
+    performs NO edit itself; follow its edit_path with the named tools.
+    If layer=='unclear' or also_matched is non-empty with low confidence,
+    ASK the user the one question in 'note' instead of guessing."""
+    try:
+        from skidl.anvil import design_intent
+    except Exception as exc:
+        return {"ok": False, "error": f"design_intent unavailable: {exc!r}"}
+    res = design_intent.classify(request)
+    res["ok"] = True
+    if name:
+        base, d = _resolve_project(name)
+        res["project"] = base
+        res["project_exists"] = (d / (base + ".anvil_sch")).is_file()
+        res["board_exists"] = (d / (base + ".anvil_pcb")).is_file()
+        if res.get("layer") in ("topology", "part_swap") and res["board_exists"]:
+            res["board_note"] = ("a board exists -- after this schematic "
+                                 "edit the netlist changes, so the board is "
+                                 "STALE until create_pcb re-runs (placement "
+                                 "is preserved by the truth-arbitration "
+                                 "guards; it still asks before re-routing).")
+    return res
 
 
 @_quiet
@@ -4944,14 +5028,17 @@ def run_drc(name: str) -> dict:
                                    "built -- re-run create_pcb so the board "
                                    "reflects the new settings")
     if res["ok"]:
-        try:
-            rep = json.loads(Path(res["drc_report"]).read_text(encoding="utf-8"))
-            errs = [v for v in rep.get("violations", []) if v.get("severity") == "error"]
-            res["errors"] = [v.get("description") for v in errs][:20]
-            res["error_count"] = len(errs)
-            res["clean"] = not errs and not rep.get("unconnected_items")
-        except Exception:
-            pass
+        # Headline error_count / clean must match the gate's own split: cosmetic
+        # library-art defects (malformed_courtyard / lib_footprint_issues) are
+        # surfaced separately as drc_cosmetic_* and are NOT counted as hard
+        # electrical errors. Re-reading the raw report and counting every
+        # severity=="error" (the old path) double-counted that library art, so
+        # run_drc contradicted its own drc_errors field. Derive from the gate.
+        n_elec = res.get("drc_errors") or 0
+        n_unconn = res.get("drc_unconnected") or 0
+        res["errors"] = res.get("drc_error_descriptions", [])
+        res["error_count"] = n_elec
+        res["clean"] = (n_elec == 0 and n_unconn == 0)
     return res
 
 

@@ -409,6 +409,23 @@ Grounded in Rick Hartley, Henry Ott, TI SPRACU5, IPC class 1/2/3, NASA EEE-INST-
 - **Rules are defaults (MET-10):** break one only with a documented reason; electrical-safety (`ELE`)
   limits never bend — a reversed diode/LED, a dropped LED series-R, a floating enable, or shorted rails
   is never a "style" override: explain, propose the fix, and confirm.
+- **Vetted calculators, not mental math (MET-11):** every component VALUE comes from
+  `skidl.anvil.design_calc` (importable in this repo:
+  `python -c "from skidl.anvil import design_calc as dc; print(dc.led_series_resistor(5.0, 2))"`).
+  Helpers: `led_series_resistor`, `voltage_divider`, `i2c_pullup`, `crystal_load_caps`,
+  `regulator_feedback_divider`, `rc_cutoff`, `ne555_astable`, `ne555_monostable`,
+  `buck_converter` (L, Cout, Ipeak, Isat), `boost_converter`, `current_sense_shunt`,
+  `e_series_nearest`. Each returns formula + inputs (honesty contract) — quote the formula in the
+  report. A value with no helper is reasoned from the datasheet by hand — say so explicitly;
+  for a switcher the IC datasheet's own component table still wins over the generic sizing.
+- **Change discipline (MET-12):** before ALTERING an existing design, classify the request with
+  `skidl.anvil.design_intent.classify(request_text)` — it returns the ONE layer the change lives
+  in (requirement / part_swap / topology / value / refactor / layout / manufacturing) plus the
+  minimal edit path, verification, and blast radius. Honor the two unbreakable rules it encodes:
+  a change lives in exactly one layer (a value change never forces a redraw; a layout fix never
+  silently edits the netlist; a refactor must leave the `.net` byte-identical), and protect what
+  is proven — the smallest edit that fixes the root cause. `layer:'unclear'` → ask the user its
+  one question instead of guessing.
 
 ## PROFESSIONAL SCHEMATIC RULES — bake these into EVERY generated .py
 > **Normative reference:** these rules are formalized with MUST/SHOULD/MAY levels, stable
