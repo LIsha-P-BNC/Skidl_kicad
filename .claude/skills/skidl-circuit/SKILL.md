@@ -657,3 +657,11 @@ skidl-part-search "<keyword>"                      # search parts (or: python -m
 skidl-part-search "<keyword>" --fields part_name,lib_name,description
 python <project>.py                                # generate .net + one .kicad_sch per sheet (no .kicad_pro)
 ```
+
+## Beyond the schematic: PCB → Gerber
+
+The full phase-gated pipeline (plan → library → schematic → board setup → placement →
+routing → DRC + board-vs-netlist truth gate → manufacturing export), including the
+ask-the-user-the-board-size step, the mechanical-first setup order, and the per-project
+`design.md` record to maintain through every phase, is in
+[docs/PLAN_TO_GERBER.md](../../../docs/PLAN_TO_GERBER.md). Read it before any PCB work.

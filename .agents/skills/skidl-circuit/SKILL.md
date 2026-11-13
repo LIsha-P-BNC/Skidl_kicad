@@ -334,3 +334,9 @@ build(mode='bom',    name='<project>')                       # BOM
 # existing design: build(mode='source', name='<project>') -> extend -> rebuild SAME name (full script)
 # small in-place edit on the OPEN schematic: edit_schematic_live(ops=[...])
 ```
+
+## Beyond the schematic: PCB → Gerber
+
+Full phase-gated pipeline (plan → schematic → board size question → placement → routing →
+DRC + verify_board truth gate → export_manufacturing), with the per-project `design.md`
+record to maintain through every phase: [docs/PLAN_TO_GERBER.md](../../../docs/PLAN_TO_GERBER.md).
