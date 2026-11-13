@@ -215,3 +215,22 @@ mcp_circuits/logs/
 # VSCode local-history extension caches
 .history/
 mcp_circuits/*.attempt*
+
+# Board-pipeline generated artifacts in test circuits (regenerable, never source)
+test_circuits/**/*.anvil_pcb
+test_circuits/**/*.anvil_prl
+test_circuits/**/*.board_config.json
+test_circuits/**/*.board_fingerprint.json
+test_circuits/**/*.build_result.json
+test_circuits/**/*.d356
+test_circuits/**/*.dsn
+test_circuits/**/*.ses
+test_circuits/**/*.drc.json
+test_circuits/**/*.diag.erc.json
+test_circuits/**/*_fab/
+test_circuits/**/*_fab.zip
+test_circuits/**/.build_stage_*/
+*.lck
+~*.lck
+# Local tooling, never source
+tools/

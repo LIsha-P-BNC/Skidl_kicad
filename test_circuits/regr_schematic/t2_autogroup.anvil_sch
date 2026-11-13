@@ -6,7 +6,7 @@
   (paper "A4")
   (title_block
     (title "SKiDL-Generated Schematic")
-    (date "2026-10-14")
+    (date "2026-11-13")
     (rev A)
     (company "regr")
     (comment 1 "Engineer: T2")

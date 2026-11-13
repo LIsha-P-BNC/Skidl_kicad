@@ -2,12 +2,12 @@
   (version "D")
   (design
     (source "t3_subcircuit.py")
-    (date "10/14/2026 02:58 PM")
+    (date "11/13/2026 09:54 AM")
     (tool "SKiDL (2.2.3)")
     (sheet
       (number 1)
-      (name "/psu_pg/")
-      (tstamps "/7fcff9bb-e7ff-5002-82ca-8bfe8960fd17/")
+      (name "/")
+      (tstamps "/")
       (title_block
         (title)
         (company)
@@ -80,8 +80,8 @@
           (value ""))))
     (sheet
       (number 3)
-      (name "/")
-      (tstamps "/")
+      (name "/psu_pg/")
+      (tstamps "/7fcff9bb-e7ff-5002-82ca-8bfe8960fd17/")
       (title_block
         (title)
         (company)
@@ -373,7 +373,7 @@
         (field
           (name "SKiDL Line") "t3_subcircuit.py:28"))
       (libsource
-        (lib "UserParts")
+        (lib "C:\Users\Admin\skidl_symbols\UserParts.kicad_sym")
         (part "AMS1117-3.3"))
       (sheetpath
         (names "/psu_pg/")

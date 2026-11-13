@@ -2,7 +2,7 @@
   (version "D")
   (design
     (source "t2_autogroup.py")
-    (date "10/14/2026 02:58 PM")
+    (date "11/13/2026 09:54 AM")
     (tool "SKiDL (2.2.3)")
     (sheet
       (number 1)
@@ -275,7 +275,7 @@
         (field
           (name "SKiDL Line") "t2_autogroup.py:25"))
       (libsource
-        (lib "UserParts")
+        (lib "C:\Users\Admin\skidl_symbols\UserParts.kicad_sym")
         (part "AMS1117-3.3"))
       (sheetpath
         (names "/")
@@ -299,7 +299,7 @@
         (field
           (name "SKiDL Line") "t2_autogroup.py:46"))
       (libsource
-        (lib "UserParts")
+        (lib "C:\Users\Admin\skidl_symbols\UserParts.kicad_sym")
         (part "AMS1117-3.3"))
       (sheetpath
         (names "/")

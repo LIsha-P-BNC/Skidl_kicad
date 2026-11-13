@@ -6,7 +6,7 @@
   (paper "A3")
   (title_block
     (title "SKiDL-Generated Schematic")
-    (date "2026-10-14")
+    (date "2026-11-13")
     (rev A)
     (company "BNC Energy")
     (comment 1 "Engineer: Anvil AI")
@@ -1070,7 +1070,7 @@
     (on_board yes)
     (dnp no)
     (fields_autoplaced yes)
-    (uuid b3451480-a6b2-5972-a9d0-ffd75974ac1e)
+    (uuid 4f6c1938-de46-503e-80f5-27f43a988fce)
     (property "Reference" "J0" (at 39.37 90.17 90)
       (effects
         (font
@@ -1098,9 +1098,9 @@
           (size 1.27 1.27))
         (hide yes)))
     (pin "1"
-      (uuid b1c714b5-2a4e-5209-9364-05fc55154d4b))
+      (uuid 98adfcbd-6aab-5640-8529-fd80509e4d00))
     (pin "2"
-      (uuid dbafa73b-d39a-5ff6-8897-fd88299049fa))
+      (uuid 6773a26b-a94e-5c65-a3fc-ae918aa6e820))
     (instances
       (project "SKiDL-Generated"
         (path "/218b5f90-a139-55d3-a988-331ecbe7ee0c"
@@ -1115,7 +1115,7 @@
     (on_board yes)
     (dnp no)
     (fields_autoplaced yes)
-    (uuid c54a5b4e-6bb5-5933-aef1-dd99b5f485a5)
+    (uuid 6a4fe406-a3e3-5cd8-b7fe-643dc117421a)
     (property "Reference" "C90" (at 53.34 91.44 0)
       (effects
         (font
@@ -1143,9 +1143,9 @@
           (size 1.27 1.27))
         (hide yes)))
     (pin "1"
-      (uuid 64e742d5-40b0-564f-a137-f73ce7e2b811))
+      (uuid ac343cac-b452-51a1-a379-5aa8d7ab331e))
     (pin "2"
-      (uuid 95f32b5e-fd81-58a2-9745-c76b86196066))
+      (uuid 661dff2a-0c23-5d6c-a0d4-3ce0441ffbb0))
     (instances
       (project "SKiDL-Generated"
         (path "/218b5f90-a139-55d3-a988-331ecbe7ee0c"
@@ -1160,7 +1160,7 @@
     (on_board yes)
     (dnp no)
     (fields_autoplaced yes)
-    (uuid 00a8ea4a-e1d6-5025-b8da-183b8fcd7e7d)
+    (uuid f97adacb-56b6-5ab4-9b05-c0d851819af4)
     (property "Reference" "U0" (at 59.69 80.01 90)
       (effects
         (font
@@ -1188,11 +1188,11 @@
           (size 1.27 1.27))
         (hide yes)))
     (pin "1"
-      (uuid 93be2ad5-f8b4-5e1f-8c76-73399941d3d6))
+      (uuid 362dde3c-5319-5d4a-8280-be709d941df9))
     (pin "2"
-      (uuid bcf4e5fb-3401-5f65-be44-a4bc6a3b80a2))
+      (uuid 1e0a6067-9bdf-5fbc-9720-8441dbc60805))
     (pin "3"
-      (uuid 08f2b054-16af-5c11-b1f8-532c95857b20))
+      (uuid 16bfaf9a-4a34-5ba4-abb3-3af0447b59e9))
     (instances
       (project "SKiDL-Generated"
         (path "/218b5f90-a139-55d3-a988-331ecbe7ee0c"
@@ -1207,7 +1207,7 @@
     (on_board yes)
     (dnp no)
     (fields_autoplaced yes)
-    (uuid 6f4160d0-d52c-555d-ada6-818e2edf49f6)
+    (uuid 83d46b5c-c4cf-59ab-9ee6-e35bf292160c)
     (property "Reference" "C91" (at 68.58 91.44 0)
       (effects
         (font
@@ -1235,9 +1235,9 @@
           (size 1.27 1.27))
         (hide yes)))
     (pin "1"
-      (uuid 250e31a7-ad9d-50df-88e9-514bdc34a23f))
+      (uuid bb3f6ecd-41d1-56ba-977d-f1b3a958c570))
     (pin "2"
-      (uuid c815be24-5854-5023-8b51-a47fe2355d02))
+      (uuid 3b921bd7-51cc-5cc6-a215-ccf8fa62dd3a))
     (instances
       (project "SKiDL-Generated"
         (path "/218b5f90-a139-55d3-a988-331ecbe7ee0c"
@@ -1252,7 +1252,7 @@
     (on_board yes)
     (dnp no)
     (fields_autoplaced yes)
-    (uuid 9ea873a9-04a4-5449-8f64-d1066ef27d02)
+    (uuid 11a921bd-dbc0-5847-9838-97a7651f3874)
     (property "Reference" "C92" (at 80.01 92.71 0)
       (effects
         (font
@@ -1280,9 +1280,9 @@
           (size 1.27 1.27))
         (hide yes)))
     (pin "1"
-      (uuid 8eeca83a-e8d4-53e0-9ef2-938d3801aab5))
+      (uuid c5090a85-28f3-57c0-a9db-53c29ee67549))
     (pin "2"
-      (uuid 80dd8093-ccce-54ec-a481-9f398cbbfa56))
+      (uuid c1b18642-2ad0-52dc-9c6b-db887d21c248))
     (instances
       (project "SKiDL-Generated"
         (path "/218b5f90-a139-55d3-a988-331ecbe7ee0c"
@@ -1297,7 +1297,7 @@
     (on_board yes)
     (dnp no)
     (fields_autoplaced yes)
-    (uuid ba9e8899-1a54-5704-9010-f5003e140410)
+    (uuid 54223045-21c7-5995-bd56-4d453f03e847)
     (property "Reference" "R90" (at 93.98 92.71 0)
       (effects
         (font
@@ -1325,9 +1325,9 @@
           (size 1.27 1.27))
         (hide yes)))
     (pin "1"
-      (uuid e650b1d1-a883-53c2-acbc-9246856f8363))
+      (uuid 5df0a5cd-7320-5b04-bc18-6540e889e84b))
     (pin "2"
-      (uuid 7d6fc57d-2e18-5255-b3ba-cbb5a6cbc314))
+      (uuid 5c073f54-f0b5-57bd-98b8-05ef2846eb93))
     (instances
       (project "SKiDL-Generated"
         (path "/218b5f90-a139-55d3-a988-331ecbe7ee0c"
@@ -1342,7 +1342,7 @@
     (on_board yes)
     (dnp no)
     (fields_autoplaced yes)
-    (uuid 23fa55f2-4826-51cc-abed-b4d5ca383225)
+    (uuid dae7cf0a-05bc-5386-82d3-d4a35c3a38ad)
     (property "Reference" "D90"
       (at 102.87 91.44 90)
       (effects
@@ -1372,9 +1372,9 @@
           (size 1.27 1.27))
         (hide yes)))
     (pin "1"
-      (uuid 6337b3ce-c24f-51b6-9444-f30d2623e23e))
+      (uuid ff505895-ba05-5303-9bdd-34fbf8724d3d))
     (pin "2"
-      (uuid cacb6a39-b6d9-5176-9384-00af442789ff))
+      (uuid a0b001fc-5018-588b-846f-fadc2f67871c))
     (instances
       (project "SKiDL-Generated"
         (path "/218b5f90-a139-55d3-a988-331ecbe7ee0c"
@@ -1585,7 +1585,7 @@
     (on_board yes)
     (dnp no)
     (fields_autoplaced yes)
-    (uuid 065daff4-cee1-5c4c-9656-3e7028281c79)
+    (uuid b725145c-76ee-5d2a-99ce-b9f26f3cdf16)
     (property "Reference" "J1" (at 129.54 82.55 90)
       (effects
         (font
@@ -1613,9 +1613,9 @@
           (size 1.27 1.27))
         (hide yes)))
     (pin "1"
-      (uuid 5be4231f-4aed-53de-8322-9705512e6e61))
+      (uuid 3b841b71-ea95-5957-899d-d76b10bdbc1a))
     (pin "2"
-      (uuid 4d48955f-6db5-54e2-8d10-a4ad39dff672))
+      (uuid 1dac466f-3eb7-5b81-bfca-d1765cea2dba))
     (instances
       (project "SKiDL-Generated"
         (path "/218b5f90-a139-55d3-a988-331ecbe7ee0c"
@@ -1630,7 +1630,7 @@
     (on_board yes)
     (dnp no)
     (fields_autoplaced yes)
-    (uuid ba01773f-9638-54f3-8e64-3d05242995ce)
+    (uuid c2826c0f-7c5e-543c-814c-f50601ac47bd)
     (property "Reference" "R10" (at 146.05 86.36 0)
       (effects
         (font
@@ -1658,9 +1658,9 @@
           (size 1.27 1.27))
         (hide yes)))
     (pin "1"
-      (uuid 565f541c-d340-5905-942a-26cfc5f45670))
+      (uuid 71e172e4-aed6-5b1b-bd50-03d3d5acef52))
     (pin "2"
-      (uuid ba7a2873-e1f8-5d5a-9d14-6b840f422eb3))
+      (uuid 523782bb-d217-5187-b359-dfd378e3fac4))
     (instances
       (project "SKiDL-Generated"
         (path "/218b5f90-a139-55d3-a988-331ecbe7ee0c"
@@ -1675,7 +1675,7 @@
     (on_board yes)
     (dnp no)
     (fields_autoplaced yes)
-    (uuid c975771e-728f-590f-ae32-e72878a3064a)
+    (uuid ae2c9bd4-3a1a-5a56-8822-85eae08e8d1a)
     (property "Reference" "C10" (at 156.21 90.16999999999999 0)
       (effects
         (font
@@ -1703,9 +1703,9 @@
           (size 1.27 1.27))
         (hide yes)))
     (pin "1"
-      (uuid feb76bc1-ca4b-5cd6-9d2c-8368c910daa9))
+      (uuid 1157cf91-0302-5168-b2f9-2a1e8a133320))
     (pin "2"
-      (uuid 2e39cb0f-faab-5359-b1f9-43a2ce42a7ad))
+      (uuid 8ed2f9b5-9925-5b3b-a74a-5d1169e5e236))
     (instances
       (project "SKiDL-Generated"
         (path "/218b5f90-a139-55d3-a988-331ecbe7ee0c"
@@ -1720,7 +1720,7 @@
     (on_board yes)
     (dnp no)
     (fields_autoplaced yes)
-    (uuid 40e006e1-2a76-5cbb-87b9-7672361ebb6f)
+    (uuid a3e4e134-7f43-599c-aa59-d8a0499f59e5)
     (property "Reference" "R11" (at 171.45 85.08999999999999 0)
       (effects
         (font
@@ -1748,9 +1748,9 @@
           (size 1.27 1.27))
         (hide yes)))
     (pin "1"
-      (uuid fc566aaf-3f03-5232-8deb-05330e0f9953))
+      (uuid f32dd9e4-82d1-55d8-b430-61d969f7b449))
     (pin "2"
-      (uuid 4762e16e-37fd-5036-9eca-dc89413be824))
+      (uuid 6b6a8564-ff4c-5de5-ae7f-66b15ec4c53c))
     (instances
       (project "SKiDL-Generated"
         (path "/218b5f90-a139-55d3-a988-331ecbe7ee0c"
@@ -1765,7 +1765,7 @@
     (on_board yes)
     (dnp no)
     (fields_autoplaced yes)
-    (uuid 6012ab14-71d6-5fb5-a85e-64e842265e7a)
+    (uuid 145934b6-8dc9-57fb-95ea-27620aea4c9c)
     (property "Reference" "R12" (at 184.15 90.16999999999999 0)
       (effects
         (font
@@ -1793,9 +1793,9 @@
           (size 1.27 1.27))
         (hide yes)))
     (pin "1"
-      (uuid c6332297-9936-53bd-a2c7-55630d5d02e1))
+      (uuid e11f4f6d-08b9-5c41-9b78-9a4e3cbe7878))
     (pin "2"
-      (uuid 8a39e17f-3951-50b8-9050-a989bf0b78c4))
+      (uuid 39fa602c-bb69-5af4-8994-55891e91171e))
     (instances
       (project "SKiDL-Generated"
         (path "/218b5f90-a139-55d3-a988-331ecbe7ee0c"
@@ -1810,7 +1810,7 @@
     (on_board yes)
     (dnp no)
     (fields_autoplaced yes)
-    (uuid c72a2923-9fcd-5e41-842d-653c3277ee39)
+    (uuid 7e8286da-4536-5c3d-98b9-0b1172b25887)
     (property "Reference" "D1"
       (at 193.04 87.63 90)
       (effects
@@ -1840,9 +1840,9 @@
           (size 1.27 1.27))
         (hide yes)))
     (pin "1"
-      (uuid 43a71bc9-f80d-5110-aadb-4289d26acb46))
+      (uuid 461f5c9e-85ed-5781-b212-6dbe4c39a9e9))
     (pin "2"
-      (uuid af4bad7f-dce2-500a-9cd2-3f3a7bae00a2))
+      (uuid 99892a23-d561-5674-b171-7b4827f86349))
     (instances
       (project "SKiDL-Generated"
         (path "/218b5f90-a139-55d3-a988-331ecbe7ee0c"
@@ -1857,7 +1857,7 @@
     (on_board yes)
     (dnp no)
     (fields_autoplaced yes)
-    (uuid 32de25f0-1fd1-581a-9366-a08f18d7d851)
+    (uuid 1202d4df-3d9b-503d-a630-3a8b0be5628f)
     (property "Reference" "C11" (at 207.01 87.63 0)
       (effects
         (font
@@ -1885,9 +1885,9 @@
           (size 1.27 1.27))
         (hide yes)))
     (pin "1"
-      (uuid e340f599-72a2-52f3-8ce7-06229ebb6260))
+      (uuid 6c6c6e78-f859-5457-8642-c9beee70b6af))
     (pin "2"
-      (uuid 24ef00cb-9f7b-5c1b-bd93-e13048f3c50b))
+      (uuid ef573859-0fa1-518a-8f73-9e801e169c36))
     (instances
       (project "SKiDL-Generated"
         (path "/218b5f90-a139-55d3-a988-331ecbe7ee0c"
@@ -1988,7 +1988,7 @@
     (on_board yes)
     (dnp no)
     (fields_autoplaced yes)
-    (uuid 03aa06e1-6d13-56c7-8f2c-1c17bb7745ac)
+    (uuid fd99f9fa-0e33-5ac6-a803-dfeeb0a82564)
     (property "Reference" "J2" (at 220.98 82.55 90)
       (effects
         (font
@@ -2016,9 +2016,9 @@
           (size 1.27 1.27))
         (hide yes)))
     (pin "1"
-      (uuid 06edbeb6-6aa6-53ab-bdf9-0f8f5056da8b))
+      (uuid 53f5e077-e1bd-5e90-b3ed-260698023a28))
     (pin "2"
-      (uuid 336f4e6d-aaf1-5d05-afa6-15df276da4e0))
+      (uuid 3e3455cd-2844-5e37-bebc-24a2398dea70))
     (instances
       (project "SKiDL-Generated"
         (path "/218b5f90-a139-55d3-a988-331ecbe7ee0c"
@@ -2033,7 +2033,7 @@
     (on_board yes)
     (dnp no)
     (fields_autoplaced yes)
-    (uuid ecf06139-7981-5511-825d-39b6c9c6b78e)
+    (uuid 088935cb-1575-58fd-a481-15921fe500eb)
     (property "Reference" "R20" (at 237.49 86.36 0)
       (effects
         (font
@@ -2061,9 +2061,9 @@
           (size 1.27 1.27))
         (hide yes)))
     (pin "1"
-      (uuid efff7d97-ac4c-54af-b17c-a829a36d3362))
+      (uuid 01c077cb-d55d-509f-af85-47a8a8c9e162))
     (pin "2"
-      (uuid 62d15714-ebcc-5aa3-872f-6fa09779aeda))
+      (uuid 138c330d-500f-5c1b-87bd-a6d1f8d400f8))
     (instances
       (project "SKiDL-Generated"
         (path "/218b5f90-a139-55d3-a988-331ecbe7ee0c"
@@ -2078,7 +2078,7 @@
     (on_board yes)
     (dnp no)
     (fields_autoplaced yes)
-    (uuid 8a52a4a7-b339-54ee-b756-f9bebe082818)
+    (uuid b678a23e-959b-5fc0-8f77-7217b80c9d23)
     (property "Reference" "C20" (at 247.65 90.16999999999999 0)
       (effects
         (font
@@ -2106,9 +2106,9 @@
           (size 1.27 1.27))
         (hide yes)))
     (pin "1"
-      (uuid ad56e61a-197b-5461-9a3c-dc09a6dcd3a2))
+      (uuid 023ef51c-a717-598a-975b-7dabaa891887))
     (pin "2"
-      (uuid a943be73-a3da-5c71-9b74-49239a4fbb16))
+      (uuid f5535e3f-e656-5bca-990f-2eb121dcaaf4))
     (instances
       (project "SKiDL-Generated"
         (path "/218b5f90-a139-55d3-a988-331ecbe7ee0c"
@@ -2123,7 +2123,7 @@
     (on_board yes)
     (dnp no)
     (fields_autoplaced yes)
-    (uuid 7220b65f-d399-566c-ad33-08223d72997c)
+    (uuid 19d4a49c-b2fb-59d4-b5c1-9e3632090b20)
     (property "Reference" "R21" (at 262.89 85.08999999999999 0)
       (effects
         (font
@@ -2151,9 +2151,9 @@
           (size 1.27 1.27))
         (hide yes)))
     (pin "1"
-      (uuid e22749d4-3cfe-5299-9b54-3c82c7ac9181))
+      (uuid 92b80e70-2d80-50d0-82c9-0756dbd0c161))
     (pin "2"
-      (uuid c98ff675-13d6-5291-a3a7-ccea8eed174b))
+      (uuid 20d98769-7dfb-50d0-a4a0-a2f145a58e66))
     (instances
       (project "SKiDL-Generated"
         (path "/218b5f90-a139-55d3-a988-331ecbe7ee0c"
@@ -2168,7 +2168,7 @@
     (on_board yes)
     (dnp no)
     (fields_autoplaced yes)
-    (uuid e4bd6ff6-1557-54da-8c8c-6de1d03ec82a)
+    (uuid 6afd866b-db15-5350-8186-4937f61de4bc)
     (property "Reference" "R22" (at 275.59 90.16999999999999 0)
       (effects
         (font
@@ -2196,9 +2196,9 @@
           (size 1.27 1.27))
         (hide yes)))
     (pin "1"
-      (uuid 4127656b-a567-5d03-99a2-ddae3548e23d))
+      (uuid 3342deab-a07b-567f-9ab9-24d97b703e00))
     (pin "2"
-      (uuid 641796ea-e185-5b58-8cf1-56ec5c724ad0))
+      (uuid dd0814a0-8949-503d-8417-197d1f004ad3))
     (instances
       (project "SKiDL-Generated"
         (path "/218b5f90-a139-55d3-a988-331ecbe7ee0c"
@@ -2213,7 +2213,7 @@
     (on_board yes)
     (dnp no)
     (fields_autoplaced yes)
-    (uuid cd0f9371-1bf2-5aba-abfe-fd360038fd72)
+    (uuid 29ec05f4-d4a3-5611-b48d-a438d63f9da5)
     (property "Reference" "D2"
       (at 284.48 87.63 90)
       (effects
@@ -2243,9 +2243,9 @@
           (size 1.27 1.27))
         (hide yes)))
     (pin "1"
-      (uuid a83939d6-8589-5527-98f1-4ba63a2a2244))
+      (uuid c367bca9-cfcb-5129-b389-4790318d30f8))
     (pin "2"
-      (uuid e0f42806-e0a5-5230-b6a3-189249f8e860))
+      (uuid aa3253ea-86f3-5f6c-b0c6-7946efbfa0b5))
     (instances
       (project "SKiDL-Generated"
         (path "/218b5f90-a139-55d3-a988-331ecbe7ee0c"
@@ -2260,7 +2260,7 @@
     (on_board yes)
     (dnp no)
     (fields_autoplaced yes)
-    (uuid 275bb823-0acd-570a-a9f0-5f8601122995)
+    (uuid c8833da7-5497-547e-b058-238dbe09cb57)
     (property "Reference" "C21" (at 298.45 87.63 0)
       (effects
         (font
@@ -2288,9 +2288,9 @@
           (size 1.27 1.27))
         (hide yes)))
     (pin "1"
-      (uuid 911271b3-13ce-51c4-8e0c-d0f5d34deacd))
+      (uuid c41926b5-c8bd-5fb6-845e-2710d5acafb6))
     (pin "2"
-      (uuid e9dd4438-4a17-5dff-92d7-278d0c8558a5))
+      (uuid bd16ff81-189b-5e9f-91c6-ad71a070acfe))
     (instances
       (project "SKiDL-Generated"
         (path "/218b5f90-a139-55d3-a988-331ecbe7ee0c"
@@ -2391,7 +2391,7 @@
     (on_board yes)
     (dnp no)
     (fields_autoplaced yes)
-    (uuid a7a2e74d-4cda-51ee-a7c0-db5e03a93308)
+    (uuid f9fbcd82-c195-5368-96b4-8992893527b2)
     (property "Reference" "J3" (at 312.42 82.55 90)
       (effects
         (font
@@ -2419,9 +2419,9 @@
           (size 1.27 1.27))
         (hide yes)))
     (pin "1"
-      (uuid 320a8dd2-3dc7-50ed-979d-93ae5f030a4e))
+      (uuid 0cd379c6-9360-58a2-afac-716199bf72de))
     (pin "2"
-      (uuid 507e3b5e-4574-5e04-9510-a41ce6024087))
+      (uuid 04dc61d2-4db9-58d2-be61-752aa093f626))
     (instances
       (project "SKiDL-Generated"
         (path "/218b5f90-a139-55d3-a988-331ecbe7ee0c"
@@ -2436,7 +2436,7 @@
     (on_board yes)
     (dnp no)
     (fields_autoplaced yes)
-    (uuid 665c2985-0a50-5fbe-891d-8048ca06b848)
+    (uuid 01b57382-a1bd-5fb3-8e47-a832787787c3)
     (property "Reference" "R30" (at 328.93 86.36 0)
       (effects
         (font
@@ -2464,9 +2464,9 @@
           (size 1.27 1.27))
         (hide yes)))
     (pin "1"
-      (uuid 75689c4c-dbc7-521a-bf5c-b79e89ee4782))
+      (uuid 599bac3b-c545-58ca-978a-abefbaeeb873))
     (pin "2"
-      (uuid 98ede039-4808-5a4d-a8ea-e73c3dca973c))
+      (uuid 2eef5c14-a2bf-5dde-9352-92aed9254ac5))
     (instances
       (project "SKiDL-Generated"
         (path "/218b5f90-a139-55d3-a988-331ecbe7ee0c"
@@ -2481,7 +2481,7 @@
     (on_board yes)
     (dnp no)
     (fields_autoplaced yes)
-    (uuid fedc0e5a-6be7-5b57-a0d7-e978f701e6bc)
+    (uuid 1ed58bad-9ec7-52b2-afae-b97f106e7c4a)
     (property "Reference" "C30" (at 339.09 90.16999999999999 0)
       (effects
         (font
@@ -2509,9 +2509,9 @@
           (size 1.27 1.27))
         (hide yes)))
     (pin "1"
-      (uuid 604d0580-502a-5e93-9069-879219f4af78))
+      (uuid 97da1b7c-1022-586d-b126-8bb8ca596fda))
     (pin "2"
-      (uuid 6678110c-303e-586a-8701-fb4b23a94f66))
+      (uuid 240543cd-4a09-52f9-85f2-2ecd69035be5))
     (instances
       (project "SKiDL-Generated"
         (path "/218b5f90-a139-55d3-a988-331ecbe7ee0c"
@@ -2526,7 +2526,7 @@
     (on_board yes)
     (dnp no)
     (fields_autoplaced yes)
-    (uuid 543f0333-3842-5e05-8f3b-099b5701af50)
+    (uuid 6a2079dc-8e93-59b5-aae3-60283d0fdf7b)
     (property "Reference" "R31" (at 354.33 85.08999999999999 0)
       (effects
         (font
@@ -2554,9 +2554,9 @@
           (size 1.27 1.27))
         (hide yes)))
     (pin "1"
-      (uuid c058e560-a356-5956-9147-7ee88050b60b))
+      (uuid 668e6d4a-e43e-5f18-b792-e4eddcb3de73))
     (pin "2"
-      (uuid a56f4748-4f63-5f82-9cfe-c56f97293781))
+      (uuid 4ac36639-2631-5034-9e05-eb4626b7533d))
     (instances
       (project "SKiDL-Generated"
         (path "/218b5f90-a139-55d3-a988-331ecbe7ee0c"
@@ -2571,7 +2571,7 @@
     (on_board yes)
     (dnp no)
     (fields_autoplaced yes)
-    (uuid 94d96553-dbd8-54bc-9ef7-822d6ef3db64)
+    (uuid 7bad473d-d8b7-5839-be3b-310df2019564)
     (property "Reference" "R32" (at 367.03 90.16999999999999 0)
       (effects
         (font
@@ -2599,9 +2599,9 @@
           (size 1.27 1.27))
         (hide yes)))
     (pin "1"
-      (uuid cec2da02-4b16-551a-85ed-a7321ad4546e))
+      (uuid 35ca0ad2-b934-56e8-9738-2db88a257aec))
     (pin "2"
-      (uuid 444e192a-81a2-5410-a26b-eb8111150b2d))
+      (uuid fb8dc019-1c2f-5f51-8995-852ef44be7cc))
     (instances
       (project "SKiDL-Generated"
         (path "/218b5f90-a139-55d3-a988-331ecbe7ee0c"
@@ -2616,7 +2616,7 @@
     (on_board yes)
     (dnp no)
     (fields_autoplaced yes)
-    (uuid e1673c38-1fab-50f3-a1db-fcf536c5591a)
+    (uuid da268dc7-5341-5ae6-932a-3c74798b61d0)
     (property "Reference" "D3"
       (at 375.92 87.63 90)
       (effects
@@ -2646,9 +2646,9 @@
           (size 1.27 1.27))
         (hide yes)))
     (pin "1"
-      (uuid 2c375d3a-1997-5f76-86f3-b0bedda9fd4b))
+      (uuid 80db992d-e953-5c51-a808-da5e4fb81ce7))
     (pin "2"
-      (uuid 65eb6feb-ce02-55c2-81b0-fd61b190d96d))
+      (uuid b4d6f8fd-d5ae-5565-aa7f-d7c563633e83))
     (instances
       (project "SKiDL-Generated"
         (path "/218b5f90-a139-55d3-a988-331ecbe7ee0c"
@@ -2663,7 +2663,7 @@
     (on_board yes)
     (dnp no)
     (fields_autoplaced yes)
-    (uuid 4729609e-6882-5266-9d68-63e592681fac)
+    (uuid c932b708-eff4-5792-bec1-da6496905b04)
     (property "Reference" "C31" (at 389.89 87.63 0)
       (effects
         (font
@@ -2691,9 +2691,9 @@
           (size 1.27 1.27))
         (hide yes)))
     (pin "1"
-      (uuid a35b6df5-9da6-57a1-a670-003dba17aeb4))
+      (uuid 0f0935c9-3c08-5f4c-8f61-faa2e00950c1))
     (pin "2"
-      (uuid 2005d03b-4c94-5bb6-b235-d6385b722b5a))
+      (uuid 5a1a3d09-2c6f-5362-944d-ecd8e5095851))
     (instances
       (project "SKiDL-Generated"
         (path "/218b5f90-a139-55d3-a988-331ecbe7ee0c"
@@ -2794,7 +2794,7 @@
     (on_board yes)
     (dnp no)
     (fields_autoplaced yes)
-    (uuid 72807f63-40a0-5c12-902e-efb3072f0cde)
+    (uuid 6a44dda2-cea7-5c9c-bf8c-ac8cd3f8ee0d)
     (property "Reference" "J4" (at 27.94 181.61 90)
       (effects
         (font
@@ -2822,9 +2822,9 @@
           (size 1.27 1.27))
         (hide yes)))
     (pin "1"
-      (uuid 99162580-d25c-50d1-b397-2b0a20f2e526))
+      (uuid cd8534ae-1005-506c-807e-7d74de187fab))
     (pin "2"
-      (uuid bf642dc7-bdab-564a-831d-34fe8f0ed491))
+      (uuid d72c02a3-8c1b-5b0c-bd53-0ffeca5ea9f2))
     (instances
       (project "SKiDL-Generated"
         (path "/218b5f90-a139-55d3-a988-331ecbe7ee0c"
@@ -2839,7 +2839,7 @@
     (on_board yes)
     (dnp no)
     (fields_autoplaced yes)
-    (uuid 0f23c762-c373-5718-b6de-895fc8e8404e)
+    (uuid 8e35c65a-edd4-5d59-85c4-9f9f64e7ec70)
     (property "Reference" "R40" (at 44.45 185.42000000000002 0)
       (effects
         (font
@@ -2867,9 +2867,9 @@
           (size 1.27 1.27))
         (hide yes)))
     (pin "1"
-      (uuid 55233f6d-d3fb-5c97-86af-2f04ccf3e5de))
+      (uuid 928d8207-d108-5209-ba78-7ca594108f42))
     (pin "2"
-      (uuid 5d39fe8d-bf6e-5166-acfe-7d4020bfbe9f))
+      (uuid 488f1d81-7b81-5ea9-a704-14788784ef2b))
     (instances
       (project "SKiDL-Generated"
         (path "/218b5f90-a139-55d3-a988-331ecbe7ee0c"
@@ -2884,7 +2884,7 @@
     (on_board yes)
     (dnp no)
     (fields_autoplaced yes)
-    (uuid 3e9e6538-0358-5cb8-b4cb-fcab9c64d947)
+    (uuid e631eb53-5926-5694-a3ad-7a310ac2473d)
     (property "Reference" "C40" (at 54.61 189.23000000000002 0)
       (effects
         (font
@@ -2912,9 +2912,9 @@
           (size 1.27 1.27))
         (hide yes)))
     (pin "1"
-      (uuid 27333ae8-8c89-543d-98d0-f4aad06afac7))
+      (uuid 58fdb78f-a8f0-545e-8886-c4a6a72d62e6))
     (pin "2"
-      (uuid c3c8e9eb-179c-5196-8535-d88c2e00ff32))
+      (uuid fd66d1af-0b5c-573d-85c3-3cca862da80a))
     (instances
       (project "SKiDL-Generated"
         (path "/218b5f90-a139-55d3-a988-331ecbe7ee0c"
@@ -2929,7 +2929,7 @@
     (on_board yes)
     (dnp no)
     (fields_autoplaced yes)
-    (uuid 5a959223-90ea-536b-9f1c-3b433e3b0ce6)
+    (uuid be628631-0d34-5386-a672-77f4224c7545)
     (property "Reference" "R41" (at 69.85 184.15 0)
       (effects
         (font
@@ -2957,9 +2957,9 @@
           (size 1.27 1.27))
         (hide yes)))
     (pin "1"
-      (uuid c0f42628-4215-5213-8631-ed91bf9e9ba7))
+      (uuid a551f68f-635f-527a-8257-8bced295c752))
     (pin "2"
-      (uuid 85287ef8-a94e-510f-a0e3-7711af4654d0))
+      (uuid 6d07c1e9-9d97-512f-9662-81a8979f3a3e))
     (instances
       (project "SKiDL-Generated"
         (path "/218b5f90-a139-55d3-a988-331ecbe7ee0c"
@@ -2974,7 +2974,7 @@
     (on_board yes)
     (dnp no)
     (fields_autoplaced yes)
-    (uuid 1cc10a3e-ed0a-507f-ae11-d99f1e0f53a9)
+    (uuid b25cca89-80f9-52a3-bed9-bf59bd9384a0)
     (property "Reference" "R42" (at 82.55 189.23000000000002 0)
       (effects
         (font
@@ -3002,9 +3002,9 @@
           (size 1.27 1.27))
         (hide yes)))
     (pin "1"
-      (uuid bef6f846-305d-57cf-8e9d-0bffba783ee2))
+      (uuid 5adfbc75-1efb-5db9-a374-4167e35463ee))
     (pin "2"
-      (uuid 60c373f9-6bcf-58c7-b19a-ba5dbe797062))
+      (uuid 552629cc-ffcf-56dd-b90e-dfc21b8f6ce8))
     (instances
       (project "SKiDL-Generated"
         (path "/218b5f90-a139-55d3-a988-331ecbe7ee0c"
@@ -3019,7 +3019,7 @@
     (on_board yes)
     (dnp no)
     (fields_autoplaced yes)
-    (uuid 24cc1ad8-5145-5ab7-810c-191bbe81b76e)
+    (uuid b24df71d-402f-51bf-801d-625708f43f5f)
     (property "Reference" "D4"
       (at 91.44 186.69 90)
       (effects
@@ -3049,9 +3049,9 @@
           (size 1.27 1.27))
         (hide yes)))
     (pin "1"
-      (uuid 48869724-f637-5965-aaf5-6f83bc09dfd7))
+      (uuid 04bb42b8-22bd-5ead-bcae-bc7795368712))
     (pin "2"
-      (uuid c3b9551b-0771-5180-8a25-0f481a52bdb1))
+      (uuid 1f534b48-f2d1-59d3-b4aa-012c72fbd127))
     (instances
       (project "SKiDL-Generated"
         (path "/218b5f90-a139-55d3-a988-331ecbe7ee0c"
@@ -3066,7 +3066,7 @@
     (on_board yes)
     (dnp no)
     (fields_autoplaced yes)
-    (uuid b2b2580a-38fe-5899-966e-b704e5d245c1)
+    (uuid abe27a3a-2cc0-59ca-a3e5-460df69135d7)
     (property "Reference" "C41" (at 105.41 186.69 0)
       (effects
         (font
@@ -3094,9 +3094,9 @@
           (size 1.27 1.27))
         (hide yes)))
     (pin "1"
-      (uuid 85e6b67c-3b61-5256-8116-265d982d140f))
+      (uuid d3998a28-dece-5156-b7cc-c7f541905ca3))
     (pin "2"
-      (uuid ba8e1373-5864-5d7d-9a53-982243423bd5))
+      (uuid ab79c320-8fe3-50c1-aad2-c77a616ac300))
     (instances
       (project "SKiDL-Generated"
         (path "/218b5f90-a139-55d3-a988-331ecbe7ee0c"

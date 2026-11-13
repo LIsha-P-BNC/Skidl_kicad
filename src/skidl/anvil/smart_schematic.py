@@ -395,15 +395,19 @@ def build(name=None, title="SKiDL-Generated Schematic", auto_stub_fanout=None,
               "-> ONE function (D.0: merged over-split blocks; single clean sheet)")
 
     # SUPPORT-BLOCK ABSORB (docs rule D / industry rule 9: an MCU block CONTAINS
-    # its reset circuit, crystal + load caps, and decoupling). A tiny authored
-    # block (<=3 parts, all discrete/support refdes classes -- R/C/L/Y/SW/D/TP)
-    # whose every non-power net lands on exactly ONE other, bigger block is a
-    # SUPPORT circuit of that block's anchor IC. Merge it: its parts then place
-    # and WIRE next to the IC instead of living in a distant 3-part box joined
-    # by labels (measured water_level_controller: CLOCK and RESET boxes 2400+
-    # mils from the ATmega). Blocks containing an IC/connector/relay (U/J/K)
-    # keep their identity (a DS18B20+pullup+decap sensor block is a real
-    # function, not support). Kill switch: SKIDL_ABSORB_SUPPORT=0.
+    # its reset circuit, crystal + load caps, and decoupling). The test is
+    # MEANING, not a part count: a small authored block (all discrete/support
+    # refdes classes -- R/C/L/Y/SW/D/TP) whose every non-power net lands on
+    # exactly ONE other, bigger block IS a support circuit of that block's
+    # anchor IC -- it has no function of its own to box. Merge it: its parts
+    # then place and WIRE directly to the anchor IC's pins instead of living
+    # in a distant 3-4-part box joined by labels (measured
+    # water_level_controller: CLOCK and RESET boxes 2400+ mils from the
+    # ATmega). The size ceiling (default 4) only stops whole ladders/filter
+    # banks from collapsing; it is NOT the criterion. Blocks containing an
+    # IC/connector/relay (U/J/K) keep their identity (a DS18B20+pullup+decap
+    # sensor block is a real function, not support).
+    # Kill switch: SKIDL_ABSORB_SUPPORT=0.
     if os.environ.get("SKIDL_ABSORB_SUPPORT", "1") != "0":
         from skidl.schematics.net_classify import classify_net_role as _cnr_abs
         _SUPPORT_REF = re.compile(r"^(R|C|L|Y|SW|D|TP|JP|FB)\d", re.IGNORECASE)
@@ -414,7 +418,7 @@ def build(name=None, title="SKiDL-Generated Schematic", auto_stub_fanout=None,
                 _by_group.setdefault(str(_g), []).append(_p)
         _absorbed = []
         for _g, _members in sorted(_by_group.items()):
-            if len(_members) > int(os.environ.get("SKIDL_ABSORB_MAX_PARTS", "3")):
+            if len(_members) > int(os.environ.get("SKIDL_ABSORB_MAX_PARTS", "4")):
                 continue
             if not all(_SUPPORT_REF.match(str(getattr(_p, "ref", "") or ""))
                        for _p in _members):

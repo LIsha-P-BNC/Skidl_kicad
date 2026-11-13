@@ -1868,7 +1868,12 @@ def _net_topology(net_text: str) -> set:
     1<->2, which changes (ref,pin) but NOT the circuit, so a (ref,pin) compare
     would false-trigger on every flipped part. Ref-level catches only REAL
     edits (a part added/removed, or wired to a different neighbour)."""
-    return {frozenset(r for r, _p in pins) for _name, pins in _net_partition(net_text)}
+    # Single-pin nets are ignored: kicad-cli's sch export emits one
+    # 'unconnected-(...)' stub net per NC pin while skidl's .net omits them
+    # entirely -- counting them makes every NC-carrying design look
+    # 'diverged' and fires the resync when nothing was edited.
+    return {frozenset(r for r, _p in pins)
+            for _name, pins in _net_partition(net_text) if len(pins) >= 2}
 
 
 def _sync_netlist_from_schematic(base: str):
@@ -1926,8 +1931,19 @@ def _sync_netlist_from_schematic(base: str):
         # but PRESERVE meaningful net names (GND/+5V/VIN) from the old netlist
         # wherever the pin-group is unchanged -- the sch export would otherwise
         # replace 'GND' with 'Net-(...)' and break power/pour detection.
-        old_name_by_refs = {frozenset(r for r, _p in pins): name
-                            for name, pins in _net_partition(old_txt)}
+        old_parts = _net_partition(old_txt)
+        # Exact (ref,pin) identity first. The refs-only fallback tolerates a
+        # passive's legitimate 1<->2 orientation flip, but is AMBIGUOUS when
+        # two nets tie the SAME parts (CAN_TX/CAN_RX both {U1,U3}; CANH/CANL
+        # both {J2,R8,U3}) -- a refs-keyed dict silently collides there and
+        # cross-renames the pair, so ambiguous ref-groups are excluded.
+        old_name_by_pins = {pins: name for name, pins in old_parts}
+        _refs_groups = {}
+        for _name, _pins in old_parts:
+            _refs_groups.setdefault(
+                frozenset(r for r, _p in _pins), []).append(_name)
+        old_name_by_refs = {k: v[0] for k, v in _refs_groups.items()
+                            if len(v) == 1}
         # Build the rename map, then apply it ONLY inside the (nets ...) section
         # (where "(name ...)" is always a net name, never a component field) and
         # SKIP any target name already in use by another net -- a blind global
@@ -1936,7 +1952,8 @@ def _sync_netlist_from_schematic(base: str):
         used = {name for name, _ in new_parts}
         remap = {}
         for new_name, pins in new_parts:
-            old_name = old_name_by_refs.get(frozenset(r for r, _p in pins))
+            old_name = (old_name_by_pins.get(pins)
+                        or old_name_by_refs.get(frozenset(r for r, _p in pins)))
             if old_name and old_name != new_name and old_name not in used:
                 remap[new_name] = old_name
                 used.discard(new_name)
@@ -4823,8 +4840,8 @@ from skidl.board.project_init import initialize_project
 try:
     out_dir = Path({json.dumps(str(pdir(base)))})
     scp = out_dir / ({json.dumps(base)} + ".board_config.json")
-    currents = {json.dumps(currents) if currents else "None"}
-    voltages = {json.dumps(voltages) if voltages else "None"}
+    currents = {repr(currents) if currents else "None"}
+    voltages = {repr(voltages) if voltages else "None"}
     if voltages:
         # User-declared working voltages go in BEFORE init so THIS run's
         # IPC-2221 clearance plan uses them (same contract as currents:
@@ -4867,8 +4884,8 @@ try:
                              manufacturer={json.dumps(manufacturer) if manufacturer else "None"},
                              ground_pour={bool(ground_pour)},
                              ipc_class={int(ipc_class) if ipc_class else "None"},
-                             mechanical={json.dumps(mechanical) if mechanical else "None"},
-                             requirements_asked={json.dumps(requirements_asked) if requirements_asked else "None"},
+                             mechanical={repr(mechanical) if mechanical else "None"},
+                             requirements_asked={repr(requirements_asked) if requirements_asked else "None"},
                              kicad_cli={json.dumps(_find_kicad_cli_path())})
     if currents:
         rep["currents"] = "user-declared -- applied to the width plan"
@@ -5316,6 +5333,10 @@ _TEMPLATE = (
     '#    every part of that function inside it. Derive the names DYNAMICALLY from the\n'
     '#    circuit function (Power In / Buck / LDO / Charger / MCU / Comms / LED ...) --\n'
     '#    never a hardcoded list. The builder draws a labelled box around each block.\n'
+    '#    A block = FUNCTIONAL MEANING, never a part count: a 3-4 part support group\n'
+    '#    serving one main IC pin (crystal + load caps, reset RC, pull-ups, decaps,\n'
+    '#    indicator LED) goes INSIDE that IC\'s block, wired to the main pin -- NEVER\n'
+    '#    its own box stitched back with labels.\n'
     'with smart_schematic.block("LED INDICATOR"):\n'
     '    r = Part("Device", "R", ref="R1", tag="R1", value="330",\n'
     '             footprint="Resistor_SMD:R_0805_2012Metric")\n'
@@ -5325,7 +5346,7 @@ _TEMPLATE = (
     '    #    r[1] += p5v ; r[2] += led[1] ; led[2] += gnd)\n'
     '    p5v & r & led & gnd\n\n'
     '# WIRE vs LABEL -- do NOT try to wire everything. The builder WIRES only the\n'
-    '# short local links (a main IC to its 2-3 immediately-adjacent parts: a\n'
+    '# short local links (a main IC to its 3-4 immediately-adjacent parts: a\n'
     '# decoupling cap, a pull-up, a crystal) and LABELS everything else (rails, and\n'
     '# any net crossing to another block/page). Fewer wires = fewer labels, nothing\n'
     '# fails to route, and the sheet stays neat. You get this automatically just by\n'

@@ -307,6 +307,13 @@ rail, nearby clusters wired not labelled) BEFORE reporting done.
   duplicate projects and stale windows.
 - Routing can fail on very dense flat blocks — keep `@subcircuit`s to roughly 5–15 parts and
   let `auto_stub` fall back to labels rather than fighting a giant flat block.
+- **Block = FUNCTIONAL MEANING, never a part count.** A block is a distinct subsystem you
+  could bench-test alone (power stage, MCU core, comms front-end, sensor channel, driver
+  stage). A 3–4 part support group that hangs off one main IC pin — crystal + load caps,
+  reset RC, pull-ups, decaps, an indicator LED — is NOT a block: write it INLINE in its
+  anchor's block, connected directly to the main pin, so it renders as short local WIRES.
+  Never split it into its own titled box stitched back with labels; labels are for
+  cross-block/cross-sheet hops only.
 - `.kicad_pcb` PCB layout is a separate step — this skill covers schematic + netlist; PCB
   placement/routing is the `pcb-place-route-fix` skill + the app's PCB tools, using the
   footprints already assigned on each `Part()`.
