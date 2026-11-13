@@ -889,6 +889,16 @@ def _finish_build(base: str) -> dict:
         "generated": files,
         "log": log[-6000:],  # tail is where errors/summary live
     }
+    if ok:
+        # The project's design record travels WITH the build (PLAN_TO_GERBER.md):
+        # a continuing session learns the design from design.md, so every
+        # successful build must leave it current.
+        res["design_md"] = (
+            "design.md exists -- UPDATE it now with this build (BOM deltas, new "
+            "blocks, decisions, status)." if (pdir(base) / "design.md").is_file()
+            else "NO design.md yet -- create it now in the project folder from "
+                 "the template in docs/PLAN_TO_GERBER.md (approved BOM table, "
+                 "functional blocks, key decisions, status).")
     if restored:
         res["previous_version_restored"] = restored
         res["restore_note"] = ("The build failed before producing a schematic, "
@@ -1623,6 +1633,7 @@ def _summarize_project(base: str, pdir_path: Path) -> dict:
     parts, nets = _design_counts(base, pdir_path)
     return {"has_schematic": sch.is_file(), "has_pcb": pcb.is_file(),
             "has_python": (pdir_path / (base + ".py")).is_file(),
+            "has_design_md": (pdir_path / "design.md").is_file(),
             "parts": parts, "nets": nets}
 
 
@@ -3292,6 +3303,15 @@ def get_build_source(name: str) -> dict:
                 "error": (f"no source on disk for '{base}' -- there is nothing to "
                           "continue, so this is a NEW project: build it normally.")}
     text = py.read_text(encoding="utf-8", errors="replace")
+    # The project's design record: when it exists, the continuing session READS
+    # it (BOM, decisions, status) instead of re-deriving context -- and must
+    # UPDATE it with whatever this continuation changes (PLAN_TO_GERBER.md).
+    dmd = pdir(base) / "design.md"
+    design_md = None
+    if dmd.is_file():
+        design_md = dmd.read_text(encoding="utf-8", errors="replace")
+        if len(design_md) > 20000:
+            design_md = design_md[:20000] + "\n...[truncated -- read the file]"
     # Which layout the existing project used, so the extension keeps the same style.
     if "flatness=1.0" in text:
         layout = "single"      # one sheet with boxed blocks
@@ -3307,6 +3327,14 @@ def get_build_source(name: str) -> dict:
         "layout": layout,
         "existing_files": _gather_files(base),
         "source": text,
+        "design_md": design_md,
+        "design_md_note": (
+            "design.md found -- LEARN the project from it (requirements, approved "
+            "BOM, decisions, status) before extending, and UPDATE it with this "
+            "change after the rebuild." if design_md else
+            "NO design.md in this project -- create one now from the template in "
+            "docs/PLAN_TO_GERBER.md (BOM table, blocks, decisions, status) and "
+            "maintain it with every change."),
         "how_to_continue": (
             "To ADD to this project (a new sheet / block / section, an edit, or the "
             "next part of the same document): keep ALL of 'source' above, add the new "
